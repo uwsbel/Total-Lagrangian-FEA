@@ -39,15 +39,16 @@ const Eigen::VectorXd gauss_zeta = (Eigen::VectorXd(N_QP_2) << -0.57735026918962
 
 const Eigen::VectorXd weight_zeta = (Eigen::VectorXd(N_QP_2) << 1.0, 1.0).finished();
 
-const double E = 7e8;      // Young's modulus
-const double nu = 0.33;    // Poisson's ratio
-const double rho0 = 2700;  // Density
+const double E = 7e8;     // Young's modulus
+const double nu = 0.33;   // Poisson's ratio
+const double rho0 = 2700; // Density
 
-double mu = E / (2 * (1 + nu));                           // Shear modulus μ
-double lam_param = (E * nu) / ((1 + nu) * (1 - 2 * nu));  // Lamé’s first parameter λ
+double mu = E / (2 * (1 + nu));                          // Shear modulus μ
+double lam_param = (E * nu) / ((1 + nu) * (1 - 2 * nu)); // Lamé’s first parameter λ
 
 // Function to construct the B12 matrix and compute B_inv
-void B12_matrix(double L, double W, double H, Eigen::MatrixXd& B_inv_out) {
+void B12_matrix(double L, double W, double H, Eigen::MatrixXd &B_inv_out)
+{
     // Reference coordinates of points P1 and P2
     double u1 = -L / 2.0;
     double u2 = L / 2.0;
@@ -161,12 +162,6 @@ void B12_matrix(double L, double W, double H, Eigen::MatrixXd& B_inv_out) {
 //     }
 // }
 
-// // Device function to compute determinant of 3x3 matrix
-// __device__ double det3x3(const double* J) {
-//     return J[0] * (J[4] * J[8] - J[5] * J[7]) - J[1] * (J[3] * J[8] - J[5] * J[6]) + J[2] * (J[3] * J[7] - J[4] *
-//     J[6]);
-// }
-
 // // Kernel to compute detJ_pre
 // __global__ void detJ_pre_kernel(double L,
 //                                 double W,
@@ -202,27 +197,31 @@ void B12_matrix(double L, double W, double H, Eigen::MatrixXd& B_inv_out) {
 // }
 
 // Add function to generate nodal coordinates for multiple beams
-void generate_beam_coordinates(int n_beam, Eigen::VectorXd& x12, Eigen::VectorXd& y12, Eigen::VectorXd& z12) {
+void generate_beam_coordinates(int n_beam, Eigen::VectorXd &x12, Eigen::VectorXd &y12, Eigen::VectorXd &z12)
+{
     // Initial beam coordinates (first 8 nodes)
     double x_init[8] = {-1.0, 1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0};
     double y_init[8] = {1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0};
     double z_init[8] = {0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0};
 
     // Copy initial beam (first 8 nodes)
-    for (int i = 0; i < 8; i++) {
+    for (int i = 0; i < 8; i++)
+    {
         x12(i) = x_init[i];
         y12(i) = y_init[i];
         z12(i) = z_init[i];
     }
 
     // Add additional beams (append new blocks for additional beams)
-    for (int beam = 2; beam <= n_beam; beam++) {
+    for (int beam = 2; beam <= n_beam; beam++)
+    {
         double x_offset = 2.0;
-        int base_idx = 8 + (beam - 2) * 4;  // Starting index for new beam nodes
-        int prev_base = base_idx - 4;       // Previous beam's last 4 nodes
+        int base_idx = 8 + (beam - 2) * 4; // Starting index for new beam nodes
+        int prev_base = base_idx - 4;      // Previous beam's last 4 nodes
 
         // Copy last 4 nodes from previous section and modify
-        for (int i = 0; i < 4; i++) {
+        for (int i = 0; i < 4; i++)
+        {
             x12(base_idx + i) = x12(prev_base + i);
             y12(base_idx + i) = y12(prev_base + i);
             z12(base_idx + i) = z12(prev_base + i);
@@ -234,8 +233,10 @@ void generate_beam_coordinates(int n_beam, Eigen::VectorXd& x12, Eigen::VectorXd
 }
 
 // Update calculate_offsets function
-void calculate_offsets(int n_beam, Eigen::VectorXi& offset_start, Eigen::VectorXi& offset_end) {
-    for (int i = 0; i < n_beam; i++) {
+void calculate_offsets(int n_beam, Eigen::VectorXi &offset_start, Eigen::VectorXi &offset_end)
+{
+    for (int i = 0; i < n_beam; i++)
+    {
         offset_start(i) = i * 4;
         offset_end(i) = offset_start(i) + 7;
     }
@@ -244,16 +245,18 @@ void calculate_offsets(int n_beam, Eigen::VectorXi& offset_start, Eigen::VectorX
 // Device function to compute deformation gradient
 __device__ void compute_deformation_gradient(int elem_idx,
                                              int qp_idx,
-                                             const double* ds_du_pre,
-                                             const double* x12,
-                                             const double* y12,
-                                             const double* z12,
-                                             const int* offset_start,
+                                             const double *ds_du_pre,
+                                             const double *x12,
+                                             const double *y12,
+                                             const double *z12,
+                                             const int *offset_start,
                                              int total_qp,
-                                             double* F_out) {
+                                             double *F_out)
+{
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     // Initialize F to zero
-    for (int i = 0; i < 9; i++) {
+    for (int i = 0; i < 9; i++)
+    {
         F_out[elem_idx * total_qp * 9 + qp_idx * 9 + i] = 0.0;
     }
 
@@ -261,27 +264,31 @@ __device__ void compute_deformation_gradient(int elem_idx,
     int node_base = offset_start[elem_idx];
 
     // Extract local nodal coordinates (e vectors)
-    double e[8][3];  // 8 nodes, each with 3 coordinates
-    for (int i = 0; i < 8; i++) {
-        e[i][0] = x12[node_base + i];  // x coordinate
-        e[i][1] = y12[node_base + i];  // y coordinate
-        e[i][2] = z12[node_base + i];  // z coordinate
+    double e[8][3]; // 8 nodes, each with 3 coordinates
+    for (int i = 0; i < 8; i++)
+    {
+        e[i][0] = x12[node_base + i]; // x coordinate
+        e[i][1] = y12[node_base + i]; // y coordinate
+        e[i][2] = z12[node_base + i]; // z coordinate
     }
 
     // Compute F = sum_i e_i ⊗ ∇s_i
     // F is 3x3 matrix stored in row-major order
-    for (int i = 0; i < 8; i++) {  // Loop over nodes
+    for (int i = 0; i < 8; i++)
+    { // Loop over nodes
         // Get gradient of shape function i (∇s_i) - this needs proper indexing
         // Assuming ds_du_pre is laid out as [qp_total][8][3]
         // You'll need to provide the correct qp_idx for the current quadrature point
         double grad_s_i[3];
-        grad_s_i[0] = ds_du_pre[qp_idx * 8 * 3 + i * 3 + 0];  // ∂s_i/∂u
-        grad_s_i[1] = ds_du_pre[qp_idx * 8 * 3 + i * 3 + 1];  // ∂s_i/∂v
-        grad_s_i[2] = ds_du_pre[qp_idx * 8 * 3 + i * 3 + 2];  // ∂s_i/∂w
+        grad_s_i[0] = ds_du_pre[qp_idx * 8 * 3 + i * 3 + 0]; // ∂s_i/∂u
+        grad_s_i[1] = ds_du_pre[qp_idx * 8 * 3 + i * 3 + 1]; // ∂s_i/∂v
+        grad_s_i[2] = ds_du_pre[qp_idx * 8 * 3 + i * 3 + 2]; // ∂s_i/∂w
 
         // Compute outer product: e_i ⊗ ∇s_i and add to F
-        for (int row = 0; row < 3; row++) {      // e_i components
-            for (int col = 0; col < 3; col++) {  // ∇s_i components
+        for (int row = 0; row < 3; row++)
+        { // e_i components
+            for (int col = 0; col < 3; col++)
+            { // ∇s_i components
                 F_out[elem_idx * total_qp * 9 + qp_idx * 9 + row * 3 + col] += e[i][row] * grad_s_i[col];
             }
         }
@@ -290,22 +297,25 @@ __device__ void compute_deformation_gradient(int elem_idx,
 
 __device__ void compute_internal_force_qp(int elem_idx,
                                           int qp_idx,
-                                          const double* ds_du_pre,
-                                          const double* d_F,
-                                          const double* weight_u,
-                                          const double* weight_v,
-                                          const double* weight_w,
+                                          const double *ds_du_pre,
+                                          const double *d_F,
+                                          const double *weight_u,
+                                          const double *weight_v,
+                                          const double *weight_w,
                                           double L,
                                           double W,
                                           double H,
                                           double mu,
                                           double lambda,
                                           int total_qp,
-                                          double* f_elem_out) {
+                                          double *f_elem_out)
+{
     // --- Load ds/du ---
     double grad_s[8][3];
-    for (int i = 0; i < 8; ++i) {
-        for (int d = 0; d < 3; ++d) {
+    for (int i = 0; i < 8; ++i)
+    {
+        for (int d = 0; d < 3; ++d)
+        {
             grad_s[i][d] = ds_du_pre[qp_idx * 8 * 3 + i * 3 + d];
         }
     }
@@ -330,10 +340,10 @@ __device__ void compute_internal_force_qp(int elem_idx,
     double Ft[3][3];
     for (int i = 0; i < 3; ++i)
         for (int j = 0; j < 3; ++j)
-            Ft[i][j] = F[j][i];  // transpose
+            Ft[i][j] = F[j][i]; // transpose
 
     // 2. Compute G = F * Ft
-    double G[3][3] = {0};  // G = F * F^T
+    double G[3][3] = {0}; // G = F * F^T
     for (int i = 0; i < 3; ++i)
         for (int j = 0; j < 3; ++j)
             for (int k = 0; k < 3; ++k)
@@ -350,7 +360,8 @@ __device__ void compute_internal_force_qp(int elem_idx,
     double P[3][3];
     double factor = lambda * (0.5 * tr_FtF - 1.5);
     for (int i = 0; i < 3; ++i)
-        for (int j = 0; j < 3; ++j) {
+        for (int j = 0; j < 3; ++j)
+        {
             P[i][j] = factor * F[i][j] + mu * (FFF[i][j] - F[i][j]);
         }
 
@@ -361,28 +372,37 @@ __device__ void compute_internal_force_qp(int elem_idx,
         weight_u[qp_idx / (N_QP_2 * N_QP_2)] * weight_v[(qp_idx / N_QP_2) % N_QP_2] * weight_w[qp_idx % N_QP_2];
 
     // --- Compute f_i = P * ∇s_i ---
-    for (int i = 0; i < 8; ++i) {
+    for (int i = 0; i < 8; ++i)
+    {
         double f_i[3] = {0};
         for (int r = 0; r < 3; ++r)
-            for (int c = 0; c < 3; ++c) {
+            for (int c = 0; c < 3; ++c)
+            {
                 f_i[r] += P[r][c] * grad_s[i][c];
-                if (f_i[r] != 0.0) {
+                if (f_i[r] != 0.0)
+                {
                     printf("f_i[%d][%d] = %f\n", i, r, f_i[r]);
                 }
             }
 
-        for (int d = 0; d < 3; ++d) {
+        for (int d = 0; d < 3; ++d)
+        {
             atomicAdd(&f_elem_out[elem_idx * 8 * 3 + i * 3 + d], f_i[d] * scale);
         }
     }
 }
 
-int main() {
+int main()
+{
     // initialize GPU data structure
     GPU_ANCF3243_Data gpu_3243_data;
     gpu_3243_data.Initialize();
 
     double L = 2.0, W = 1.0, H = 1.0;
+
+    const double E = 7e8;     // Young's modulus
+    const double nu = 0.33;   // Poisson's ratio
+    const double rho0 = 2700; // Density
 
     std::cout << "Number of beams: " << N_BEAM << std::endl;
     std::cout << "Total nodes: " << N_COEF << std::endl;
@@ -401,6 +421,24 @@ int main() {
 
     generate_beam_coordinates(N_BEAM, h_x12, h_y12, h_z12);
 
+    // print h_x12
+    for (int i = 0; i < N_COEF; i++)
+    {
+        printf("h_x12(%d) = %f\n", i, h_x12(i));
+    }
+
+    // print h_y12
+    for (int i = 0; i < N_COEF; i++)
+    {
+        printf("h_y12(%d) = %f\n", i, h_y12(i));
+    }
+    
+    // print h_z12
+    for (int i = 0; i < N_COEF; i++)
+    {
+        printf("h_z12(%d) = %f\n", i, h_z12(i));
+    }
+
     h_x12_jac = h_x12;
     h_y12_jac = h_y12;
     h_z12_jac = h_z12;
@@ -410,13 +448,14 @@ int main() {
     Eigen::VectorXi h_offset_end(N_BEAM);
     calculate_offsets(N_BEAM, h_offset_start, h_offset_end);
 
-    gpu_3243_data.Setup(L, W, H, h_B_inv, gauss_xi_m, gauss_xi, gauss_eta, gauss_zeta, weight_xi_m, weight_xi,
+    gpu_3243_data.Setup(L, W, H, rho0, nu, E, h_B_inv, gauss_xi_m, gauss_xi, gauss_eta, gauss_zeta, weight_xi_m, weight_xi,
                         weight_eta, weight_zeta, h_x12, h_y12, h_z12, h_offset_start, h_offset_end);
 
     gpu_3243_data.calc_ds_du_pre();
     gpu_3243_data.print_ds_du_pre();
-    // gpu_3243_data.calc_mass_matrix();
-    //   gpu_3243_data.calc_int_force();
+    gpu_3243_data.calc_mass_matrix();
+    gpu_3243_data.print_mass_matrix();
+    //    gpu_3243_data.calc_int_force();
 
     // // Allocate GPU memory for all nodal coordinates
     // double *d_x12_jac, *d_y12_jac, *d_z12_jac;
