@@ -1,0 +1,3 @@
+common --enable_workspace
+build --action_env=CUDA_HOME=/usr/local/cuda
+build --action_env=CUDA_PATH=/usr/local/cuda
