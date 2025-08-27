@@ -1,3 +1,8 @@
-common --enable_workspace
-build --action_env=CUDA_HOME=/usr/local/cuda
-build --action_env=CUDA_PATH=/usr/local/cuda
+build --enable_bzlmod
+build --lockfile_mode=error
+build --cxxopt=-std=c++17
+build --host_cxxopt=-std=c++17
+
+# If supported by your rules_cuda:
+build --@rules_cuda//cuda:archs='compute_61:sm_61,compute_61;compute_75:sm_75;compute_86:sm_86,compute_86'
+build --flag_alias=cuda_archs=@rules_cuda//cuda:archs

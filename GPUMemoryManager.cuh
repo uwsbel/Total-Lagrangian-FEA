@@ -1,6 +1,26 @@
+// Corrected Include Order
 
-#include <eigen3/Eigen/Dense>
+// STEP 1: Standard C++ and CUDA headers go FIRST.
+// (Add any other standard headers you use here)
+
+// STEP 1: Standard C++ and CUDA headers go FIRST.
+// Example:
 #include <iostream>
+#include <vector>
+#include <cuda_runtime.h>
+// (Add any other standard/CUDA headers you need here)
+
+
+// STEP 2: The Eigen library and its compatibility fix come AFTER.
+#define EIGEN_DONT_VECTORIZE
+
+#ifdef __CUDACC__
+#undef __GNUC__
+#undef __GNUC_MINOR__
+#undef __GNUC_PATCHLEVEL__
+#endif
+
+#include <Eigen/Dense>
 
 // Definition of GPU_ANCF3243 and data access device functions
 #pragma once
