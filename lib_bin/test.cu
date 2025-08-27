@@ -5,7 +5,7 @@
 #include <Eigen/Dense>
 #include <cub/cub.cuh>
 #include <cub/device/device_radix_sort.cuh>
-#include "GPUMemoryManager.cuh"
+#include "../lib_src/GPUMemoryManager.cuh"
 
 // 6-point Gauss-Legendre quadrature (symmetric)
 const Eigen::VectorXd gauss_xi_m = (Eigen::VectorXd(N_QP_6) << -0.932469514203152,

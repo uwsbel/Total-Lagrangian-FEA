@@ -1,15 +1,22 @@
-load("@rules_cuda//cuda:defs.bzl", "cuda_library")
+load("@rules_cuda//cuda:defs.bzl", "cuda_library", "cuda_binary")
 
+# cuda library section
 cuda_library(
-    name  = "gpumm",
-    srcs  = ["test.cu", "GPUMemoryManager.cu"],
-    hdrs  = ["GPUMemoryManager.cuh"],
+    name = "gpu_memory_manager",
+    srcs = ["lib_src/GPUMemoryManager.cu"],
+    hdrs = ["lib_src/GPUMemoryManager.cuh"],
     copts = ["--std=c++17"],
-    # Only Eigen here; do NOT reference @rules_cuda//cuda:cuda_runtime
-    deps  = ["@eigen//:eigen"],
+    deps = ["@eigen//:eigen"],
+    visibility = ["//visibility:public"],
 )
 
-cc_binary(
-    name = "gpumm_test",
-    deps = [":gpumm"],
+# cuda binary section
+cuda_binary(
+    name = "test",
+    srcs = ["lib_bin/test.cu"],
+    copts = ["--std=c++17"],
+    deps = [
+        ":gpu_memory_manager",
+        "@eigen//:eigen",
+    ],
 )
