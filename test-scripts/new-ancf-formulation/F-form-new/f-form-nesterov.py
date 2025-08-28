@@ -81,7 +81,7 @@ H = 1.0  # Height
 W = 1.0  # Width
 L = 2.0  # Length
 
-n_beam = 2  # Number of beam elements
+n_beam = 3  # Number of beam elements
 
 
 # Each vector is 8x1

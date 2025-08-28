@@ -4,10 +4,10 @@
 // Device function: matrix-vector multiply (8x8 * 8x1)
 __device__ void mat_vec_mul8(Eigen::Map<Eigen::MatrixXd> A, const double *x, double *out)
 {
-    for (int i = 0; i < N_SHAPE; ++i)
+    for (int i = 0; i < Quadrature::N_SHAPE; ++i)
     {
         out[i] = 0.0;
-        for (int j = 0; j < N_SHAPE; ++j)
+        for (int j = 0; j < Quadrature::N_SHAPE; ++j)
         {
             out[i] += A(i, j) * x[j];
         }
@@ -26,7 +26,7 @@ __global__ void ds_du_pre_kernel(double L, double W, double H, GPU_ANCF3243_Data
     int ixi = blockIdx.x;
     int ieta = blockIdx.y;
     int izeta = threadIdx.x;
-    int idx = ixi * N_QP_2 * N_QP_2 + ieta * N_QP_2 + izeta;
+    int idx = ixi * Quadrature::N_QP_2 * Quadrature::N_QP_2 + ieta * Quadrature::N_QP_2 + izeta;
 
     double xi = d_data->gauss_xi()(ixi);
     double eta = d_data->gauss_eta()(ieta);
@@ -36,17 +36,17 @@ __global__ void ds_du_pre_kernel(double L, double W, double H, GPU_ANCF3243_Data
     double v = W * eta / 2.0;
     double w = H * zeta / 2.0;
 
-    double db_du[N_SHAPE] = {0, 1, 0, 0, v, w, 2 * u, 3 * u * u};
-    double db_dv[N_SHAPE] = {0, 0, 1, 0, u, 0, 0, 0};
-    double db_dw[N_SHAPE] = {0, 0, 0, 1, 0, u, 0, 0};
+    double db_du[Quadrature::N_SHAPE] = {0, 1, 0, 0, v, w, 2 * u, 3 * u * u};
+    double db_dv[Quadrature::N_SHAPE] = {0, 0, 1, 0, u, 0, 0, 0};
+    double db_dw[Quadrature::N_SHAPE] = {0, 0, 0, 1, 0, u, 0, 0};
 
-    double ds_du[N_SHAPE], ds_dv[N_SHAPE], ds_dw[N_SHAPE];
+    double ds_du[Quadrature::N_SHAPE], ds_dv[Quadrature::N_SHAPE], ds_dw[Quadrature::N_SHAPE];
     mat_vec_mul8(d_data->B_inv(), db_du, ds_du);
     mat_vec_mul8(d_data->B_inv(), db_dv, ds_dv);
     mat_vec_mul8(d_data->B_inv(), db_dw, ds_dw);
 
     // Store as 8x3 matrix: for each i in 0..7, store ds_du, ds_dv, ds_dw as columns
-    for (int i = 0; i < N_SHAPE; ++i)
+    for (int i = 0; i < Quadrature::N_SHAPE; ++i)
     {
         d_data->ds_du_pre(idx)(i, 0) = ds_du[i];
         d_data->ds_du_pre(idx)(i, 1) = ds_dv[i];
@@ -87,12 +87,12 @@ __device__ void calc_det_J_xi(double xi,
                               double H,
                               double *J_out)
 {
-    double db_dxi[N_SHAPE] = {
+    double db_dxi[Quadrature::N_SHAPE] = {
         0.0, L / 2, 0.0, 0.0, (L * W / 4) * eta, (L * H / 4) * zeta, (L * L / 2) * xi, (3 * L * L * L / 8) * xi * xi};
-    double db_deta[N_SHAPE] = {0.0, 0.0, W / 2, 0.0, (L * W / 4) * xi, 0.0, 0.0, 0.0};
-    double db_dzeta[N_SHAPE] = {0.0, 0.0, 0.0, H / 2, 0.0, (L * H / 4) * xi, 0.0, 0.0};
+    double db_deta[Quadrature::N_SHAPE] = {0.0, 0.0, W / 2, 0.0, (L * W / 4) * xi, 0.0, 0.0, 0.0};
+    double db_dzeta[Quadrature::N_SHAPE] = {0.0, 0.0, 0.0, H / 2, 0.0, (L * H / 4) * xi, 0.0, 0.0};
 
-    double ds_dxi[N_SHAPE], ds_deta[N_SHAPE], ds_dzeta[N_SHAPE];
+    double ds_dxi[Quadrature::N_SHAPE], ds_deta[Quadrature::N_SHAPE], ds_dzeta[Quadrature::N_SHAPE];
     mat_vec_mul8(B_inv, db_dxi, ds_dxi);
     mat_vec_mul8(B_inv, db_deta, ds_deta);
     mat_vec_mul8(B_inv, db_dzeta, ds_dzeta);
@@ -103,7 +103,7 @@ __device__ void calc_det_J_xi(double xi,
         for (int j = 0; j < 3; ++j)
             J_out[i * 3 + j] = 0.0;
 
-    for (int i = 0; i < N_SHAPE; ++i)
+    for (int i = 0; i < Quadrature::N_SHAPE; ++i)
     {
         J_out[0 * 3 + 0] += x12_jac(i) * ds_dxi[i];
         J_out[1 * 3 + 0] += y12_jac(i) * ds_dxi[i];
@@ -121,19 +121,19 @@ __device__ void calc_det_J_xi(double xi,
 
 __global__ void mass_matrix_qp_kernel(GPU_ANCF3243_Data *d_data)
 {
-    int n_qp_per_elem = N_QP_6 * N_QP_2 * N_QP_2;
+    int n_qp_per_elem = Quadrature::N_QP_6 * Quadrature::N_QP_2 * Quadrature::N_QP_2;
     int thread_global = blockIdx.x * blockDim.x + threadIdx.x;
-    int elem = thread_global / (N_SHAPE * N_SHAPE);
-    int item_local = thread_global % (N_SHAPE * N_SHAPE);
-    if (elem >= N_BEAM)
+    int elem = thread_global / (Quadrature::N_SHAPE * Quadrature::N_SHAPE);
+    int item_local = thread_global % (Quadrature::N_SHAPE * Quadrature::N_SHAPE);
+    if (elem >= d_data->get_n_beam())
         return;
 
     for (int qp_local = 0; qp_local < n_qp_per_elem; qp_local++)
     {
         // Decode qp_local into (ixi, ieta, izeta)
-        int ixi = qp_local / (N_QP_2 * N_QP_2);
-        int ieta = (qp_local / N_QP_2) % N_QP_2;
-        int izeta = qp_local % N_QP_2;
+        int ixi = qp_local / (Quadrature::N_QP_2 * Quadrature::N_QP_2);
+        int ieta = (qp_local / Quadrature::N_QP_2) % Quadrature::N_QP_2;
+        int izeta = qp_local % Quadrature::N_QP_2;
 
         double xi = d_data->gauss_xi_m()(ixi);
         double eta = d_data->gauss_eta()(ieta);
@@ -163,8 +163,8 @@ __global__ void mass_matrix_qp_kernel(GPU_ANCF3243_Data *d_data)
         double detJ = det3x3(J);
 
         // For each local node, output (global_node, value)
-        int i_local = item_local / N_SHAPE;                    // Local node index (0-7)
-        int j_local = item_local % N_SHAPE;                    // Local shape function index (0-7)
+        int i_local = item_local / Quadrature::N_SHAPE;                    // Local node index (0-7)
+        int j_local = item_local % Quadrature::N_SHAPE;                    // Local shape function index (0-7)
         int i_global = d_data->offset_start()(elem) + i_local; // Global node index
         int j_global = d_data->offset_start()(elem) + j_local; // Global shape function index
 
@@ -172,36 +172,36 @@ __global__ void mass_matrix_qp_kernel(GPU_ANCF3243_Data *d_data)
     }
 }
 
-void GPU_ANCF3243_Data::calc_ds_du_pre()
+void GPU_ANCF3243_Data::CalcDsDuPre()
 {
     // Launch kernel
-    dim3 blocks_pre(N_QP_3, N_QP_2);
-    dim3 threads_pre(N_QP_2);
+    dim3 blocks_pre(Quadrature::N_QP_3, Quadrature::N_QP_2);
+    dim3 threads_pre(Quadrature::N_QP_2);
     ds_du_pre_kernel<<<blocks_pre, threads_pre>>>(2.0, 1.0, 1.0, d_data);
     cudaDeviceSynchronize();
 }
 
-void GPU_ANCF3243_Data::print_ds_du_pre()
+void GPU_ANCF3243_Data::PrintDsDuPre()
 {
     // Allocate host memory for all quadrature points
-    const int total_size = N_TOTAL_QP * N_SHAPE * 3;
+    const int total_size = Quadrature::N_TOTAL_QP * Quadrature::N_SHAPE * 3;
     double *h_ds_du_pre_raw = new double[total_size];
 
     // Copy from device to host
     HANDLE_ERROR(cudaMemcpy(h_ds_du_pre_raw, d_ds_du_pre, total_size * sizeof(double), cudaMemcpyDeviceToHost));
 
     // Print each quadrature point's matrix
-    for (int qp = 0; qp < N_TOTAL_QP; ++qp)
+    for (int qp = 0; qp < Quadrature::N_TOTAL_QP; ++qp)
     {
         std::cout << "\n=== Quadrature Point " << qp << " ===" << std::endl;
 
         // Create Eigen::Map for this quadrature point's data
-        double *qp_data = h_ds_du_pre_raw + qp * N_SHAPE * 3;
-        Eigen::Map<Eigen::MatrixXd> ds_du_matrix(qp_data, N_SHAPE, 3);
+        double *qp_data = h_ds_du_pre_raw + qp * Quadrature::N_SHAPE * 3;
+        Eigen::Map<Eigen::MatrixXd> ds_du_matrix(qp_data, Quadrature::N_SHAPE, 3);
 
         // Print the 8x3 matrix with column headers
         std::cout << "        ds/du       ds/dv       ds/dw" << std::endl;
-        for (int i = 0; i < N_SHAPE; ++i)
+        for (int i = 0; i < Quadrature::N_SHAPE; ++i)
         {
             std::cout << "Node " << i << ": ";
             for (int j = 0; j < 3; ++j)
@@ -215,11 +215,10 @@ void GPU_ANCF3243_Data::print_ds_du_pre()
     delete[] h_ds_du_pre_raw;
 }
 
-void GPU_ANCF3243_Data::calc_mass_matrix()
+void GPU_ANCF3243_Data::CalcMassMatrix()
 {
     // Mass terms computation
-    const int N_QP = N_QP_6 * N_QP_2 * N_QP_2;
-    const int N_OUT = N_BEAM * N_SHAPE * N_SHAPE;
+    const int N_OUT = n_beam * Quadrature::N_SHAPE * Quadrature::N_SHAPE;
 
     // Launch kernel
     int threads = 128;
@@ -229,28 +228,16 @@ void GPU_ANCF3243_Data::calc_mass_matrix()
     cudaDeviceSynchronize();
 }
 
-void GPU_ANCF3243_Data::print_mass_matrix()
+void GPU_ANCF3243_Data::RetrieveMassMatrixToCPU(Eigen::MatrixXd& mass_matrix)
 {
     // Allocate host memory for all quadrature points
-    const int total_size = N_COEF * N_COEF;
-    double *h_node_values_raw = new double[total_size];
+    const int total_size = n_coef * n_coef;
+
+    mass_matrix.resize(n_coef, n_coef);
 
     // Copy from device to host
-    HANDLE_ERROR(cudaMemcpy(h_node_values_raw, d_node_values, total_size * sizeof(double), cudaMemcpyDeviceToHost));
+    HANDLE_ERROR(cudaMemcpy(mass_matrix.data(), d_node_values, total_size * sizeof(double), cudaMemcpyDeviceToHost));
 
-    std::cout << "mass matrix:" << std::endl;
-
-    // Print each quadrature point's matrix
-    for (int i = 0; i < N_COEF; ++i)
-    {
-            for (int j = 0; j < N_COEF; ++j)
-            {
-                std::cout << std::setw(10) << std::fixed << std::setprecision(6) << h_node_values_raw[j * N_COEF + i] << " ";
-            }
-            std::cout << std::endl;
-    }
-
-    delete[] h_node_values_raw;
 }
 
 // void GPU_ANCF3243_Data::calc_int_force() {

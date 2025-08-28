@@ -1,45 +1,9 @@
 #include "../lib_src/GPUMemoryManager.cuh"
 #include "../lib_utils/cpu_utils.h"
+#include "../lib_utils/quadrature_utils.h"
 #include <Eigen/Dense>
 #include <cuda_runtime.h>
 #include <iostream>
-
-// 6-point Gauss-Legendre quadrature (symmetric)
-const Eigen::VectorXd gauss_xi_m =
-    (Eigen::VectorXd(N_QP_6) << -0.932469514203152, -0.661209386466265,
-     -0.238619186083197, 0.238619186083197, 0.661209386466265,
-     0.932469514203152)
-        .finished();
-
-const Eigen::VectorXd weight_xi_m =
-    (Eigen::VectorXd(N_QP_6) << 0.171324492379170, 0.360761573048139,
-     0.467913934572691, 0.467913934572691, 0.360761573048139, 0.171324492379170)
-        .finished();
-
-// 3-point Gauss-Legendre quadrature
-const Eigen::VectorXd gauss_xi =
-    (Eigen::VectorXd(N_QP_3) << -0.7745966692414834, 0.0, 0.7745966692414834)
-        .finished();
-
-const Eigen::VectorXd weight_xi =
-    (Eigen::VectorXd(N_QP_3) << 0.5555555555555556, 0.8888888888888888,
-     0.5555555555555556)
-        .finished();
-
-// 2-point Gauss-Legendre quadrature (for eta and zeta directions)
-const Eigen::VectorXd gauss_eta =
-    (Eigen::VectorXd(N_QP_2) << -0.5773502691896257, 0.5773502691896257)
-        .finished();
-
-const Eigen::VectorXd weight_eta =
-    (Eigen::VectorXd(N_QP_2) << 1.0, 1.0).finished();
-
-const Eigen::VectorXd gauss_zeta =
-    (Eigen::VectorXd(N_QP_2) << -0.5773502691896257, 0.5773502691896257)
-        .finished();
-
-const Eigen::VectorXd weight_zeta =
-    (Eigen::VectorXd(N_QP_2) << 1.0, 1.0).finished();
 
 const double E = 7e8;     // Young's modulus
 const double nu = 0.33;   // Poisson's ratio
@@ -263,7 +227,8 @@ double lam_param =
 
 int main() {
   // initialize GPU data structure
-  GPU_ANCF3243_Data gpu_3243_data;
+  int n_beam = 2;
+  GPU_ANCF3243_Data gpu_3243_data(n_beam);
   gpu_3243_data.Initialize();
 
   double L = 2.0, W = 1.0, H = 1.0;
@@ -272,35 +237,35 @@ int main() {
   const double nu = 0.33;   // Poisson's ratio
   const double rho0 = 2700; // Density
 
-  std::cout << "Number of beams: " << N_BEAM << std::endl;
-  std::cout << "Total nodes: " << N_COEF << std::endl;
+  std::cout << "Number of beams: " << gpu_3243_data.get_n_beam() << std::endl;
+  std::cout << "Total nodes: " << gpu_3243_data.get_n_coef() << std::endl;
 
   // Compute B_inv on CPU
-  Eigen::MatrixXd h_B_inv(N_SHAPE, N_SHAPE);
-  ANCFCPUUtils::B12_matrix(2.0, 1.0, 1.0, h_B_inv, N_SHAPE);
+  Eigen::MatrixXd h_B_inv(Quadrature::N_SHAPE, Quadrature::N_SHAPE);
+  ANCFCPUUtils::B12_matrix(2.0, 1.0, 1.0, h_B_inv, Quadrature::N_SHAPE);
 
   // Generate nodal coordinates for multiple beams - using Eigen vectors
-  Eigen::VectorXd h_x12(N_COEF);
-  Eigen::VectorXd h_y12(N_COEF);
-  Eigen::VectorXd h_z12(N_COEF);
-  Eigen::VectorXd h_x12_jac(N_COEF);
-  Eigen::VectorXd h_y12_jac(N_COEF);
-  Eigen::VectorXd h_z12_jac(N_COEF);
+  Eigen::VectorXd h_x12(gpu_3243_data.get_n_coef());
+  Eigen::VectorXd h_y12(gpu_3243_data.get_n_coef());
+  Eigen::VectorXd h_z12(gpu_3243_data.get_n_coef());
+  Eigen::VectorXd h_x12_jac(gpu_3243_data.get_n_coef());
+  Eigen::VectorXd h_y12_jac(gpu_3243_data.get_n_coef());
+  Eigen::VectorXd h_z12_jac(gpu_3243_data.get_n_coef());
 
-  ANCFCPUUtils::generate_beam_coordinates(N_BEAM, h_x12, h_y12, h_z12);
+  ANCFCPUUtils::generate_beam_coordinates(n_beam, h_x12, h_y12, h_z12);
 
   // print h_x12
-  for (int i = 0; i < N_COEF; i++) {
+  for (int i = 0; i < gpu_3243_data.get_n_coef(); i++) {
     printf("h_x12(%d) = %f\n", i, h_x12(i));
   }
 
   // print h_y12
-  for (int i = 0; i < N_COEF; i++) {
+  for (int i = 0; i < gpu_3243_data.get_n_coef(); i++) {
     printf("h_y12(%d) = %f\n", i, h_y12(i));
   }
 
   // print h_z12
-  for (int i = 0; i < N_COEF; i++) {
+  for (int i = 0; i < gpu_3243_data.get_n_coef(); i++) {
     printf("h_z12(%d) = %f\n", i, h_z12(i));
   }
 
@@ -309,19 +274,32 @@ int main() {
   h_z12_jac = h_z12;
 
   // Calculate offsets - using Eigen vectors
-  Eigen::VectorXi h_offset_start(N_BEAM);
-  Eigen::VectorXi h_offset_end(N_BEAM);
-  ANCFCPUUtils::calculate_offsets(N_BEAM, h_offset_start, h_offset_end);
+  Eigen::VectorXi h_offset_start(gpu_3243_data.get_n_beam());
+  Eigen::VectorXi h_offset_end(gpu_3243_data.get_n_beam());
+  ANCFCPUUtils::calculate_offsets(gpu_3243_data.get_n_beam(), h_offset_start,
+                                  h_offset_end);
 
-  gpu_3243_data.Setup(L, W, H, rho0, nu, E, h_B_inv, gauss_xi_m, gauss_xi,
-                      gauss_eta, gauss_zeta, weight_xi_m, weight_xi, weight_eta,
-                      weight_zeta, h_x12, h_y12, h_z12, h_offset_start,
-                      h_offset_end);
+  gpu_3243_data.Setup(L, W, H, rho0, nu, E, h_B_inv, Quadrature::gauss_xi_m,
+                      Quadrature::gauss_xi, Quadrature::gauss_eta,
+                      Quadrature::gauss_zeta, Quadrature::weight_xi_m,
+                      Quadrature::weight_xi, Quadrature::weight_eta,
+                      Quadrature::weight_zeta, h_x12, h_y12, h_z12,
+                      h_offset_start, h_offset_end);
 
-  gpu_3243_data.calc_ds_du_pre();
-  gpu_3243_data.print_ds_du_pre();
-  gpu_3243_data.calc_mass_matrix();
-  gpu_3243_data.print_mass_matrix();
+  gpu_3243_data.CalcDsDuPre();
+  gpu_3243_data.PrintDsDuPre();
+  gpu_3243_data.CalcMassMatrix();
+
+  Eigen::MatrixXd mass_matrix;
+  gpu_3243_data.RetrieveMassMatrixToCPU(mass_matrix);
+
+  std::cout << "mass matrix:" << std::endl;
+  for (int i = 0; i < mass_matrix.rows(); i++) {
+    for (int j = 0; j < mass_matrix.cols(); j++) {
+      std::cout << mass_matrix(i, j) << " ";
+    }
+    std::cout << std::endl;
+  }
   //    gpu_3243_data.calc_int_force();
 
   // // Allocate GPU memory for all nodal coordinates
@@ -358,8 +336,8 @@ int main() {
   // int* h_node_indices = new int[N_COEF * N_COEF];
   // double* h_node_values = new double[N_COEF * N_COEF];
   // cudaMemcpy(h_node_indices, d_node_indices, N_COEF * N_COEF * sizeof(int),
-  // cudaMemcpyDeviceToHost); cudaMemcpy(h_node_values, d_node_values, N_COEF *
-  // N_COEF * sizeof(double), cudaMemcpyDeviceToHost);
+  // cudaMemcpyDeviceToHost); cudaMemcpy(h_node_values, d_node_values, N_COEF
+  // * N_COEF * sizeof(double), cudaMemcpyDeviceToHost);
   // // Print all results for verification
   // std::cout << "\nMass matrix output:" << std::endl;
   // for (int i = 0; i < N_COEF * N_COEF; i++) {
