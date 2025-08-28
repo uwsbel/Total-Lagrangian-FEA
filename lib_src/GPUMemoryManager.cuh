@@ -218,42 +218,42 @@ struct GPU_ANCF3243_Data
         return Eigen::Map<Eigen::VectorXi>(d_offset_end, n_beam);
     }
 
-    __device__ double const L() const
+    __device__ double L() const
     {
         return *d_L;
     }
 
-    __device__ double const W() const
+    __device__ double W() const
     {
         return *d_W;
     }
 
-    __device__ double const H() const
+    __device__ double H() const
     {
         return *d_H;
     }
 
-    __device__ double const rho0() const
+    __device__ double rho0() const
     {
         return *d_rho0;
     }
 
-    __device__ double const nu() const
+    __device__ double nu() const
     {
         return *d_nu;
     }
 
-    __device__ double const E() const
+    __device__ double E() const
     {
         return *d_E;
     }
 
-    __device__ double const lambda() const
+    __device__ double lambda() const
     {
         return *d_lambda;
     }
 
-    __device__ double const mu() const
+    __device__ double mu() const
     {
         return *d_mu;
     }
