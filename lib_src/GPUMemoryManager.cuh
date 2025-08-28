@@ -185,6 +185,27 @@ struct GPU_ANCF3243_Data
         return Eigen::Map<Eigen::VectorXd>(d_z12 + elem * (Quadrature::N_SHAPE / 2), Quadrature::N_SHAPE);
     }
 
+    __device__ Eigen::Map<Eigen::MatrixXd> F(int elem_idx, int qp_idx)
+    {
+        return Eigen::Map<Eigen::MatrixXd>(d_F + (elem_idx * Quadrature::N_TOTAL_QP + qp_idx) * 9, 3, 3);
+    }
+
+    __device__ const Eigen::Map<Eigen::MatrixXd> F(int elem_idx, int qp_idx) const
+    {
+        return Eigen::Map<Eigen::MatrixXd>(d_F + (elem_idx * Quadrature::N_TOTAL_QP + qp_idx) * 9, 3, 3);
+    }
+
+
+    __device__ Eigen::Map<Eigen::MatrixXd> P(int elem_idx, int qp_idx)
+    {
+        return Eigen::Map<Eigen::MatrixXd>(d_P + (elem_idx * Quadrature::N_TOTAL_QP + qp_idx) * 9, 3, 3);
+    }
+
+    __device__ const Eigen::Map<Eigen::MatrixXd> P(int elem_idx, int qp_idx) const
+    {
+        return Eigen::Map<Eigen::MatrixXd>(d_P + (elem_idx * Quadrature::N_TOTAL_QP + qp_idx) * 9, 3, 3);
+    }
+
     // =================================
 
     __device__ Eigen::Map<Eigen::VectorXi> const offset_start() const
@@ -225,6 +246,16 @@ struct GPU_ANCF3243_Data
     __device__ double const E() const
     {
         return *d_E;
+    }
+
+    __device__ double const lambda() const
+    {
+        return *d_lambda;
+    }
+
+    __device__ double const mu() const
+    {
+        return *d_mu;
     }
 
     //===========================================
@@ -281,6 +312,7 @@ struct GPU_ANCF3243_Data
         HANDLE_ERROR(cudaMalloc(&d_node_values, n_coef * n_coef * sizeof(double)));
 
         HANDLE_ERROR(cudaMalloc(&d_F, n_beam * Quadrature::N_TOTAL_QP * 3 * 3 * sizeof(double)));
+        HANDLE_ERROR(cudaMalloc(&d_P, n_beam * Quadrature::N_TOTAL_QP * 3 * 3 * sizeof(double)));
         HANDLE_ERROR(cudaMalloc(&d_f_elem_out, n_beam * 8 * 3 * sizeof(double)));
 
         // copy struct to device
@@ -294,6 +326,8 @@ struct GPU_ANCF3243_Data
         HANDLE_ERROR(cudaMalloc(&d_rho0, sizeof(double)));
         HANDLE_ERROR(cudaMalloc(&d_nu, sizeof(double)));
         HANDLE_ERROR(cudaMalloc(&d_E, sizeof(double)));
+        HANDLE_ERROR(cudaMalloc(&d_lambda, sizeof(double)));
+        HANDLE_ERROR(cudaMalloc(&d_mu, sizeof(double)));
     }
 
     void Setup(double length,
@@ -349,6 +383,7 @@ struct GPU_ANCF3243_Data
 
         cudaMemset(d_f_elem_out, 0, n_beam * 8 * 3 * sizeof(double));
         cudaMemset(d_F, 0, n_beam * Quadrature::N_TOTAL_QP * 3 * 3 * sizeof(double));
+        cudaMemset(d_P, 0, n_beam * Quadrature::N_TOTAL_QP * 3 * 3 * sizeof(double));
 
         HANDLE_ERROR(cudaMemcpy(d_H, &height, sizeof(double), cudaMemcpyHostToDevice));
         HANDLE_ERROR(cudaMemcpy(d_W, &width, sizeof(double), cudaMemcpyHostToDevice));
@@ -357,6 +392,11 @@ struct GPU_ANCF3243_Data
         HANDLE_ERROR(cudaMemcpy(d_rho0, &rho0, sizeof(double), cudaMemcpyHostToDevice));
         HANDLE_ERROR(cudaMemcpy(d_nu, &nu, sizeof(double), cudaMemcpyHostToDevice));
         HANDLE_ERROR(cudaMemcpy(d_E, &E, sizeof(double), cudaMemcpyHostToDevice));
+        double mu = E / (2 * (1 + nu)); // Shear modulus μ
+        double lambda =
+            (E * nu) / ((1 + nu) * (1 - 2 * nu)); // Lamé’s first parameter λ
+        HANDLE_ERROR(cudaMemcpy(d_mu, &mu, sizeof(double), cudaMemcpyHostToDevice));
+        HANDLE_ERROR(cudaMemcpy(d_lambda, &lambda, sizeof(double), cudaMemcpyHostToDevice));
 
         HANDLE_ERROR(cudaMemcpy(d_data, this, sizeof(GPU_ANCF3243_Data), cudaMemcpyHostToDevice));
 
@@ -391,6 +431,7 @@ struct GPU_ANCF3243_Data
         HANDLE_ERROR(cudaFree(d_node_values));
 
         HANDLE_ERROR(cudaFree(d_F));
+        HANDLE_ERROR(cudaFree(d_P));
         HANDLE_ERROR(cudaFree(d_f_elem_out));
 
         HANDLE_ERROR(cudaFree(d_H));
@@ -400,6 +441,8 @@ struct GPU_ANCF3243_Data
         HANDLE_ERROR(cudaFree(d_rho0));
         HANDLE_ERROR(cudaFree(d_nu));
         HANDLE_ERROR(cudaFree(d_E));
+        HANDLE_ERROR(cudaFree(d_lambda));
+        HANDLE_ERROR(cudaFree(d_mu));
 
         HANDLE_ERROR(cudaFree(d_data));
     }
@@ -410,9 +453,15 @@ struct GPU_ANCF3243_Data
 
     void CalcMassMatrix();
 
+    void CalcDeformationGradient();
+
+    void CalcPFromF();
+    
     void PrintDsDuPre();
 
     void RetrieveMassMatrixToCPU(Eigen::MatrixXd& mass_matrix);
+
+    
 
 
 private:
@@ -428,11 +477,11 @@ private:
 
     double *d_node_values;
 
-    double *d_F, *d_f_elem_out;
+    double *d_F, *d_P, *d_f_elem_out;
 
     double *d_H, *d_W, *d_L;
 
-    double *d_rho0, *d_nu, *d_E;
+    double *d_rho0, *d_nu, *d_E, *d_lambda, *d_mu;
 
     bool is_setup = false;
 

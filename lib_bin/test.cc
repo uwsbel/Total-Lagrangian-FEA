@@ -9,10 +9,6 @@ const double E = 7e8;     // Young's modulus
 const double nu = 0.33;   // Poisson's ratio
 const double rho0 = 2700; // Density
 
-double mu = E / (2 * (1 + nu)); // Shear modulus μ
-double lam_param =
-    (E * nu) / ((1 + nu) * (1 - 2 * nu)); // Lamé’s first parameter λ
-
 // // Device function to compute Jacobian matrix
 // __device__ void calc_det_J(double u,
 //                            double v,
@@ -300,6 +296,10 @@ int main() {
     }
     std::cout << std::endl;
   }
+  gpu_3243_data.CalcDeformationGradient();
+  gpu_3243_data.CalcPFromF();
+  std::cout << "done calculating p from f" << std::endl;
+
   //    gpu_3243_data.calc_int_force();
 
   // // Allocate GPU memory for all nodal coordinates

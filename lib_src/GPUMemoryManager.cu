@@ -172,6 +172,120 @@ __global__ void mass_matrix_qp_kernel(GPU_ANCF3243_Data *d_data)
     }
 }
 
+
+__device__ void compute_deformation_gradient(int elem_idx, int qp_idx, GPU_ANCF3243_Data *d_data) {
+  // Initialize F to zero
+  for (int i = 0; i < 3; i++) {
+      for (int j = 0; j < 3; j++) {
+        d_data->F(elem_idx, qp_idx)(i, j) = 0.0;
+    }
+  }
+
+  // Extract local nodal coordinates (e vectors)
+  double e[8][3]; // 8 nodes, each with 3 coordinates
+  for (int i = 0; i < 8; i++) {
+    e[i][0] = d_data->x12(elem_idx)(i); // x coordinate
+    e[i][1] = d_data->y12(elem_idx)(i); // y coordinate
+    e[i][2] = d_data->z12(elem_idx)(i); // z coordinate
+  }
+
+  // Compute F = sum_i e_i ⊗ ∇s_i
+  // F is 3x3 matrix stored in row-major order
+  for (int i = 0; i < 8; i++) { // Loop over nodes
+    // Get gradient of shape function i (∇s_i) - this needs proper indexing
+    // Assuming ds_du_pre is laid out as [qp_total][8][3]
+    // You'll need to provide the correct qp_idx for the current quadrature
+    // point
+    double grad_s_i[3];
+    grad_s_i[0] = d_data->ds_du_pre(qp_idx)(i, 0); // ∂s_i/∂u
+    grad_s_i[1] = d_data->ds_du_pre(qp_idx)(i, 1); // ∂s_i/∂v
+    grad_s_i[2] = d_data->ds_du_pre(qp_idx)(i, 2); // ∂s_i/∂w
+
+    // Compute outer product: e_i ⊗ ∇s_i and add to F
+    for (int row = 0; row < 3; row++) {   // e_i components
+      for (int col = 0; col < 3; col++) { // ∇s_i components
+        d_data->F(elem_idx, qp_idx)(row,col) = 
+            e[i][row] * grad_s_i[col];
+      }
+    }
+  }
+}
+
+__global__ void deformation_gradient_kernel(GPU_ANCF3243_Data* d_data){
+    int elem_idx = blockIdx.x;
+    int qp_idx = threadIdx.x;
+        
+    if (elem_idx >= d_data->get_n_beam() || qp_idx >= Quadrature::N_TOTAL_QP) return;
+       
+    compute_deformation_gradient(elem_idx, qp_idx, d_data); 
+}
+
+
+
+__device__ void compute_p_from_F(int elem_idx, int qp_idx, GPU_ANCF3243_Data *d_data) {
+  // --- Compute C = F^T * F ---
+  double FtF[3][3] = {0};
+  for (int i = 0; i < 3; ++i)
+    for (int j = 0; j < 3; ++j)
+      for (int k = 0; k < 3; ++k)
+        FtF[i][j] += d_data->F(elem_idx, qp_idx)(k, i) * d_data->F(elem_idx, qp_idx)(k, j);
+
+  // --- trace(F^T F) ---
+  double tr_FtF = FtF[0][0] + FtF[1][1] + FtF[2][2];
+
+  // 1. Compute Ft (transpose of F)
+  double Ft[3][3];
+  for (int i = 0; i < 3; ++i)
+    for (int j = 0; j < 3; ++j)
+      Ft[i][j] = d_data->F(elem_idx, qp_idx)(j, i); // transpose
+
+  // 2. Compute G = F * Ft
+  double G[3][3] = {0}; // G = F * F^T
+  for (int i = 0; i < 3; ++i)
+    for (int j = 0; j < 3; ++j)
+      for (int k = 0; k < 3; ++k)
+        G[i][j] += d_data->F(elem_idx, qp_idx)(i, k) * Ft[k][j];
+
+  // 3. Compute FFF = G * F = (F * Ft) * F
+  double FFF[3][3] = {0};
+  for (int i = 0; i < 3; ++i)
+    for (int j = 0; j < 3; ++j)
+      for (int k = 0; k < 3; ++k)
+        FFF[i][j] += G[i][k] * d_data->F(elem_idx, qp_idx)(k, j);
+
+  // --- Compute P ---
+  double factor = d_data->lambda() * (0.5 * tr_FtF - 1.5);
+  for (int i = 0; i < 3; ++i)
+    for (int j = 0; j < 3; ++j) {
+      d_data->P(elem_idx, qp_idx)(i, j) = factor * d_data->F(elem_idx, qp_idx)(i, j) + d_data->mu() * (FFF[i][j] - d_data->F(elem_idx, qp_idx)(i, j));
+    }
+}
+
+__global__ void calc_p_kernel(GPU_ANCF3243_Data *d_data){
+    int elem_idx = blockIdx.x;
+    int qp_idx = threadIdx.x;
+        
+    if (elem_idx >= d_data->get_n_beam() || qp_idx >= Quadrature::N_TOTAL_QP) return;
+    
+    compute_p_from_F(elem_idx, qp_idx, d_data);
+}
+
+void GPU_ANCF3243_Data::CalcDeformationGradient()
+{
+    int threads = 128;
+    int blocks = (n_beam * Quadrature::N_TOTAL_QP * 3 * 3 + threads - 1) / threads;
+    deformation_gradient_kernel<<<blocks, threads>>>(d_data);
+    cudaDeviceSynchronize();
+}
+
+void GPU_ANCF3243_Data::CalcPFromF()
+{
+    int threads = 128;
+    int blocks = (n_beam * Quadrature::N_TOTAL_QP * 3 * 3 + threads - 1) / threads;
+    deformation_gradient_kernel<<<blocks, threads>>>(d_data);
+    cudaDeviceSynchronize();
+}
+
 void GPU_ANCF3243_Data::CalcDsDuPre()
 {
     // Launch kernel
@@ -227,6 +341,8 @@ void GPU_ANCF3243_Data::CalcMassMatrix()
 
     cudaDeviceSynchronize();
 }
+
+
 
 void GPU_ANCF3243_Data::RetrieveMassMatrixToCPU(Eigen::MatrixXd& mass_matrix)
 {
