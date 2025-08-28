@@ -1,15 +1,10 @@
 // Corrected Include Order
 
 // STEP 1: Standard C++ and CUDA headers go FIRST.
-// (Add any other standard headers you use here)
-
-// STEP 1: Standard C++ and CUDA headers go FIRST.
 // Example:
 #include <iostream>
 #include <vector>
 #include <cuda_runtime.h>
-// (Add any other standard/CUDA headers you need here)
-
 
 #include <Eigen/Dense>
 
@@ -206,6 +201,16 @@ struct GPU_ANCF3243_Data
         return Eigen::Map<Eigen::MatrixXd>(d_P + (elem_idx * Quadrature::N_TOTAL_QP + qp_idx) * 9, 3, 3);
     }
 
+    __device__ Eigen::Map<Eigen::VectorXd> f_elem_out(int global_node_idx)
+    {
+        return Eigen::Map<Eigen::VectorXd>(d_f_elem_out + global_node_idx * 3, 3);
+    }
+
+    __device__ const Eigen::Map<Eigen::VectorXd> f_elem_out(int global_node_idx) const
+    {
+        return Eigen::Map<Eigen::VectorXd>(d_f_elem_out + global_node_idx * 3, 3);
+    }
+
     // =================================
 
     __device__ Eigen::Map<Eigen::VectorXi> const offset_start() const
@@ -313,7 +318,7 @@ struct GPU_ANCF3243_Data
 
         HANDLE_ERROR(cudaMalloc(&d_F, n_beam * Quadrature::N_TOTAL_QP * 3 * 3 * sizeof(double)));
         HANDLE_ERROR(cudaMalloc(&d_P, n_beam * Quadrature::N_TOTAL_QP * 3 * 3 * sizeof(double)));
-        HANDLE_ERROR(cudaMalloc(&d_f_elem_out, n_beam * 8 * 3 * sizeof(double)));
+        HANDLE_ERROR(cudaMalloc(&d_f_elem_out, n_coef * 3 * sizeof(double)));
 
         // copy struct to device
         HANDLE_ERROR(cudaMalloc(&d_data, sizeof(GPU_ANCF3243_Data)));
@@ -381,7 +386,7 @@ struct GPU_ANCF3243_Data
 
         HANDLE_ERROR(cudaMemset(d_node_values, 0, n_coef * n_coef * sizeof(double)));
 
-        cudaMemset(d_f_elem_out, 0, n_beam * 8 * 3 * sizeof(double));
+        cudaMemset(d_f_elem_out, 0, n_coef * 3 * sizeof(double));
         cudaMemset(d_F, 0, n_beam * Quadrature::N_TOTAL_QP * 3 * 3 * sizeof(double));
         cudaMemset(d_P, 0, n_beam * Quadrature::N_TOTAL_QP * 3 * 3 * sizeof(double));
 
@@ -447,7 +452,6 @@ struct GPU_ANCF3243_Data
         HANDLE_ERROR(cudaFree(d_data));
     }
 
-    // void calc_int_force();
 
     void CalcDsDuPre();
 
@@ -456,12 +460,16 @@ struct GPU_ANCF3243_Data
     void CalcDeformationGradient();
 
     void CalcPFromF();
+
+    void CalcInternalForce();
     
     void PrintDsDuPre();
 
     void RetrieveMassMatrixToCPU(Eigen::MatrixXd& mass_matrix);
 
-    
+    void RetrieveDeformationGradientToCPU(Eigen::MatrixXd& deformation_gradient);
+
+    void RetrieveInternalForceToCPU(Eigen::VectorXd& internal_force);    
 
 
 private:
