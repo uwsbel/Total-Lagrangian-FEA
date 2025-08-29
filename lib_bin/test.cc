@@ -9,7 +9,8 @@ const double E = 7e8;     // Young's modulus
 const double nu = 0.33;   // Poisson's ratio
 const double rho0 = 2700; // Density
 
-int main() {
+int main()
+{
   // initialize GPU data structure
   int n_beam = 2;
   GPU_ANCF3243_Data gpu_3243_data(n_beam);
@@ -39,17 +40,20 @@ int main() {
   ANCFCPUUtils::generate_beam_coordinates(n_beam, h_x12, h_y12, h_z12);
 
   // print h_x12
-  for (int i = 0; i < gpu_3243_data.get_n_coef(); i++) {
+  for (int i = 0; i < gpu_3243_data.get_n_coef(); i++)
+  {
     printf("h_x12(%d) = %f\n", i, h_x12(i));
   }
 
   // print h_y12
-  for (int i = 0; i < gpu_3243_data.get_n_coef(); i++) {
+  for (int i = 0; i < gpu_3243_data.get_n_coef(); i++)
+  {
     printf("h_y12(%d) = %f\n", i, h_y12(i));
   }
 
   // print h_z12
-  for (int i = 0; i < gpu_3243_data.get_n_coef(); i++) {
+  for (int i = 0; i < gpu_3243_data.get_n_coef(); i++)
+  {
     printf("h_z12(%d) = %f\n", i, h_z12(i));
   }
 
@@ -78,8 +82,10 @@ int main() {
   gpu_3243_data.RetrieveMassMatrixToCPU(mass_matrix);
 
   std::cout << "mass matrix:" << std::endl;
-  for (int i = 0; i < mass_matrix.rows(); i++) {
-    for (int j = 0; j < mass_matrix.cols(); j++) {
+  for (int i = 0; i < mass_matrix.rows(); i++)
+  {
+    for (int j = 0; j < mass_matrix.cols(); j++)
+    {
       std::cout << mass_matrix(i, j) << " ";
     }
     std::cout << std::endl;
@@ -94,11 +100,40 @@ int main() {
   Eigen::VectorXd internal_force;
   gpu_3243_data.RetrieveInternalForceToCPU(internal_force);
   std::cout << "internal force:" << std::endl;
-  for (int i = 0; i < internal_force.size(); i++) {
+  for (int i = 0; i < internal_force.size(); i++)
+  {
     std::cout << internal_force(i) << " ";
   }
 
   std::cout << std::endl;
+
+  gpu_3243_data.CalcConstraintData();
+  std::cout << "done calculating constraint data" << std::endl;
+
+  Eigen::VectorXd constraint;
+  gpu_3243_data.RetrieveConstraintDataToCPU(constraint);
+  std::cout << "constraint:" << std::endl;
+  for (int i = 0; i < constraint.size(); i++)
+  {
+    std::cout << constraint(i) << " ";
+  }
+  std::cout << std::endl;
+
+  Eigen::MatrixXd constraint_jac;
+  gpu_3243_data.RetrieveConstraintJacobianToCPU(constraint_jac);
+  std::cout << "constraint jacobian:" << std::endl;
+  for (int i = 0; i < constraint_jac.rows(); i++)
+  {
+    for (int j = 0; j < constraint_jac.cols(); j++)
+    {
+      std::cout << constraint_jac(i, j) << " ";
+    }
+    std::cout << std::endl;
+  }
+
+  gpu_3243_data.SetNesterovParameters(1.0e-3, 1.0e-8, 1.0e-6, 1.0e-6, 20, 300);
+
+  gpu_3243_data.OneStepNesterov();
 
   gpu_3243_data.Destroy();
 

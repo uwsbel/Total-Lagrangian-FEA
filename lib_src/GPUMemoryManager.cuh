@@ -190,7 +190,6 @@ struct GPU_ANCF3243_Data
         return Eigen::Map<Eigen::MatrixXd>(d_F + (elem_idx * Quadrature::N_TOTAL_QP + qp_idx) * 9, 3, 3);
     }
 
-
     __device__ Eigen::Map<Eigen::MatrixXd> P(int elem_idx, int qp_idx)
     {
         return Eigen::Map<Eigen::MatrixXd>(d_P + (elem_idx * Quadrature::N_TOTAL_QP + qp_idx) * 9, 3, 3);
@@ -211,7 +210,84 @@ struct GPU_ANCF3243_Data
         return Eigen::Map<Eigen::VectorXd>(d_f_elem_out + global_node_idx * 3, 3);
     }
 
+    __device__ Eigen::Map<Eigen::VectorXd> f_elem_out()
+    {
+        return Eigen::Map<Eigen::VectorXd>(d_f_elem_out, n_coef * 3);
+    }
+
+    __device__ const Eigen::Map<Eigen::VectorXd> f_elem_out() const
+    {
+        return Eigen::Map<Eigen::VectorXd>(d_f_elem_out, n_coef * 3);
+    }
+
+    __device__ Eigen::Map<Eigen::VectorXd> constraint()
+    {
+        return Eigen::Map<Eigen::VectorXd>(d_constraint, 12);
+    }
+
+    __device__ const Eigen::Map<Eigen::VectorXd> constraint() const
+    {
+        return Eigen::Map<Eigen::VectorXd>(d_constraint, 12);
+    }
+
+    __device__ Eigen::Map<Eigen::MatrixXd> constraint_jac()
+    {
+        return Eigen::Map<Eigen::MatrixXd>(d_constraint_jac, 12, n_coef * 3);
+    }
+
+    __device__ const Eigen::Map<Eigen::MatrixXd> constraint_jac() const
+    {
+        return Eigen::Map<Eigen::MatrixXd>(d_constraint_jac, 12, n_coef * 3);
+    }
+
     // =================================
+    // solver related parameters
+    __device__ double solver_alpha() const
+    {
+        return *d_alpha;
+    }
+
+    __device__ double solver_inner_tol() const
+    {
+        return *d_inner_tol;
+    }
+
+    __device__ double solver_outer_tol() const
+    {
+        return *d_outer_tol;
+    }
+
+    __device__ double solver_max_outer() const
+    {
+        return *d_max_outer;
+    }
+
+    __device__ double solver_max_inner() const
+    {
+        return *d_max_inner;
+    }
+
+    __device__ double solver_time_step() const
+    {
+        return *d_time_step;
+    }
+
+    __device__ Eigen::Map<Eigen::VectorXd> v_guess()
+    {
+        return Eigen::Map<Eigen::VectorXd>(d_v_guess, n_coef * 3);
+    }
+
+    __device__ Eigen::Map<Eigen::VectorXd> v_prev()
+    {
+        return Eigen::Map<Eigen::VectorXd>(d_v_prev, n_coef * 3);
+    }
+
+    __device__ Eigen::Map<Eigen::VectorXd> lambda_guess() const
+    {
+        return Eigen::Map<Eigen::VectorXd>(d_lambda_guess, 12);
+    }
+
+    // ================================
 
     __device__ Eigen::Map<Eigen::VectorXi> const offset_start() const
     {
@@ -283,11 +359,10 @@ struct GPU_ANCF3243_Data
 #endif
 
     // Constructor
-    GPU_ANCF3243_Data(int num_beams) : n_beam(num_beams) {
+    GPU_ANCF3243_Data(int num_beams) : n_beam(num_beams)
+    {
         n_coef = Quadrature::N_SHAPE + 4 * (n_beam - 1);
     }
-    
-
 
     void Initialize()
     {
@@ -333,6 +408,23 @@ struct GPU_ANCF3243_Data
         HANDLE_ERROR(cudaMalloc(&d_E, sizeof(double)));
         HANDLE_ERROR(cudaMalloc(&d_lambda, sizeof(double)));
         HANDLE_ERROR(cudaMalloc(&d_mu, sizeof(double)));
+
+        // constraint data
+        HANDLE_ERROR(cudaMalloc(&d_constraint, 12 * sizeof(double)));
+        HANDLE_ERROR(cudaMalloc(&d_constraint_jac, 12 * (n_coef * 3) * sizeof(double)));
+
+        // solver settings
+        HANDLE_ERROR(cudaMalloc(&d_alpha, sizeof(double)));
+        HANDLE_ERROR(cudaMalloc(&d_inner_tol, sizeof(double)));
+        HANDLE_ERROR(cudaMalloc(&d_outer_tol, sizeof(double)));
+        HANDLE_ERROR(cudaMalloc(&d_max_outer, sizeof(double)));
+        HANDLE_ERROR(cudaMalloc(&d_max_inner, sizeof(double)));
+
+        HANDLE_ERROR(cudaMalloc(&d_v_guess, n_coef * 3 * sizeof(double)));
+        HANDLE_ERROR(cudaMalloc(&d_v_prev, n_coef * 3 * sizeof(double)));
+        HANDLE_ERROR(cudaMalloc(&d_lambda_guess, 12 * sizeof(double)));
+
+        HANDLE_ERROR(cudaMalloc(&d_time_step, sizeof(double)));
     }
 
     void Setup(double length,
@@ -405,6 +497,9 @@ struct GPU_ANCF3243_Data
 
         HANDLE_ERROR(cudaMemcpy(d_data, this, sizeof(GPU_ANCF3243_Data), cudaMemcpyHostToDevice));
 
+        HANDLE_ERROR(cudaMemset(d_constraint, 0, 12 * sizeof(double)));
+        HANDLE_ERROR(cudaMemset(d_constraint_jac, 0, 12 * (n_coef * 3) * sizeof(double)));
+
         is_setup = true;
     }
 
@@ -450,8 +545,21 @@ struct GPU_ANCF3243_Data
         HANDLE_ERROR(cudaFree(d_mu));
 
         HANDLE_ERROR(cudaFree(d_data));
-    }
 
+        HANDLE_ERROR(cudaFree(d_constraint));
+        HANDLE_ERROR(cudaFree(d_constraint_jac));
+
+        HANDLE_ERROR(cudaFree(d_alpha));
+        HANDLE_ERROR(cudaFree(d_inner_tol));
+        HANDLE_ERROR(cudaFree(d_outer_tol));
+        HANDLE_ERROR(cudaFree(d_max_outer));
+        HANDLE_ERROR(cudaFree(d_max_inner));
+
+        HANDLE_ERROR(cudaFree(d_lambda_guess));
+        HANDLE_ERROR(cudaFree(d_v_guess));
+        HANDLE_ERROR(cudaFree(d_v_prev));
+        HANDLE_ERROR(cudaFree(d_time_step));
+    }
 
     void CalcDsDuPre();
 
@@ -462,15 +570,36 @@ struct GPU_ANCF3243_Data
     void CalcPFromF();
 
     void CalcInternalForce();
-    
+
+    void CalcConstraintData();
+
+    void SetNesterovParameters(double h, double alpha0, double inner_tol, double outer_tol, double max_outer, double max_inner)
+    {
+        HANDLE_ERROR(cudaMemcpy(d_time_step, &h, sizeof(double), cudaMemcpyHostToDevice));
+        HANDLE_ERROR(cudaMemcpy(d_alpha, &alpha0, sizeof(double), cudaMemcpyHostToDevice));
+        HANDLE_ERROR(cudaMemcpy(d_inner_tol, &inner_tol, sizeof(double), cudaMemcpyHostToDevice));
+        HANDLE_ERROR(cudaMemcpy(d_outer_tol, &outer_tol, sizeof(double), cudaMemcpyHostToDevice));
+        HANDLE_ERROR(cudaMemcpy(d_max_outer, &max_outer, sizeof(double), cudaMemcpyHostToDevice));
+        HANDLE_ERROR(cudaMemcpy(d_max_inner, &max_inner, sizeof(double), cudaMemcpyHostToDevice));
+
+        HANDLE_ERROR(cudaMemset(d_v_guess, 0, n_coef * 3 * sizeof(double)));
+        HANDLE_ERROR(cudaMemset(d_v_prev, 0, n_coef * 3 * sizeof(double)));
+        HANDLE_ERROR(cudaMemset(d_lambda_guess, 0, 12 * sizeof(double)));
+    }
+
     void PrintDsDuPre();
 
-    void RetrieveMassMatrixToCPU(Eigen::MatrixXd& mass_matrix);
+    void RetrieveMassMatrixToCPU(Eigen::MatrixXd &mass_matrix);
 
-    void RetrieveDeformationGradientToCPU(Eigen::MatrixXd& deformation_gradient);
+    void RetrieveDeformationGradientToCPU(Eigen::MatrixXd &deformation_gradient);
 
-    void RetrieveInternalForceToCPU(Eigen::VectorXd& internal_force);    
+    void RetrieveInternalForceToCPU(Eigen::VectorXd &internal_force);
 
+    void RetrieveConstraintDataToCPU(Eigen::VectorXd &constraint);
+
+    void RetrieveConstraintJacobianToCPU(Eigen::MatrixXd &constraint_jac);
+
+    void OneStepNesterov();
 
 private:
     double *d_B_inv;
@@ -491,6 +620,15 @@ private:
 
     double *d_rho0, *d_nu, *d_E, *d_lambda, *d_mu;
 
+    double *d_constraint, *d_constraint_jac;
+
+    double *d_max_outer, *d_max_inner, *d_inner_tol, *d_outer_tol;
+    double *d_alpha;
+
+    // nesterov scratch
+    double *d_time_step;
+    double *d_lambda_guess;
+    double *d_v_guess, *d_v_prev;
     bool is_setup = false;
 
     int n_beam;

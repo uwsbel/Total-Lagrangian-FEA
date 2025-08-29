@@ -32,6 +32,7 @@ cuda_library(
     srcs = ["lib_src/GPUMemoryManager.cu"],
     hdrs = ["lib_src/GPUMemoryManager.cuh"],
     copts = ["--std=c++17"],
+    linkopts = ["-lcusolver","-lcublas"],
     deps = [
         ":cpu_utils",  # Add dependency on cpu_utils for quadrature.h
         "@eigen//:eigen"
