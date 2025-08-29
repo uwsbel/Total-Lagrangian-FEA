@@ -542,81 +542,81 @@ for step in range(Nt):
     
     def alm_nesterov_step(v_guess, lam_guess, v_prev, q_prev, M, f_int_func, f_int, f_ext, h, rho):
         """
-        Performs one ALM step with true Nesterov acceleration (adaptive momentum).
-        Signature matches `alm_bb_step`, but recomputes internal force each inner iteration.
+        One ALM step with true Nesterov acceleration (FISTA schedule), no restart.
+        - Uses scaled duals: lam <- lam + rho*h*c(qA), and grad uses J^T(lam + rho*h*c(qA)).
+        - Fixed stepsize alpha (pick conservatively).
         """
         v = v_guess.copy()
         lam = lam_guess.copy()
 
         max_outer = 20
-        max_inner = 300
-        inner_tol = 1e-4
+        max_inner = 500
+        inner_tol = 1e-6   # tolerance on iterate change (can relax)
         outer_tol = 1e-6
+
+        # --- choose a fixed stepsize alpha ---
+        # Option A (keep your old small value):
+        alpha = 1.0e-8
+
+        # Option B (one-time crude Lipschitz estimate; uncomment to try):
+        # L_M = np.max(np.sum(np.abs(M), axis=1)) / h          # ||M||_inf / h
+        # J0 = constraint_jacobian(q_prev)
+        # L_J = (np.max(np.sum(np.abs(J0), axis=1)) ** 2)      # ||J||_inf^2
+        # L_est = L_M + rho * h * L_J
+        # alpha = 1.0 / (10.0 * max(L_est, 1e-12))             # safety factor 10
 
         for outer_iter in range(max_outer):
             def grad_L(v_loc):
+                # State at look-ahead
                 qA = q_prev + h * v_loc
-                x_new = np.zeros(N_coef)
-                y_new = np.zeros(N_coef)
-                z_new = np.zeros(N_coef)
-                for i in range(N_coef):
-                    x_new[i] = qA[3 * i + 0]
-                    y_new[i] = qA[3 * i + 1]
-                    z_new[i] = qA[3 * i + 2]
+
+                # unpack qA -> x,y,z nodal arrays
+                x_new = qA[0::3]
+                y_new = qA[1::3]
+                z_new = qA[2::3]
 
                 f_int_dyn = f_int_func(x_new, y_new, z_new)
-                #g = (M @ (v_loc - v_prev)) / h - (-f_int + f_ext)
-                g = (M @ (v_loc - v_prev)) / h - (-f_int_dyn + f_ext)
+                g_mech = (M @ (v_loc - v_prev)) / h - (-f_int_dyn + f_ext)
 
                 J = constraint_jacobian(qA)
-                constr_violation = constraint(qA)
-                return g + J.T @ (lam + rho * h * constr_violation)
+                cA = constraint(qA)
 
-            # === Nesterov parameters ===
-            alpha0 = 2.0e-8
-            beta = 0.95
-            gamma = 0.8
+                return g_mech + J.T @ (lam + rho * h * cA)
 
-            v_current = v.copy()
-            m = np.zeros_like(v)
-            y = v.copy()
-            prev_grad_norm = np.inf
+            # ---- True Nesterov/FISTA inner loop (fixed schedule, no restart) ----
+            v_k   = v.copy()
+            v_km1 = v.copy()   # zero momentum at first step
+            t     = 1.0
 
             for inner_iter in range(max_inner):
-                alpha = alpha0 * (0.999 ** inner_iter)
+                t_next = 0.5 * (1.0 + np.sqrt(1.0 + 4.0 * t * t))
+                beta   = (t - 1.0) / t_next
 
-                y = v_current + gamma * m
-                grad = grad_L(y)
-                grad_norm = np.linalg.norm(grad)
-                print(f"[inner {inner_iter:2d}] ‖∇L‖ = {grad_norm:.10e}, α = {alpha:.10e}")
+                # Nesterov look-ahead
+                y = v_k + beta * (v_k - v_km1)
 
-                if grad_norm > prev_grad_norm:
-                    print(f"🔁 Restart at inner {inner_iter} due to increasing ‖∇L‖")
-                    m = np.zeros_like(m)
-                    y = v_current.copy()
-                    prev_grad_norm = np.inf
-                    continue
+                # Gradient at look-ahead
+                print("outer iter: ", outer_iter, "inner iter: ", inner_iter)
+                g = grad_L(y)
+                print("g: ", np.linalg.norm(g))
 
-                # Nesterov momentum update
-                m = beta * m - alpha * grad
-                v_next = v_current + m
+                # Fixed stepsize update
+                v_next = y - alpha * g
 
-                if grad_norm < inner_tol:
-                    v_current = v_next
+                # stopping by iterate change (cheap)
+                if np.linalg.norm(v_next - v_k) < inner_tol:
+                    v_k = v_next
                     break
 
-                prev_grad_norm = grad_norm
-                v_current = v_next
+                v_km1, v_k, t = v_k, v_next, t_next
 
-            # OUTER loop update
-            v = v_current
+            # OUTER dual update (scaled multipliers)
+            v = v_k
             qA = q_prev + h * v
-            constr_violation = constraint(qA)
-            lam += rho * h * constr_violation
+            cA = constraint(qA)
+            lam += rho * h * cA
 
-            print(f">>>>> End of OUTER STEP #{outer_iter}; inner iters = {inner_iter+1}, norm(constr_violation) = {np.linalg.norm(constr_violation):.2e}")
-
-            if np.linalg.norm(constr_violation) < outer_tol:
+            if np.linalg.norm(cA) < outer_tol:
                 break
 
         return v, lam
