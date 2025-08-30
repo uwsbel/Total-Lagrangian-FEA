@@ -410,7 +410,7 @@ for a in range(n_beam):
         
 
 
-Nt = 40  # Number of time steps
+Nt = 1  # Number of time steps
 
 end_x = np.zeros((n_beam, Nt))
 end_y = np.zeros((n_beam, Nt))
@@ -549,7 +549,7 @@ for step in range(Nt):
         v = v_guess.copy()
         lam = lam_guess.copy()
 
-        max_outer = 10
+        max_outer = 1
         max_inner = 300
         inner_tol = 1e-6   # tolerance on iterate change (can relax)
         outer_tol = 1e-6
@@ -598,15 +598,16 @@ for step in range(Nt):
                 # Gradient at look-ahead
                 print("outer iter: ", outer_iter, "inner iter: ", inner_iter)
                 g = grad_L(y)
+                print("g: ", g)
                 print("g: ", np.linalg.norm(g))
 
                 # Fixed stepsize update
                 v_next = y - alpha * g
 
                 # stopping by iterate change (cheap)
-                if np.linalg.norm(v_next - v_k) < inner_tol:
-                    v_k = v_next
-                    break
+                #if np.linalg.norm(v_next - v_k) < inner_tol:
+                #    v_k = v_next
+                #    break
 
                 v_km1, v_k, t = v_k, v_next, t_next
 
@@ -633,7 +634,7 @@ for step in range(Nt):
 
     # External force at point P
     if step <= 200:
-        f_P = np.array([200.0, -10.0,3100.0])
+        f_P = np.array([0.0, 0.0,0.0])
     else:
         f_P = np.array([0.0, 0.0, 0.0])
 

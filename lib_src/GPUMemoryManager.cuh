@@ -180,8 +180,6 @@ struct GPU_ANCF3243_Data
         return Eigen::Map<Eigen::VectorXd>(d_z12 + elem * (Quadrature::N_SHAPE / 2), Quadrature::N_SHAPE);
     }
 
-
-
     __device__ Eigen::Map<Eigen::VectorXd> x12_prev()
     {
         return Eigen::Map<Eigen::VectorXd>(d_x12_prev, n_coef);
@@ -317,6 +315,11 @@ struct GPU_ANCF3243_Data
     __device__ Eigen::Map<Eigen::VectorXd> lambda_guess() const
     {
         return Eigen::Map<Eigen::VectorXd>(d_lambda_guess, 12);
+    }
+
+    __device__ Eigen::Map<Eigen::VectorXd> g()
+    {
+        return Eigen::Map<Eigen::VectorXd>(d_g, 3 * n_coef);
     }
 
     // ================================
@@ -460,6 +463,8 @@ struct GPU_ANCF3243_Data
         HANDLE_ERROR(cudaMalloc(&d_lambda_guess, 12 * sizeof(double)));
 
         HANDLE_ERROR(cudaMalloc(&d_time_step, sizeof(double)));
+
+        HANDLE_ERROR(cudaMalloc(&d_g, 3 * n_coef * sizeof(double)));
     }
 
     void Setup(double length,
@@ -511,7 +516,6 @@ struct GPU_ANCF3243_Data
         HANDLE_ERROR(cudaMemcpy(d_y12_prev, h_y12.data(), n_coef * sizeof(double), cudaMemcpyHostToDevice));
         HANDLE_ERROR(cudaMemcpy(d_z12_prev, h_z12.data(), n_coef * sizeof(double), cudaMemcpyHostToDevice));
 
-
         HANDLE_ERROR(cudaMemcpy(d_offset_start, h_offset_start.data(), n_beam * sizeof(int), cudaMemcpyHostToDevice));
         HANDLE_ERROR(cudaMemcpy(d_offset_end, h_offset_end.data(), n_beam * sizeof(int), cudaMemcpyHostToDevice));
 
@@ -538,6 +542,8 @@ struct GPU_ANCF3243_Data
 
         HANDLE_ERROR(cudaMemset(d_constraint, 0, 12 * sizeof(double)));
         HANDLE_ERROR(cudaMemset(d_constraint_jac, 0, 12 * (n_coef * 3) * sizeof(double)));
+
+        HANDLE_ERROR(cudaMemset(d_g, 0, 3 * n_coef * sizeof(double)));
 
         is_setup = true;
     }
@@ -601,6 +607,7 @@ struct GPU_ANCF3243_Data
         HANDLE_ERROR(cudaFree(d_v_guess));
         HANDLE_ERROR(cudaFree(d_v_prev));
         HANDLE_ERROR(cudaFree(d_time_step));
+        HANDLE_ERROR(cudaFree(d_g));
     }
 
     void CalcDsDuPre();
@@ -633,7 +640,9 @@ struct GPU_ANCF3243_Data
 
     void RetrieveMassMatrixToCPU(Eigen::MatrixXd &mass_matrix);
 
-    void RetrieveDeformationGradientToCPU(Eigen::MatrixXd &deformation_gradient);
+    void RetrieveDeformationGradientToCPU(std::vector<std::vector<Eigen::MatrixXd>> &deformation_gradient);
+
+    void RetrievePFromFToCPU(std::vector<std::vector<Eigen::MatrixXd>> &p_from_F);
 
     void RetrieveInternalForceToCPU(Eigen::VectorXd &internal_force);
 
@@ -673,6 +682,7 @@ private:
     double *d_alpha;
 
     // nesterov scratch
+    double *d_g;
     double *d_time_step;
     double *d_lambda_guess;
     double *d_v_guess, *d_v_prev;
