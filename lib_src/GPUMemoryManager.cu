@@ -396,6 +396,17 @@ void GPU_ANCF3243_Data::RetrieveConstraintJacobianToCPU(Eigen::MatrixXd &constra
   HANDLE_ERROR(cudaMemcpy(constraint_jac.data(), d_constraint_jac, expected_size * sizeof(double), cudaMemcpyDeviceToHost));
 }
 
+void GPU_ANCF3243_Data::RetrievePositionToCPU(Eigen::VectorXd &x12, Eigen::VectorXd &y12, Eigen::VectorXd &z12)
+{
+  int expected_size = n_coef;
+  x12.resize(expected_size);
+  y12.resize(expected_size);
+  z12.resize(expected_size);
+  HANDLE_ERROR(cudaMemcpy(x12.data(), d_x12, expected_size * sizeof(double), cudaMemcpyDeviceToHost));
+  HANDLE_ERROR(cudaMemcpy(y12.data(), d_y12, expected_size * sizeof(double), cudaMemcpyDeviceToHost));
+  HANDLE_ERROR(cudaMemcpy(z12.data(), d_z12, expected_size * sizeof(double), cudaMemcpyDeviceToHost));
+}
+
 __device__ void compute_internal_force(int elem_idx, int node_idx, GPU_ANCF3243_Data *d_data)
 {
 
@@ -454,7 +465,7 @@ void GPU_ANCF3243_Data::CalcInternalForce()
   cudaDeviceSynchronize();
 }
 
-__global__ void compute_constraint_data_kernel(GPU_ANCF3243_Data *d_data)
+__device__ void compute_constraint_data(GPU_ANCF3243_Data *d_data)
 {
   int thread_idx = blockIdx.x * blockDim.x + threadIdx.x;
 
@@ -481,6 +492,11 @@ __global__ void compute_constraint_data_kernel(GPU_ANCF3243_Data *d_data)
       d_data->constraint_jac()(i, i) = 1.0;
     }
   }
+}
+
+__global__ void compute_constraint_data_kernel(GPU_ANCF3243_Data *d_data)
+{
+  compute_constraint_data(d_data);
 }
 
 void GPU_ANCF3243_Data::CalcConstraintData()
@@ -516,76 +532,141 @@ one_step_nesterov_kernel(GPU_ANCF3243_Data *d_data)
 
   int tid = blockIdx.x * blockDim.x + threadIdx.x;
 
+  // assign x12_prev, y12_prev, z12_prev
+  if (tid < d_data->get_n_coef())
+  {
+    d_data->x12_prev()(tid) = d_data->x12()(tid);
+    d_data->y12_prev()(tid) = d_data->y12()(tid);
+    d_data->z12_prev()(tid) = d_data->z12()(tid);
+  }
+
   for (int outer_iter = 0; outer_iter < d_data->solver_max_outer(); outer_iter++)
   {
+    // Initialize variables for each thread
     double v_k = 0.0;
     double v_next = 0.0;
     double v_km1 = 0.0;
     double t = 1.0;
-    double v_prev = d_data->v_prev()[tid];
+    double v_prev = 0.0;
 
-    // update guess for each thread
+    // Initialize for valid threads only
     if (tid < d_data->get_n_coef() * 3)
     {
+      v_prev = d_data->v_prev()[tid];
       v_k = d_data->v_guess()[tid];
-      v_km1 = d_data->v_guess()[tid];
+      v_km1 = d_data->v_guess()[tid];  // zero momentum at first step
       t = 1.0;
     }
+
+    double t_next = 1.0; // Declare t_next here
 
     for (int inner_iter = 0; inner_iter < d_data->solver_max_inner(); inner_iter++)
     {
       if (tid == 0)
       {
-        printf("inner iter: %d\n", inner_iter);
+        printf("outer iter: %d, inner iter: %d\n", outer_iter, inner_iter);
       }
 
+      // Step 1: Each thread computes its look-ahead velocity component
+      double y = 0.0;  // Declare y here
       if (tid < d_data->get_n_coef() * 3)
       {
-        double t_next = 0.5 * (1.0 + sqrt(1.0 + 4.0 * t * t));
+        t_next = 0.5 * (1.0 + sqrt(1.0 + 4.0 * t * t));
         double beta = (t - 1.0) / t_next;
-
-        double y = v_k + beta * (v_k - v_km1);
-
-        double g = solver_grad_L(y, v_prev, tid, d_data);
-
-        v_next = y - d_data->solver_alpha() * g;
-
-        // update v_km1, v_k, t
-        v_km1 = v_k;
-        v_k = v_next;
-        t = t_next;
-
-        d_data->v_guess()[tid] = v_next;
+        y = v_k + beta * (v_k - v_km1);
+        
+        // Store look-ahead velocity temporarily
+        d_data->v_guess()[tid] = y;  // Use v_guess as temp storage for y
       }
-
+      
       grid.sync();
-
+      
+      // Step 2: Update scratch positions using look-ahead velocities
+      if (tid < d_data->get_n_coef())
+      {
+        d_data->x12()(tid) = d_data->x12_prev()(tid) + d_data->solver_time_step() * d_data->v_guess()(tid*3 + 0);
+        d_data->y12()(tid) = d_data->y12_prev()(tid) + d_data->solver_time_step() * d_data->v_guess()(tid*3 + 1);
+        d_data->z12()(tid) = d_data->z12_prev()(tid) + d_data->solver_time_step() * d_data->v_guess()(tid*3 + 2);
+      }
+      
+      grid.sync();
+      
+      // Step 3: Compute internal forces at look-ahead positions
       int elem_idx = tid / Quadrature::N_SHAPE;
       int node_idx = tid % Quadrature::N_SHAPE;
       compute_internal_force(elem_idx, node_idx, d_data);
 
       grid.sync();
-    }
 
+      if(tid == 0)
+      {
+         compute_constraint_data(d_data);
+      }
+     
+      
+      grid.sync();
+      
+      // Step 4: Compute gradients and update velocities
+      if (tid < d_data->get_n_coef() * 3)
+      {
+        double g = solver_grad_L(y, v_prev, tid, d_data);
+        v_next = y - d_data->solver_alpha() * g;
+        
+        // Update for next iteration
+        v_km1 = v_k;
+        v_k = v_next;
+        t = t_next;
+        
+        // Store final velocity
+        d_data->v_guess()[tid] = v_next;
+      }
+      
+      grid.sync();
+    }
+    // After inner loop convergence, update v_prev for next outer iteration
     if (tid < d_data->get_n_coef() * 3)
     {
-      d_data->v_guess()[tid] = v_next;
+      d_data->v_prev()[tid] = d_data->v_guess()[tid];
     }
+
+    grid.sync();
+
+    // Update positions: q_new = q_prev + h * v (parallel across threads)
+    if (tid < d_data->get_n_coef())
+    {
+      d_data->x12()(tid) = d_data->x12_prev()(tid) + d_data->v_guess()(tid*3 + 0) * d_data->solver_time_step();
+      d_data->y12()(tid) = d_data->y12_prev()(tid) + d_data->v_guess()(tid*3 + 1) * d_data->solver_time_step();
+      d_data->z12()(tid) = d_data->z12_prev()(tid) + d_data->v_guess()(tid*3 + 2) * d_data->solver_time_step();
+    }
+
+    grid.sync();
+
+    // Only thread 0 handles constraint computation and dual variable updates
+    if (tid == 0)
+    {
+      // Compute constraints at new position
+      compute_constraint_data(d_data);
+
+      // Dual variable update: lam += rho * h * c(q_new)
+      for(int i = 0; i < 12; i++)
+      {
+        d_data->lambda_guess()[i] += d_data->rho0() * d_data->solver_time_step() * d_data->constraint()[i];
+      }
+    }
+
 
     grid.sync();
   }
 
-  if (tid < d_data->get_n_coef() * 3)
+  // finally write data back to x12, y12, z12
+  if (tid < d_data->get_n_coef())
   {
-    d_data->v_prev()[tid] = d_data->v_guess()[tid];
+    d_data->x12()(tid) = d_data->x12_prev()(tid) + d_data->v_guess()(tid*3 + 0) * d_data->solver_time_step();
+    d_data->y12()(tid) = d_data->y12_prev()(tid) + d_data->v_guess()(tid*3 + 1) * d_data->solver_time_step();
+    d_data->z12()(tid) = d_data->z12_prev()(tid) + d_data->v_guess()(tid*3 + 2) * d_data->solver_time_step();
   }
 
-  // if (tid == 0)
-  //{
-  //   qA = q_prev + h * v;
-  //  cA = constraint(qA);
-  //  lam += rho * h * cA;
-  //}
+  grid.sync();
 }
 
 void GPU_ANCF3243_Data::OneStepNesterov()

@@ -549,7 +549,7 @@ for step in range(Nt):
         v = v_guess.copy()
         lam = lam_guess.copy()
 
-        max_outer = 20
+        max_outer = 10
         max_inner = 300
         inner_tol = 1e-6   # tolerance on iterate change (can relax)
         outer_tol = 1e-6

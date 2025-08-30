@@ -180,6 +180,38 @@ struct GPU_ANCF3243_Data
         return Eigen::Map<Eigen::VectorXd>(d_z12 + elem * (Quadrature::N_SHAPE / 2), Quadrature::N_SHAPE);
     }
 
+
+
+    __device__ Eigen::Map<Eigen::VectorXd> x12_prev()
+    {
+        return Eigen::Map<Eigen::VectorXd>(d_x12_prev, n_coef);
+    }
+
+    __device__ Eigen::Map<Eigen::VectorXd> const x12_prev() const
+    {
+        return Eigen::Map<Eigen::VectorXd>(d_x12_prev, n_coef);
+    }
+
+    __device__ Eigen::Map<Eigen::VectorXd> y12_prev()
+    {
+        return Eigen::Map<Eigen::VectorXd>(d_y12_prev, n_coef);
+    }
+
+    __device__ Eigen::Map<Eigen::VectorXd> const y12_prev() const
+    {
+        return Eigen::Map<Eigen::VectorXd>(d_y12_prev, n_coef);
+    }
+
+    __device__ Eigen::Map<Eigen::VectorXd> z12_prev()
+    {
+        return Eigen::Map<Eigen::VectorXd>(d_z12_prev, n_coef);
+    }
+
+    __device__ Eigen::Map<Eigen::VectorXd> const z12_prev() const
+    {
+        return Eigen::Map<Eigen::VectorXd>(d_z12_prev, n_coef);
+    }
+
     __device__ Eigen::Map<Eigen::MatrixXd> F(int elem_idx, int qp_idx)
     {
         return Eigen::Map<Eigen::MatrixXd>(d_F + (elem_idx * Quadrature::N_TOTAL_QP + qp_idx) * 9, 3, 3);
@@ -385,6 +417,9 @@ struct GPU_ANCF3243_Data
         HANDLE_ERROR(cudaMalloc(&d_x12, n_coef * sizeof(double)));
         HANDLE_ERROR(cudaMalloc(&d_y12, n_coef * sizeof(double)));
         HANDLE_ERROR(cudaMalloc(&d_z12, n_coef * sizeof(double)));
+        HANDLE_ERROR(cudaMalloc(&d_x12_prev, n_coef * sizeof(double)));
+        HANDLE_ERROR(cudaMalloc(&d_y12_prev, n_coef * sizeof(double)));
+        HANDLE_ERROR(cudaMalloc(&d_z12_prev, n_coef * sizeof(double)));
 
         HANDLE_ERROR(cudaMalloc(&d_offset_start, n_beam * sizeof(int)));
         HANDLE_ERROR(cudaMalloc(&d_offset_end, n_beam * sizeof(int)));
@@ -472,6 +507,10 @@ struct GPU_ANCF3243_Data
         HANDLE_ERROR(cudaMemcpy(d_x12, h_x12.data(), n_coef * sizeof(double), cudaMemcpyHostToDevice));
         HANDLE_ERROR(cudaMemcpy(d_y12, h_y12.data(), n_coef * sizeof(double), cudaMemcpyHostToDevice));
         HANDLE_ERROR(cudaMemcpy(d_z12, h_z12.data(), n_coef * sizeof(double), cudaMemcpyHostToDevice));
+        HANDLE_ERROR(cudaMemcpy(d_x12_prev, h_x12.data(), n_coef * sizeof(double), cudaMemcpyHostToDevice));
+        HANDLE_ERROR(cudaMemcpy(d_y12_prev, h_y12.data(), n_coef * sizeof(double), cudaMemcpyHostToDevice));
+        HANDLE_ERROR(cudaMemcpy(d_z12_prev, h_z12.data(), n_coef * sizeof(double), cudaMemcpyHostToDevice));
+
 
         HANDLE_ERROR(cudaMemcpy(d_offset_start, h_offset_start.data(), n_beam * sizeof(int), cudaMemcpyHostToDevice));
         HANDLE_ERROR(cudaMemcpy(d_offset_end, h_offset_end.data(), n_beam * sizeof(int), cudaMemcpyHostToDevice));
@@ -524,6 +563,9 @@ struct GPU_ANCF3243_Data
         HANDLE_ERROR(cudaFree(d_x12));
         HANDLE_ERROR(cudaFree(d_y12));
         HANDLE_ERROR(cudaFree(d_z12));
+        HANDLE_ERROR(cudaFree(d_x12_prev));
+        HANDLE_ERROR(cudaFree(d_y12_prev));
+        HANDLE_ERROR(cudaFree(d_z12_prev));
 
         HANDLE_ERROR(cudaFree(d_offset_start));
         HANDLE_ERROR(cudaFree(d_offset_end));
@@ -599,6 +641,10 @@ struct GPU_ANCF3243_Data
 
     void RetrieveConstraintJacobianToCPU(Eigen::MatrixXd &constraint_jac);
 
+    void RetrievePositionToCPU(Eigen::VectorXd &x12, Eigen::VectorXd &y12, Eigen::VectorXd &z12);
+
+    void RetrievePositionPrevToCPU(Eigen::VectorXd &x12_prev, Eigen::VectorXd &y12_prev, Eigen::VectorXd &z12_prev);
+
     void OneStepNesterov();
 
 private:
@@ -609,6 +655,7 @@ private:
 
     double *d_x12_jac, *d_y12_jac, *d_z12_jac;
     double *d_x12, *d_y12, *d_z12;
+    double *d_x12_prev, *d_y12_prev, *d_z12_prev;
 
     int *d_offset_start, *d_offset_end;
 
