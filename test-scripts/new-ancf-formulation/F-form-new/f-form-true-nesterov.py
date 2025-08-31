@@ -449,6 +449,7 @@ for ixi, xi in enumerate(gauss_xi):
             J = calc_det_J(u, v, w, B_inv, x12_ref, y12_ref, z12_ref)
             detJ_pre[(ixi, ieta, izeta)] = np.linalg.det(J)
 
+
 n_gen_coord = 3 * N_coef   # total degrees of freedom (x, y, z per node)
 n_constr = 12              # 4 nodes × 3D fixed DOFs
 
@@ -550,7 +551,7 @@ for step in range(Nt):
         lam = lam_guess.copy()
 
         max_outer = 1
-        max_inner = 300
+        max_inner = 20
         inner_tol = 1e-6   # tolerance on iterate change (can relax)
         outer_tol = 1e-6
 
@@ -605,9 +606,9 @@ for step in range(Nt):
                 v_next = y - alpha * g
 
                 # stopping by iterate change (cheap)
-                #if np.linalg.norm(v_next - v_k) < inner_tol:
-                #    v_k = v_next
-                #    break
+                if abs(np.linalg.norm(v_next) - np.linalg.norm(v_k)) < inner_tol:
+                    v_k = v_next
+                    break
 
                 v_km1, v_k, t = v_k, v_next, t_next
 
@@ -634,7 +635,7 @@ for step in range(Nt):
 
     # External force at point P
     if step <= 200:
-        f_P = np.array([0.0, 0.0,0.0])
+        f_P = np.array([0.0, 0.0, 3100.0])
     else:
         f_P = np.array([0.0, 0.0, 0.0])
 
@@ -649,6 +650,8 @@ for step in range(Nt):
     for i_local, global_idx in enumerate(idx):
         row_idx = slice(3 * global_idx, 3 * (global_idx + 1))
         f_ext_vec[row_idx] = f_ext[i_local]
+
+    print(f_ext_vec)
 
     M_full = np.zeros((3 * N_coef, 3 * N_coef))
 

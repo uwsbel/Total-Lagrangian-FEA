@@ -322,6 +322,21 @@ struct GPU_ANCF3243_Data
         return Eigen::Map<Eigen::VectorXd>(d_g, 3 * n_coef);
     }
 
+    __device__ double* prev_norm_g() const
+    {
+        return d_prev_norm_g;
+    }
+
+    __device__ double* norm_g() const
+    {
+        return d_norm_g;
+    }
+
+    __device__ int* flag() const
+    {
+        return d_flag;
+    }
+
     // ================================
 
     __device__ Eigen::Map<Eigen::VectorXi> const offset_start() const
@@ -465,6 +480,11 @@ struct GPU_ANCF3243_Data
         HANDLE_ERROR(cudaMalloc(&d_time_step, sizeof(double)));
 
         HANDLE_ERROR(cudaMalloc(&d_g, 3 * n_coef * sizeof(double)));
+
+        HANDLE_ERROR(cudaMalloc(&d_prev_norm_g, sizeof(double)));
+        HANDLE_ERROR(cudaMalloc(&d_norm_g, sizeof(double)));
+
+        HANDLE_ERROR(cudaMalloc(&d_flag, sizeof(int)));
     }
 
     void Setup(double length,
@@ -545,6 +565,11 @@ struct GPU_ANCF3243_Data
 
         HANDLE_ERROR(cudaMemset(d_g, 0, 3 * n_coef * sizeof(double)));
 
+        HANDLE_ERROR(cudaMemset(d_prev_norm_g, 0, sizeof(double)));
+        HANDLE_ERROR(cudaMemset(d_norm_g, 0, sizeof(double)));
+
+        HANDLE_ERROR(cudaMemset(d_flag, 0, sizeof(int)));
+
         is_setup = true;
     }
 
@@ -608,6 +633,10 @@ struct GPU_ANCF3243_Data
         HANDLE_ERROR(cudaFree(d_v_prev));
         HANDLE_ERROR(cudaFree(d_time_step));
         HANDLE_ERROR(cudaFree(d_g));
+
+        HANDLE_ERROR(cudaFree(d_prev_norm_g));
+        HANDLE_ERROR(cudaFree(d_norm_g));
+        HANDLE_ERROR(cudaFree(d_flag));
     }
 
     void CalcDsDuPre();
@@ -680,6 +709,9 @@ private:
 
     double *d_max_outer, *d_max_inner, *d_inner_tol, *d_outer_tol;
     double *d_alpha;
+
+    double *d_prev_norm_g, *d_norm_g;
+    int *d_flag;
 
     // nesterov scratch
     double *d_g;

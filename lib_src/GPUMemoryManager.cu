@@ -439,6 +439,7 @@ __device__ void compute_internal_force(int elem_idx, int node_idx, GPU_ANCF3243_
 
   double f_i[3] = {0};
   int node_base = d_data->offset_start()(elem_idx);
+  double geom = (d_data->L() * d_data->W() * d_data->H()) / 8.0;
 
   // set 0
   for (int d = 0; d < 3; ++d)
@@ -461,7 +462,7 @@ __device__ void compute_internal_force(int elem_idx, int node_idx, GPU_ANCF3243_
     {
       for (int c = 0; c < 3; ++c)
       {
-        f_i[r] += (d_data->P(elem_idx, qp_idx)(r, c) * grad_s[c]) * scale;
+        f_i[r] += (d_data->P(elem_idx, qp_idx)(r, c) * grad_s[c]) * scale * geom;
         // printf("P(%d, %d)(%d, %d) = %.17f\n", elem_idx, qp_idx, r, c, d_data->P(elem_idx, qp_idx)(r, c));
         //  printf("f_i[%d] += P(%d, %d)(%d, %d) * grad_s[%d] * scale = %f\n", r, elem_idx, qp_idx, r, c, c, f_i[r]);
       }
@@ -556,6 +557,11 @@ __device__ double solver_grad_L(int tid, GPU_ANCF3243_Data *d_data)
   // Internal force
   res -= (-d_data->f_elem_out()(tid));
 
+  if (tid == 3 * d_data->get_n_coef() - 10)
+  {
+    res -= 3100.0;
+  }
+
   // Constraints
   for (int i = 0; i < 12; i++)
   {
@@ -590,6 +596,17 @@ one_step_nesterov_kernel(GPU_ANCF3243_Data *d_data)
     double t = 1.0;
     double v_prev = 0.0;
 
+    if (tid == 0)
+    {
+      *d_data->prev_norm_g() = 0.0;
+      *d_data->norm_g() = 0.0;
+      *d_data->flag() = 0;
+      printf("resetting\n");
+    }
+
+    grid.sync();
+    volatile int *flag_ptr = d_data->flag();
+
     // Initialize for valid threads only
     if (tid < d_data->get_n_coef() * 3)
     {
@@ -603,128 +620,148 @@ one_step_nesterov_kernel(GPU_ANCF3243_Data *d_data)
 
     for (int inner_iter = 0; inner_iter < d_data->solver_max_inner(); inner_iter++)
     {
-      if (tid == 0)
+      if (*flag_ptr == 0)
       {
-        printf("outer iter: %d, inner iter: %d\n", outer_iter, inner_iter);
-      }
-
-      // Step 1: Each thread computes its look-ahead velocity component
-      double y = 0.0; // Declare y here
-      if (tid < d_data->get_n_coef() * 3)
-      {
-        t_next = 0.5 * (1.0 + sqrt(1.0 + 4.0 * t * t));
-        double beta = (t - 1.0) / t_next;
-        y = v_k + beta * (v_k - v_km1);
-
-        // Store look-ahead velocity temporarily
-        d_data->v_guess()[tid] = y; // Use v_guess as temp storage for y
-      }
-
-      grid.sync();
-
-      // Step 2: Update scratch positions using look-ahead velocities
-      if (tid < d_data->get_n_coef())
-      {
-        d_data->x12()(tid) = d_data->x12_prev()(tid) + d_data->solver_time_step() * d_data->v_guess()(tid * 3 + 0);
-        d_data->y12()(tid) = d_data->y12_prev()(tid) + d_data->solver_time_step() * d_data->v_guess()(tid * 3 + 1);
-        d_data->z12()(tid) = d_data->z12_prev()(tid) + d_data->solver_time_step() * d_data->v_guess()(tid * 3 + 2);
-      }
-
-      grid.sync();
-
-      // print f_elem_out
-      if (tid == 0)
-      {
-        printf("pre f_elem_out");
-        for (int i = 0; i < 3 * d_data->get_n_coef(); i++)
+        if (tid == 0)
         {
-          printf("%f ", d_data->f_elem_out()(i));
+          printf("outer iter: %d, inner iter: %d\n", outer_iter, inner_iter);
         }
-        printf("\n");
-      }
 
-      // Step 3: Compute internal forces at look-ahead positions
-
-      if (tid < d_data->get_n_beam() * Quadrature::N_TOTAL_QP)
-      {
-        int elem_idx = tid / Quadrature::N_TOTAL_QP;
-        int qp_idx = tid % Quadrature::N_TOTAL_QP;
-        compute_deformation_gradient(elem_idx, qp_idx, d_data);
-      }
-
-      grid.sync();
-
-      if (tid < d_data->get_n_beam() * Quadrature::N_TOTAL_QP)
-      {
-        int elem_idx = tid / Quadrature::N_TOTAL_QP;
-        int qp_idx = tid % Quadrature::N_TOTAL_QP;
-        compute_p_from_F(elem_idx, qp_idx, d_data);
-      }
-
-      grid.sync();
-
-      if (tid < d_data->get_n_beam() * Quadrature::N_SHAPE)
-      {
-        int elem_idx = tid / Quadrature::N_SHAPE;
-        int node_idx = tid % Quadrature::N_SHAPE;
-        compute_internal_force(elem_idx, node_idx, d_data);
-      }
-
-      grid.sync();
-
-      if (tid == 0)
-      {
-        printf("post f_elem_out");
-        for (int i = 0; i < 3 * d_data->get_n_coef(); i++)
+        // Step 1: Each thread computes its look-ahead velocity component
+        double y = 0.0; // Declare y here
+        if (tid < d_data->get_n_coef() * 3)
         {
-          printf("%f ", d_data->f_elem_out()(i));
+          t_next = 0.5 * (1.0 + sqrt(1.0 + 4.0 * t * t));
+          double beta = (t - 1.0) / t_next;
+          y = v_k + beta * (v_k - v_km1);
+
+          // Store look-ahead velocity temporarily
+          d_data->v_guess()[tid] = y; // Use v_guess as temp storage for y
         }
-        printf("\n");
-      }
 
-      if (tid == 0)
-      {
-        compute_constraint_data(d_data);
-      }
+        grid.sync();
 
-      grid.sync();
-
-      if (tid < d_data->get_n_coef() * 3)
-      {
-        double g = solver_grad_L(tid, d_data);
-        d_data->g()[tid] = g;
-      }
-
-      grid.sync();
-      if (tid == 0)
-      {
-        // calculate norm of g
-        double norm_g = 0.0;
-        for (int i = 0; i < 3 * d_data->get_n_coef(); i++)
+        // Step 2: Update scratch positions using look-ahead velocities
+        if (tid < d_data->get_n_coef())
         {
-          norm_g += d_data->g()(i) * d_data->g()(i);
+          d_data->x12()(tid) = d_data->x12_prev()(tid) + d_data->solver_time_step() * d_data->v_guess()(tid * 3 + 0);
+          d_data->y12()(tid) = d_data->y12_prev()(tid) + d_data->solver_time_step() * d_data->v_guess()(tid * 3 + 1);
+          d_data->z12()(tid) = d_data->z12_prev()(tid) + d_data->solver_time_step() * d_data->v_guess()(tid * 3 + 2);
         }
-        norm_g = sqrt(norm_g);
-        printf("norm_g: %.17f\n", norm_g);
+
+        grid.sync();
+
+        // print f_elem_out
+        if (tid == 0)
+        {
+          printf("pre f_elem_out");
+          for (int i = 0; i < 3 * d_data->get_n_coef(); i++)
+          {
+            printf("%f ", d_data->f_elem_out()(i));
+          }
+          printf("\n");
+        }
+
+        // Step 3: Compute internal forces at look-ahead positions
+
+        if (tid < d_data->get_n_beam() * Quadrature::N_TOTAL_QP)
+        {
+          int elem_idx = tid / Quadrature::N_TOTAL_QP;
+          int qp_idx = tid % Quadrature::N_TOTAL_QP;
+          compute_deformation_gradient(elem_idx, qp_idx, d_data);
+        }
+
+        grid.sync();
+
+        if (tid < d_data->get_n_beam() * Quadrature::N_TOTAL_QP)
+        {
+          int elem_idx = tid / Quadrature::N_TOTAL_QP;
+          int qp_idx = tid % Quadrature::N_TOTAL_QP;
+          compute_p_from_F(elem_idx, qp_idx, d_data);
+        }
+
+        grid.sync();
+
+        if (tid < d_data->get_n_beam() * Quadrature::N_SHAPE)
+        {
+          int elem_idx = tid / Quadrature::N_SHAPE;
+          int node_idx = tid % Quadrature::N_SHAPE;
+          compute_internal_force(elem_idx, node_idx, d_data);
+        }
+
+        grid.sync();
+
+        if (tid == 0)
+        {
+          printf("post f_elem_out");
+          for (int i = 0; i < 3 * d_data->get_n_coef(); i++)
+          {
+            printf("%f ", d_data->f_elem_out()(i));
+          }
+          printf("\n");
+        }
+
+        if (tid == 0)
+        {
+          compute_constraint_data(d_data);
+        }
+
+        grid.sync();
+
+        if (tid < d_data->get_n_coef() * 3)
+        {
+          double g = solver_grad_L(tid, d_data);
+          d_data->g()[tid] = g;
+        }
+
+        grid.sync();
+
+        if (tid == 0)
+        {
+          // calculate norm of g
+          double norm_g = 0.0;
+          for (int i = 0; i < 3 * d_data->get_n_coef(); i++)
+          {
+            norm_g += d_data->g()(i) * d_data->g()(i);
+          }
+          *d_data->norm_g() = sqrt(norm_g);
+          printf("norm_g: %.17f\n", *d_data->norm_g());
+
+          if (inner_iter > 0 && abs(*d_data->norm_g() - *d_data->prev_norm_g()) < d_data->solver_inner_tol())
+          {
+            printf("Converged diff: %.17f\n", *d_data->norm_g() - *d_data->prev_norm_g());
+            *d_data->flag() = 1;
+          }
+        }
+
+        grid.sync();
+
+        // Step 4: Compute gradients and update velocities
+        if (tid < d_data->get_n_coef() * 3)
+        {
+
+          v_next = y - d_data->solver_alpha() * d_data->g()[tid];
+
+          // Update for next iteration
+          v_km1 = v_k;
+          v_k = v_next;
+          t = t_next;
+
+          // Store final velocity
+          d_data->v_guess()[tid] = v_next;
+        }
+
+        grid.sync();
+
+        if (tid == 0)
+        {
+          *d_data->prev_norm_g() = *d_data->norm_g();
+        }
+
+        grid.sync();
       }
-
-      // Step 4: Compute gradients and update velocities
-      if (tid < d_data->get_n_coef() * 3)
-      {
-
-        v_next = y - d_data->solver_alpha() * d_data->g()[tid];
-
-        // Update for next iteration
-        v_km1 = v_k;
-        v_k = v_next;
-        t = t_next;
-
-        // Store final velocity
-        d_data->v_guess()[tid] = v_next;
-      }
-
-      grid.sync();
     }
+
     // After inner loop convergence, update v_prev for next outer iteration
     if (tid < d_data->get_n_coef() * 3)
     {
