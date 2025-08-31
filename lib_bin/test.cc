@@ -86,105 +86,105 @@ int main() {
     std::cout << std::endl;
   }
 
-  for (int i = 0; i < 1; i++) {
-    gpu_3243_data.CalcDeformationGradient();
+  gpu_3243_data.CalcDeformationGradient();
 
-    std::vector<std::vector<Eigen::MatrixXd>> deformation_gradient;
-    gpu_3243_data.RetrieveDeformationGradientToCPU(deformation_gradient);
+  std::vector<std::vector<Eigen::MatrixXd>> deformation_gradient;
+  gpu_3243_data.RetrieveDeformationGradientToCPU(deformation_gradient);
 
-    // Set highest precision for cout
-    std::cout << std::fixed << std::setprecision(17);
-    std::cout << "deformation gradient:" << std::endl;
+  // Set highest precision for cout
+  std::cout << std::fixed << std::setprecision(17);
+  std::cout << "deformation gradient:" << std::endl;
 
-    for (int i = 0; i < deformation_gradient.size(); i++) // elements
+  for (int i = 0; i < deformation_gradient.size(); i++) // elements
+  {
+    std::cout << "Element " << i << ":" << std::endl;
+    for (int j = 0; j < deformation_gradient[i].size();
+         j++) // quadrature points
     {
-      std::cout << "Element " << i << ":" << std::endl;
-      for (int j = 0; j < deformation_gradient[i].size();
-           j++) // quadrature points
-      {
-        std::cout << "  QP " << j << ":" << std::endl;
-        std::cout << deformation_gradient[i][j] << std::endl; // 3x3 matrix
-        std::cout << std::endl; // Extra space between matrices
-      }
+      std::cout << "  QP " << j << ":" << std::endl;
+      std::cout << deformation_gradient[i][j] << std::endl; // 3x3 matrix
+      std::cout << std::endl; // Extra space between matrices
     }
+  }
 
-    gpu_3243_data.CalcPFromF();
-    std::cout << "done calculating p from f" << std::endl;
+  gpu_3243_data.CalcPFromF();
+  std::cout << "done calculating p from f" << std::endl;
 
-    std::vector<std::vector<Eigen::MatrixXd>> p_from_F;
-    gpu_3243_data.RetrievePFromFToCPU(p_from_F);
-    std::cout << "p from f:" << std::endl;
+  std::vector<std::vector<Eigen::MatrixXd>> p_from_F;
+  gpu_3243_data.RetrievePFromFToCPU(p_from_F);
+  std::cout << "p from f:" << std::endl;
 
-    for (int i = 0; i < p_from_F.size(); i++) {
-      std::cout << "Element " << i << ":" << std::endl;
-      for (int j = 0; j < p_from_F[i].size(); j++) // quadrature points
-      {
-        std::cout << "  QP " << j << ":" << std::endl;
-        std::cout << p_from_F[i][j] << std::endl; // 3x3 matrix
-        std::cout << std::endl; // Extra space between matrices
-      }
+  for (int i = 0; i < p_from_F.size(); i++) {
+    std::cout << "Element " << i << ":" << std::endl;
+    for (int j = 0; j < p_from_F[i].size(); j++) // quadrature points
+    {
+      std::cout << "  QP " << j << ":" << std::endl;
+      std::cout << p_from_F[i][j] << std::endl; // 3x3 matrix
+      std::cout << std::endl;                   // Extra space between matrices
     }
+  }
 
-    gpu_3243_data.CalcInternalForce();
-    std::cout << "done calculating internal force" << std::endl;
+  gpu_3243_data.CalcInternalForce();
+  std::cout << "done calculating internal force" << std::endl;
 
-    Eigen::VectorXd internal_force;
-    gpu_3243_data.RetrieveInternalForceToCPU(internal_force);
-    std::cout << "internal force:" << std::endl;
-    for (int i = 0; i < internal_force.size(); i++) {
-      std::cout << internal_force(i) << " ";
+  Eigen::VectorXd internal_force;
+  gpu_3243_data.RetrieveInternalForceToCPU(internal_force);
+  std::cout << "internal force:" << std::endl;
+  for (int i = 0; i < internal_force.size(); i++) {
+    std::cout << internal_force(i) << " ";
+  }
+
+  std::cout << std::endl;
+
+  gpu_3243_data.CalcConstraintData();
+  std::cout << "done calculating constraint data" << std::endl;
+
+  Eigen::VectorXd constraint;
+  gpu_3243_data.RetrieveConstraintDataToCPU(constraint);
+  std::cout << "constraint:" << std::endl;
+  for (int i = 0; i < constraint.size(); i++) {
+    std::cout << constraint(i) << " ";
+  }
+  std::cout << std::endl;
+
+  Eigen::MatrixXd constraint_jac;
+  gpu_3243_data.RetrieveConstraintJacobianToCPU(constraint_jac);
+  std::cout << "constraint jacobian:" << std::endl;
+  for (int i = 0; i < constraint_jac.rows(); i++) {
+    for (int j = 0; j < constraint_jac.cols(); j++) {
+      std::cout << constraint_jac(i, j) << " ";
     }
-
-    std::cout << std::endl;
-
-    gpu_3243_data.CalcConstraintData();
-    std::cout << "done calculating constraint data" << std::endl;
-
-    Eigen::VectorXd constraint;
-    gpu_3243_data.RetrieveConstraintDataToCPU(constraint);
-    std::cout << "constraint:" << std::endl;
-    for (int i = 0; i < constraint.size(); i++) {
-      std::cout << constraint(i) << " ";
-    }
-    std::cout << std::endl;
-
-    Eigen::MatrixXd constraint_jac;
-    gpu_3243_data.RetrieveConstraintJacobianToCPU(constraint_jac);
-    std::cout << "constraint jacobian:" << std::endl;
-    for (int i = 0; i < constraint_jac.rows(); i++) {
-      for (int j = 0; j < constraint_jac.cols(); j++) {
-        std::cout << constraint_jac(i, j) << " ";
-      }
-      std::cout << std::endl;
-    }
-
-    gpu_3243_data.SetNesterovParameters(1.0e-3, 1.0e-8, 1.0e-6, 1.0e-6, 1, 20);
-
-    gpu_3243_data.OneStepNesterov();
-
-    Eigen::VectorXd x12, y12, z12;
-    gpu_3243_data.RetrievePositionToCPU(x12, y12, z12);
-    std::cout << "x12:" << std::endl;
-    for (int i = 0; i < x12.size(); i++) {
-      std::cout << x12(i) << " ";
-    }
-
-    std::cout << std::endl;
-
-    std::cout << "y12:" << std::endl;
-    for (int i = 0; i < y12.size(); i++) {
-      std::cout << y12(i) << " ";
-    }
-
-    std::cout << std::endl;
-
-    std::cout << "z12:" << std::endl;
-    for (int i = 0; i < z12.size(); i++) {
-      std::cout << z12(i) << " ";
-    }
-
     std::cout << std::endl;
   }
+
+  gpu_3243_data.SetNesterovParameters(1.0e-3, 1.0e-8, 1.0e-6, 1.0e-6, 1, 200,
+                                      1e14);
+
+  for (int i = 0; i < 10; i++) {
+    gpu_3243_data.OneStepNesterov();
+  }
+  Eigen::VectorXd x12, y12, z12;
+  gpu_3243_data.RetrievePositionToCPU(x12, y12, z12);
+  std::cout << "x12:" << std::endl;
+  for (int i = 0; i < x12.size(); i++) {
+    std::cout << x12(i) << " ";
+  }
+
+  std::cout << std::endl;
+
+  std::cout << "y12:" << std::endl;
+  for (int i = 0; i < y12.size(); i++) {
+    std::cout << y12(i) << " ";
+  }
+
+  std::cout << std::endl;
+
+  std::cout << "z12:" << std::endl;
+  for (int i = 0; i < z12.size(); i++) {
+    std::cout << z12(i) << " ";
+  }
+
+  std::cout << std::endl;
 
   gpu_3243_data.Destroy();
 

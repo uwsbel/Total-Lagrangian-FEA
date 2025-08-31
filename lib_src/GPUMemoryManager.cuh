@@ -312,6 +312,26 @@ struct GPU_ANCF3243_Data
         return Eigen::Map<Eigen::VectorXd>(d_v_prev, n_coef * 3);
     }
 
+    __device__ Eigen::Map<Eigen::VectorXd> v_k()
+    {
+        return Eigen::Map<Eigen::VectorXd>(d_v_k, n_coef * 3);
+    }
+
+    __device__ Eigen::Map<Eigen::VectorXd> v_k() const
+    {
+        return Eigen::Map<Eigen::VectorXd>(d_v_k, n_coef * 3);
+    }
+
+    __device__ Eigen::Map<Eigen::VectorXd> v_next() const
+    {
+        return Eigen::Map<Eigen::VectorXd>(d_v_next, n_coef * 3);
+    }
+
+    __device__ Eigen::Map<Eigen::VectorXd> v_next()
+    {
+        return Eigen::Map<Eigen::VectorXd>(d_v_next, n_coef * 3);
+    }
+
     __device__ Eigen::Map<Eigen::VectorXd> lambda_guess() const
     {
         return Eigen::Map<Eigen::VectorXd>(d_lambda_guess, 12);
@@ -322,19 +342,29 @@ struct GPU_ANCF3243_Data
         return Eigen::Map<Eigen::VectorXd>(d_g, 3 * n_coef);
     }
 
-    __device__ double* prev_norm_g() const
+    __device__ double *prev_norm_g() const
     {
         return d_prev_norm_g;
     }
 
-    __device__ double* norm_g() const
+    __device__ double *norm_g() const
     {
         return d_norm_g;
     }
 
-    __device__ int* flag() const
+    __device__ int *inner_flag() const
     {
-        return d_flag;
+        return d_inner_flag;
+    }
+
+    __device__ int *outer_flag() const
+    {
+        return d_outer_flag;
+    }
+
+    __device__ double *solver_rho() const
+    {
+        return d_solver_rho;
     }
 
     // ================================
@@ -484,7 +514,13 @@ struct GPU_ANCF3243_Data
         HANDLE_ERROR(cudaMalloc(&d_prev_norm_g, sizeof(double)));
         HANDLE_ERROR(cudaMalloc(&d_norm_g, sizeof(double)));
 
-        HANDLE_ERROR(cudaMalloc(&d_flag, sizeof(int)));
+        HANDLE_ERROR(cudaMalloc(&d_inner_flag, sizeof(int)));
+        HANDLE_ERROR(cudaMalloc(&d_outer_flag, sizeof(int)));
+
+        HANDLE_ERROR(cudaMalloc(&d_v_k, n_coef * 3 * sizeof(double)));
+        HANDLE_ERROR(cudaMalloc(&d_v_next, n_coef * 3 * sizeof(double)));
+
+        HANDLE_ERROR(cudaMalloc(&d_solver_rho, sizeof(double)));
     }
 
     void Setup(double length,
@@ -568,7 +604,13 @@ struct GPU_ANCF3243_Data
         HANDLE_ERROR(cudaMemset(d_prev_norm_g, 0, sizeof(double)));
         HANDLE_ERROR(cudaMemset(d_norm_g, 0, sizeof(double)));
 
-        HANDLE_ERROR(cudaMemset(d_flag, 0, sizeof(int)));
+        HANDLE_ERROR(cudaMemset(d_inner_flag, 0, sizeof(int)));
+        HANDLE_ERROR(cudaMemset(d_outer_flag, 0, sizeof(int)));
+
+        HANDLE_ERROR(cudaMemset(d_solver_rho, 0, sizeof(double)));
+
+        HANDLE_ERROR(cudaMemset(d_v_k, 0, n_coef * 3 * sizeof(double)));
+        HANDLE_ERROR(cudaMemset(d_v_next, 0, n_coef * 3 * sizeof(double)));
 
         is_setup = true;
     }
@@ -636,7 +678,13 @@ struct GPU_ANCF3243_Data
 
         HANDLE_ERROR(cudaFree(d_prev_norm_g));
         HANDLE_ERROR(cudaFree(d_norm_g));
-        HANDLE_ERROR(cudaFree(d_flag));
+        HANDLE_ERROR(cudaFree(d_inner_flag));
+        HANDLE_ERROR(cudaFree(d_outer_flag));
+
+        HANDLE_ERROR(cudaFree(d_v_k));
+        HANDLE_ERROR(cudaFree(d_v_next));
+
+        HANDLE_ERROR(cudaFree(d_solver_rho));
     }
 
     void CalcDsDuPre();
@@ -651,7 +699,7 @@ struct GPU_ANCF3243_Data
 
     void CalcConstraintData();
 
-    void SetNesterovParameters(double h, double alpha0, double inner_tol, double outer_tol, double max_outer, double max_inner)
+    void SetNesterovParameters(double h, double alpha0, double inner_tol, double outer_tol, double max_outer, double max_inner, double solver_rho)
     {
         HANDLE_ERROR(cudaMemcpy(d_time_step, &h, sizeof(double), cudaMemcpyHostToDevice));
         HANDLE_ERROR(cudaMemcpy(d_alpha, &alpha0, sizeof(double), cudaMemcpyHostToDevice));
@@ -659,6 +707,7 @@ struct GPU_ANCF3243_Data
         HANDLE_ERROR(cudaMemcpy(d_outer_tol, &outer_tol, sizeof(double), cudaMemcpyHostToDevice));
         HANDLE_ERROR(cudaMemcpy(d_max_outer, &max_outer, sizeof(double), cudaMemcpyHostToDevice));
         HANDLE_ERROR(cudaMemcpy(d_max_inner, &max_inner, sizeof(double), cudaMemcpyHostToDevice));
+        HANDLE_ERROR(cudaMemcpy(d_solver_rho, &solver_rho, sizeof(double), cudaMemcpyHostToDevice));
 
         HANDLE_ERROR(cudaMemset(d_v_guess, 0, n_coef * 3 * sizeof(double)));
         HANDLE_ERROR(cudaMemset(d_v_prev, 0, n_coef * 3 * sizeof(double)));
@@ -707,17 +756,19 @@ private:
 
     double *d_constraint, *d_constraint_jac;
 
-    double *d_max_outer, *d_max_inner, *d_inner_tol, *d_outer_tol;
+    double *d_max_outer, *d_max_inner, *d_inner_tol, *d_outer_tol, *d_solver_rho;
     double *d_alpha;
 
     double *d_prev_norm_g, *d_norm_g;
-    int *d_flag;
+    int *d_inner_flag;
+    int *d_outer_flag;
 
     // nesterov scratch
     double *d_g;
     double *d_time_step;
     double *d_lambda_guess;
     double *d_v_guess, *d_v_prev;
+    double *d_v_k, *d_v_next;
     bool is_setup = false;
 
     int n_beam;
