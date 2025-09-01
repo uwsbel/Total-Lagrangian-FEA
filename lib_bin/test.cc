@@ -1,4 +1,5 @@
 #include "../lib_src/GPUMemoryManager.cuh"
+#include "../lib_src/solvers/SyncedNesterov.cuh"
 #include "../lib_utils/cpu_utils.h"
 #include "../lib_utils/quadrature_utils.h"
 #include <Eigen/Dense>
@@ -10,7 +11,8 @@ const double E = 7e8;     // Young's modulus
 const double nu = 0.33;   // Poisson's ratio
 const double rho0 = 2700; // Density
 
-int main() {
+int main()
+{
   // initialize GPU data structure
   int n_beam = 2;
   GPU_ANCF3243_Data gpu_3243_data(n_beam);
@@ -40,17 +42,20 @@ int main() {
   ANCFCPUUtils::generate_beam_coordinates(n_beam, h_x12, h_y12, h_z12);
 
   // print h_x12
-  for (int i = 0; i < gpu_3243_data.get_n_coef(); i++) {
+  for (int i = 0; i < gpu_3243_data.get_n_coef(); i++)
+  {
     printf("h_x12(%d) = %f\n", i, h_x12(i));
   }
 
   // print h_y12
-  for (int i = 0; i < gpu_3243_data.get_n_coef(); i++) {
+  for (int i = 0; i < gpu_3243_data.get_n_coef(); i++)
+  {
     printf("h_y12(%d) = %f\n", i, h_y12(i));
   }
 
   // print h_z12
-  for (int i = 0; i < gpu_3243_data.get_n_coef(); i++) {
+  for (int i = 0; i < gpu_3243_data.get_n_coef(); i++)
+  {
     printf("h_z12(%d) = %f\n", i, h_z12(i));
   }
 
@@ -79,8 +84,10 @@ int main() {
   gpu_3243_data.RetrieveMassMatrixToCPU(mass_matrix);
 
   std::cout << "mass matrix:" << std::endl;
-  for (int i = 0; i < mass_matrix.rows(); i++) {
-    for (int j = 0; j < mass_matrix.cols(); j++) {
+  for (int i = 0; i < mass_matrix.rows(); i++)
+  {
+    for (int j = 0; j < mass_matrix.cols(); j++)
+    {
       std::cout << mass_matrix(i, j) << " ";
     }
     std::cout << std::endl;
@@ -103,7 +110,7 @@ int main() {
     {
       std::cout << "  QP " << j << ":" << std::endl;
       std::cout << deformation_gradient[i][j] << std::endl; // 3x3 matrix
-      std::cout << std::endl; // Extra space between matrices
+      std::cout << std::endl;                               // Extra space between matrices
     }
   }
 
@@ -114,7 +121,8 @@ int main() {
   gpu_3243_data.RetrievePFromFToCPU(p_from_F);
   std::cout << "p from f:" << std::endl;
 
-  for (int i = 0; i < p_from_F.size(); i++) {
+  for (int i = 0; i < p_from_F.size(); i++)
+  {
     std::cout << "Element " << i << ":" << std::endl;
     for (int j = 0; j < p_from_F[i].size(); j++) // quadrature points
     {
@@ -130,7 +138,8 @@ int main() {
   Eigen::VectorXd internal_force;
   gpu_3243_data.RetrieveInternalForceToCPU(internal_force);
   std::cout << "internal force:" << std::endl;
-  for (int i = 0; i < internal_force.size(); i++) {
+  for (int i = 0; i < internal_force.size(); i++)
+  {
     std::cout << internal_force(i) << " ";
   }
 
@@ -142,7 +151,8 @@ int main() {
   Eigen::VectorXd constraint;
   gpu_3243_data.RetrieveConstraintDataToCPU(constraint);
   std::cout << "constraint:" << std::endl;
-  for (int i = 0; i < constraint.size(); i++) {
+  for (int i = 0; i < constraint.size(); i++)
+  {
     std::cout << constraint(i) << " ";
   }
   std::cout << std::endl;
@@ -150,37 +160,44 @@ int main() {
   Eigen::MatrixXd constraint_jac;
   gpu_3243_data.RetrieveConstraintJacobianToCPU(constraint_jac);
   std::cout << "constraint jacobian:" << std::endl;
-  for (int i = 0; i < constraint_jac.rows(); i++) {
-    for (int j = 0; j < constraint_jac.cols(); j++) {
+  for (int i = 0; i < constraint_jac.rows(); i++)
+  {
+    for (int j = 0; j < constraint_jac.cols(); j++)
+    {
       std::cout << constraint_jac(i, j) << " ";
     }
     std::cout << std::endl;
   }
 
-  gpu_3243_data.SetNesterovParameters(1.0e-3, 1.0e-8, 1.0e-6, 1.0e-6, 1, 200,
-                                      1e14);
-
-  for (int i = 0; i < 10; i++) {
-    gpu_3243_data.OneStepNesterov();
+  NesterovParams params = {1.0e-3, 1.0e-8, 1.0e-6, 1.0e-6, 1, 200, 1e14};
+  NesterovSolver solver(&gpu_3243_data);
+  solver.SetParameters(&params);
+  for (int i = 0; i < 10; i++)
+  {
+    solver.Solve();
   }
+
   Eigen::VectorXd x12, y12, z12;
   gpu_3243_data.RetrievePositionToCPU(x12, y12, z12);
   std::cout << "x12:" << std::endl;
-  for (int i = 0; i < x12.size(); i++) {
+  for (int i = 0; i < x12.size(); i++)
+  {
     std::cout << x12(i) << " ";
   }
 
   std::cout << std::endl;
 
   std::cout << "y12:" << std::endl;
-  for (int i = 0; i < y12.size(); i++) {
+  for (int i = 0; i < y12.size(); i++)
+  {
     std::cout << y12(i) << " ";
   }
 
   std::cout << std::endl;
 
   std::cout << "z12:" << std::endl;
-  for (int i = 0; i < z12.size(); i++) {
+  for (int i = 0; i < z12.size(); i++)
+  {
     std::cout << z12(i) << " ";
   }
 

@@ -26,7 +26,7 @@ cc_library(
 # ========================================
 
 # ========================================
-# cuda library section
+# element library section
 cuda_library(
     name = "gpu_memory_manager",
     srcs = ["lib_src/GPUMemoryManager.cu"],
@@ -42,6 +42,25 @@ cuda_library(
 # ========================================
 
 # ========================================
+# solver library section
+cc_library(
+    name = "solvers",
+    srcs = [],
+    hdrs = [
+        "lib_src/solvers/SolverBase.h",
+        "lib_src/solvers/SyncedNesterov.cuh",
+    ],
+    copts = ["--std=c++17"],
+    deps = [
+        ":gpu_memory_manager",
+        ":cpu_utils",
+        "@eigen//:eigen",
+    ],
+    visibility = ["//visibility:public"],
+)
+# ========================================
+
+# ========================================
 # cc binary section
 cc_binary(
     name = "test",
@@ -50,6 +69,7 @@ cc_binary(
     deps = [
         ":gpu_memory_manager",
         ":cpu_utils",
+        ":solvers",
         "@eigen//:eigen",
     ],
 )
