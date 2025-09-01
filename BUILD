@@ -30,7 +30,8 @@ cc_library(
 cuda_library(
     name = "gpu_memory_manager",
     srcs = ["lib_src/GPUMemoryManager.cu"],
-    hdrs = ["lib_src/GPUMemoryManager.cuh"],
+    hdrs = ["lib_src/GPUMemoryManager.cuh",
+            "lib_src/GPUMemoryManagerKernels.cuh",],
     copts = ["--std=c++17"],
     linkopts = ["-lcusolver","-lcublas"],
     deps = [
@@ -43,9 +44,11 @@ cuda_library(
 
 # ========================================
 # solver library section
-cc_library(
+cuda_library(
     name = "solvers",
-    srcs = [],
+    srcs = [
+        "lib_src/solvers/SyncedNesterov.cu",
+    ],
     hdrs = [
         "lib_src/solvers/SolverBase.h",
         "lib_src/solvers/SyncedNesterov.cuh",

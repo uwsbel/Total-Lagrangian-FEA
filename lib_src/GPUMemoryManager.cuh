@@ -180,36 +180,6 @@ struct GPU_ANCF3243_Data
         return Eigen::Map<Eigen::VectorXd>(d_z12 + elem * (Quadrature::N_SHAPE / 2), Quadrature::N_SHAPE);
     }
 
-    __device__ Eigen::Map<Eigen::VectorXd> x12_prev()
-    {
-        return Eigen::Map<Eigen::VectorXd>(d_x12_prev, n_coef);
-    }
-
-    __device__ Eigen::Map<Eigen::VectorXd> const x12_prev() const
-    {
-        return Eigen::Map<Eigen::VectorXd>(d_x12_prev, n_coef);
-    }
-
-    __device__ Eigen::Map<Eigen::VectorXd> y12_prev()
-    {
-        return Eigen::Map<Eigen::VectorXd>(d_y12_prev, n_coef);
-    }
-
-    __device__ Eigen::Map<Eigen::VectorXd> const y12_prev() const
-    {
-        return Eigen::Map<Eigen::VectorXd>(d_y12_prev, n_coef);
-    }
-
-    __device__ Eigen::Map<Eigen::VectorXd> z12_prev()
-    {
-        return Eigen::Map<Eigen::VectorXd>(d_z12_prev, n_coef);
-    }
-
-    __device__ Eigen::Map<Eigen::VectorXd> const z12_prev() const
-    {
-        return Eigen::Map<Eigen::VectorXd>(d_z12_prev, n_coef);
-    }
-
     __device__ Eigen::Map<Eigen::MatrixXd> F(int elem_idx, int qp_idx)
     {
         return Eigen::Map<Eigen::MatrixXd>(d_F + (elem_idx * Quadrature::N_TOTAL_QP + qp_idx) * 9, 3, 3);
@@ -268,103 +238,6 @@ struct GPU_ANCF3243_Data
     __device__ const Eigen::Map<Eigen::MatrixXd> constraint_jac() const
     {
         return Eigen::Map<Eigen::MatrixXd>(d_constraint_jac, 12, n_coef * 3);
-    }
-
-    // =================================
-    // solver related parameters
-    __device__ double solver_alpha() const
-    {
-        return *d_alpha;
-    }
-
-    __device__ double solver_inner_tol() const
-    {
-        return *d_inner_tol;
-    }
-
-    __device__ double solver_outer_tol() const
-    {
-        return *d_outer_tol;
-    }
-
-    __device__ double solver_max_outer() const
-    {
-        return *d_max_outer;
-    }
-
-    __device__ double solver_max_inner() const
-    {
-        return *d_max_inner;
-    }
-
-    __device__ double solver_time_step() const
-    {
-        return *d_time_step;
-    }
-
-    __device__ Eigen::Map<Eigen::VectorXd> v_guess()
-    {
-        return Eigen::Map<Eigen::VectorXd>(d_v_guess, n_coef * 3);
-    }
-
-    __device__ Eigen::Map<Eigen::VectorXd> v_prev()
-    {
-        return Eigen::Map<Eigen::VectorXd>(d_v_prev, n_coef * 3);
-    }
-
-    __device__ Eigen::Map<Eigen::VectorXd> v_k()
-    {
-        return Eigen::Map<Eigen::VectorXd>(d_v_k, n_coef * 3);
-    }
-
-    __device__ Eigen::Map<Eigen::VectorXd> v_k() const
-    {
-        return Eigen::Map<Eigen::VectorXd>(d_v_k, n_coef * 3);
-    }
-
-    __device__ Eigen::Map<Eigen::VectorXd> v_next() const
-    {
-        return Eigen::Map<Eigen::VectorXd>(d_v_next, n_coef * 3);
-    }
-
-    __device__ Eigen::Map<Eigen::VectorXd> v_next()
-    {
-        return Eigen::Map<Eigen::VectorXd>(d_v_next, n_coef * 3);
-    }
-
-    __device__ Eigen::Map<Eigen::VectorXd> lambda_guess() const
-    {
-        return Eigen::Map<Eigen::VectorXd>(d_lambda_guess, 12);
-    }
-
-    __device__ Eigen::Map<Eigen::VectorXd> g()
-    {
-        return Eigen::Map<Eigen::VectorXd>(d_g, 3 * n_coef);
-    }
-
-    __device__ double *prev_norm_g() const
-    {
-        return d_prev_norm_g;
-    }
-
-    __device__ double *norm_g() const
-    {
-        return d_norm_g;
-    }
-
-    __device__ int *inner_flag() const
-    {
-        return d_inner_flag;
-    }
-
-    __device__ int *outer_flag() const
-    {
-        return d_outer_flag;
-    }
-
-    __device__ double *solver_rho() const
-    {
-        return d_solver_rho;
     }
 
     // ================================
@@ -465,9 +338,6 @@ struct GPU_ANCF3243_Data
         HANDLE_ERROR(cudaMalloc(&d_x12, n_coef * sizeof(double)));
         HANDLE_ERROR(cudaMalloc(&d_y12, n_coef * sizeof(double)));
         HANDLE_ERROR(cudaMalloc(&d_z12, n_coef * sizeof(double)));
-        HANDLE_ERROR(cudaMalloc(&d_x12_prev, n_coef * sizeof(double)));
-        HANDLE_ERROR(cudaMalloc(&d_y12_prev, n_coef * sizeof(double)));
-        HANDLE_ERROR(cudaMalloc(&d_z12_prev, n_coef * sizeof(double)));
 
         HANDLE_ERROR(cudaMalloc(&d_offset_start, n_beam * sizeof(int)));
         HANDLE_ERROR(cudaMalloc(&d_offset_end, n_beam * sizeof(int)));
@@ -495,32 +365,6 @@ struct GPU_ANCF3243_Data
         // constraint data
         HANDLE_ERROR(cudaMalloc(&d_constraint, 12 * sizeof(double)));
         HANDLE_ERROR(cudaMalloc(&d_constraint_jac, 12 * (n_coef * 3) * sizeof(double)));
-
-        // solver settings
-        HANDLE_ERROR(cudaMalloc(&d_alpha, sizeof(double)));
-        HANDLE_ERROR(cudaMalloc(&d_inner_tol, sizeof(double)));
-        HANDLE_ERROR(cudaMalloc(&d_outer_tol, sizeof(double)));
-        HANDLE_ERROR(cudaMalloc(&d_max_outer, sizeof(double)));
-        HANDLE_ERROR(cudaMalloc(&d_max_inner, sizeof(double)));
-
-        HANDLE_ERROR(cudaMalloc(&d_v_guess, n_coef * 3 * sizeof(double)));
-        HANDLE_ERROR(cudaMalloc(&d_v_prev, n_coef * 3 * sizeof(double)));
-        HANDLE_ERROR(cudaMalloc(&d_lambda_guess, 12 * sizeof(double)));
-
-        HANDLE_ERROR(cudaMalloc(&d_time_step, sizeof(double)));
-
-        HANDLE_ERROR(cudaMalloc(&d_g, 3 * n_coef * sizeof(double)));
-
-        HANDLE_ERROR(cudaMalloc(&d_prev_norm_g, sizeof(double)));
-        HANDLE_ERROR(cudaMalloc(&d_norm_g, sizeof(double)));
-
-        HANDLE_ERROR(cudaMalloc(&d_inner_flag, sizeof(int)));
-        HANDLE_ERROR(cudaMalloc(&d_outer_flag, sizeof(int)));
-
-        HANDLE_ERROR(cudaMalloc(&d_v_k, n_coef * 3 * sizeof(double)));
-        HANDLE_ERROR(cudaMalloc(&d_v_next, n_coef * 3 * sizeof(double)));
-
-        HANDLE_ERROR(cudaMalloc(&d_solver_rho, sizeof(double)));
     }
 
     void Setup(double length,
@@ -568,9 +412,6 @@ struct GPU_ANCF3243_Data
         HANDLE_ERROR(cudaMemcpy(d_x12, h_x12.data(), n_coef * sizeof(double), cudaMemcpyHostToDevice));
         HANDLE_ERROR(cudaMemcpy(d_y12, h_y12.data(), n_coef * sizeof(double), cudaMemcpyHostToDevice));
         HANDLE_ERROR(cudaMemcpy(d_z12, h_z12.data(), n_coef * sizeof(double), cudaMemcpyHostToDevice));
-        HANDLE_ERROR(cudaMemcpy(d_x12_prev, h_x12.data(), n_coef * sizeof(double), cudaMemcpyHostToDevice));
-        HANDLE_ERROR(cudaMemcpy(d_y12_prev, h_y12.data(), n_coef * sizeof(double), cudaMemcpyHostToDevice));
-        HANDLE_ERROR(cudaMemcpy(d_z12_prev, h_z12.data(), n_coef * sizeof(double), cudaMemcpyHostToDevice));
 
         HANDLE_ERROR(cudaMemcpy(d_offset_start, h_offset_start.data(), n_beam * sizeof(int), cudaMemcpyHostToDevice));
         HANDLE_ERROR(cudaMemcpy(d_offset_end, h_offset_end.data(), n_beam * sizeof(int), cudaMemcpyHostToDevice));
@@ -599,19 +440,6 @@ struct GPU_ANCF3243_Data
         HANDLE_ERROR(cudaMemset(d_constraint, 0, 12 * sizeof(double)));
         HANDLE_ERROR(cudaMemset(d_constraint_jac, 0, 12 * (n_coef * 3) * sizeof(double)));
 
-        HANDLE_ERROR(cudaMemset(d_g, 0, 3 * n_coef * sizeof(double)));
-
-        HANDLE_ERROR(cudaMemset(d_prev_norm_g, 0, sizeof(double)));
-        HANDLE_ERROR(cudaMemset(d_norm_g, 0, sizeof(double)));
-
-        HANDLE_ERROR(cudaMemset(d_inner_flag, 0, sizeof(int)));
-        HANDLE_ERROR(cudaMemset(d_outer_flag, 0, sizeof(int)));
-
-        HANDLE_ERROR(cudaMemset(d_solver_rho, 0, sizeof(double)));
-
-        HANDLE_ERROR(cudaMemset(d_v_k, 0, n_coef * 3 * sizeof(double)));
-        HANDLE_ERROR(cudaMemset(d_v_next, 0, n_coef * 3 * sizeof(double)));
-
         is_setup = true;
     }
 
@@ -636,9 +464,6 @@ struct GPU_ANCF3243_Data
         HANDLE_ERROR(cudaFree(d_x12));
         HANDLE_ERROR(cudaFree(d_y12));
         HANDLE_ERROR(cudaFree(d_z12));
-        HANDLE_ERROR(cudaFree(d_x12_prev));
-        HANDLE_ERROR(cudaFree(d_y12_prev));
-        HANDLE_ERROR(cudaFree(d_z12_prev));
 
         HANDLE_ERROR(cudaFree(d_offset_start));
         HANDLE_ERROR(cudaFree(d_offset_end));
@@ -663,28 +488,6 @@ struct GPU_ANCF3243_Data
 
         HANDLE_ERROR(cudaFree(d_constraint));
         HANDLE_ERROR(cudaFree(d_constraint_jac));
-
-        HANDLE_ERROR(cudaFree(d_alpha));
-        HANDLE_ERROR(cudaFree(d_inner_tol));
-        HANDLE_ERROR(cudaFree(d_outer_tol));
-        HANDLE_ERROR(cudaFree(d_max_outer));
-        HANDLE_ERROR(cudaFree(d_max_inner));
-
-        HANDLE_ERROR(cudaFree(d_lambda_guess));
-        HANDLE_ERROR(cudaFree(d_v_guess));
-        HANDLE_ERROR(cudaFree(d_v_prev));
-        HANDLE_ERROR(cudaFree(d_time_step));
-        HANDLE_ERROR(cudaFree(d_g));
-
-        HANDLE_ERROR(cudaFree(d_prev_norm_g));
-        HANDLE_ERROR(cudaFree(d_norm_g));
-        HANDLE_ERROR(cudaFree(d_inner_flag));
-        HANDLE_ERROR(cudaFree(d_outer_flag));
-
-        HANDLE_ERROR(cudaFree(d_v_k));
-        HANDLE_ERROR(cudaFree(d_v_next));
-
-        HANDLE_ERROR(cudaFree(d_solver_rho));
     }
 
     void CalcDsDuPre();
@@ -698,21 +501,6 @@ struct GPU_ANCF3243_Data
     void CalcInternalForce();
 
     void CalcConstraintData();
-
-    void SetNesterovParameters(double h, double alpha0, double inner_tol, double outer_tol, double max_outer, double max_inner, double solver_rho)
-    {
-        HANDLE_ERROR(cudaMemcpy(d_time_step, &h, sizeof(double), cudaMemcpyHostToDevice));
-        HANDLE_ERROR(cudaMemcpy(d_alpha, &alpha0, sizeof(double), cudaMemcpyHostToDevice));
-        HANDLE_ERROR(cudaMemcpy(d_inner_tol, &inner_tol, sizeof(double), cudaMemcpyHostToDevice));
-        HANDLE_ERROR(cudaMemcpy(d_outer_tol, &outer_tol, sizeof(double), cudaMemcpyHostToDevice));
-        HANDLE_ERROR(cudaMemcpy(d_max_outer, &max_outer, sizeof(double), cudaMemcpyHostToDevice));
-        HANDLE_ERROR(cudaMemcpy(d_max_inner, &max_inner, sizeof(double), cudaMemcpyHostToDevice));
-        HANDLE_ERROR(cudaMemcpy(d_solver_rho, &solver_rho, sizeof(double), cudaMemcpyHostToDevice));
-
-        HANDLE_ERROR(cudaMemset(d_v_guess, 0, n_coef * 3 * sizeof(double)));
-        HANDLE_ERROR(cudaMemset(d_v_prev, 0, n_coef * 3 * sizeof(double)));
-        HANDLE_ERROR(cudaMemset(d_lambda_guess, 0, 12 * sizeof(double)));
-    }
 
     void PrintDsDuPre();
 
@@ -730,9 +518,7 @@ struct GPU_ANCF3243_Data
 
     void RetrievePositionToCPU(Eigen::VectorXd &x12, Eigen::VectorXd &y12, Eigen::VectorXd &z12);
 
-    void RetrievePositionPrevToCPU(Eigen::VectorXd &x12_prev, Eigen::VectorXd &y12_prev, Eigen::VectorXd &z12_prev);
-
-    void OneStepNesterov();
+    GPU_ANCF3243_Data *d_data; // Storing GPU copy of SAPGPUData
 
 private:
     double *d_B_inv;
@@ -742,7 +528,6 @@ private:
 
     double *d_x12_jac, *d_y12_jac, *d_z12_jac;
     double *d_x12, *d_y12, *d_z12;
-    double *d_x12_prev, *d_y12_prev, *d_z12_prev;
 
     int *d_offset_start, *d_offset_end;
 
@@ -756,23 +541,8 @@ private:
 
     double *d_constraint, *d_constraint_jac;
 
-    double *d_max_outer, *d_max_inner, *d_inner_tol, *d_outer_tol, *d_solver_rho;
-    double *d_alpha;
-
-    double *d_prev_norm_g, *d_norm_g;
-    int *d_inner_flag;
-    int *d_outer_flag;
-
-    // nesterov scratch
-    double *d_g;
-    double *d_time_step;
-    double *d_lambda_guess;
-    double *d_v_guess, *d_v_prev;
-    double *d_v_k, *d_v_next;
     bool is_setup = false;
 
     int n_beam;
     int n_coef;
-
-    GPU_ANCF3243_Data *d_data; // Storing GPU copy of SAPGPUData
 };
