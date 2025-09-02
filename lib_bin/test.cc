@@ -13,7 +13,7 @@ const double rho0 = 2700; // Density
 
 int main() {
   // initialize GPU data structure
-  int n_beam = 2; // this is working
+  int n_beam = 150; // this is working
   GPU_ANCF3243_Data gpu_3243_data(n_beam);
   gpu_3243_data.Initialize();
 

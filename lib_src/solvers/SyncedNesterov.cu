@@ -132,15 +132,15 @@ one_step_nesterov_kernel(GPU_ANCF3243_Data *d_data, SyncedNesterovSolver *d_nest
                     grid.sync();
 
                     // print f_elem_out
-                    if (tid == 0)
-                    {
-                        printf("pre f_elem_out");
-                        for (int i = 0; i < 3 * d_data->get_n_coef(); i++)
-                        {
-                            printf("%f ", d_data->f_elem_out()(i));
-                        }
-                        printf("\n");
-                    }
+                    // if (tid == 0)
+                    // {
+                    //     printf("pre f_elem_out");
+                    //     for (int i = 0; i < 3 * d_data->get_n_coef(); i++)
+                    //     {
+                    //         printf("%f ", d_data->f_elem_out()(i));
+                    //     }
+                    //     printf("\n");
+                    // }
 
                     // Step 3: Compute internal forces at look-ahead positions
 
@@ -171,15 +171,15 @@ one_step_nesterov_kernel(GPU_ANCF3243_Data *d_data, SyncedNesterovSolver *d_nest
 
                     grid.sync();
 
-                    if (tid == 0)
-                    {
-                        printf("post f_elem_out");
-                        for (int i = 0; i < 3 * d_data->get_n_coef(); i++)
-                        {
-                            printf("%f ", d_data->f_elem_out()(i));
-                        }
-                        printf("\n");
-                    }
+                    // if (tid == 0)
+                    // {
+                    //     printf("post f_elem_out");
+                    //     for (int i = 0; i < 3 * d_data->get_n_coef(); i++)
+                    //     {
+                    //         printf("%f ", d_data->f_elem_out()(i));
+                    //     }
+                    //     printf("\n");
+                    // }
 
                     if (tid == 0)
                     {
@@ -197,26 +197,26 @@ one_step_nesterov_kernel(GPU_ANCF3243_Data *d_data, SyncedNesterovSolver *d_nest
                     grid.sync();
 
                     // print v_guess
-                    if (tid == 0)
-                    {
-                        printf("v_guess: ");
-                        for (int i = 0; i < 3 * d_data->get_n_coef(); i++)
-                        {
-                            printf("%f ", d_nesterov_solver->v_guess()(i));
-                        }
-                        printf("\n");
-                    }
+                    // if (tid == 0)
+                    // {
+                    //     printf("v_guess: ");
+                    //     for (int i = 0; i < 3 * d_data->get_n_coef(); i++)
+                    //     {
+                    //         printf("%f ", d_nesterov_solver->v_guess()(i));
+                    //     }
+                    //     printf("\n");
+                    // }
 
-                    // print g
-                    if (tid == 0)
-                    {
-                        printf("solver_grad_l g: ");
-                        for (int i = 0; i < 3 * d_data->get_n_coef(); i++)
-                        {
-                            printf("%f ", d_nesterov_solver->g()(i));
-                        }
-                        printf("\n");
-                    }
+                    // // print g
+                    // if (tid == 0)
+                    // {
+                    //     printf("solver_grad_l g: ");
+                    //     for (int i = 0; i < 3 * d_data->get_n_coef(); i++)
+                    //     {
+                    //         printf("%f ", d_nesterov_solver->g()(i));
+                    //     }
+                    //     printf("\n");
+                    // }
 
                     if (tid == 0)
                     {

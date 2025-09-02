@@ -32,7 +32,7 @@ cuda_library(
     srcs = ["lib_src/elements/ANCF3243Data.cu"],
     hdrs = ["lib_src/elements/ANCF3243Data.cuh",
             "lib_src/elements/ANCF3243DataKernels.cuh",],
-    copts = ["--std=c++17"],
+    copts = ["--std=c++17", "-O3"],
     linkopts = ["-lcusolver","-lcublas"],
     deps = [
         ":cpu_utils",  # Add dependency on cpu_utils for quadrature.h
@@ -53,7 +53,7 @@ cuda_library(
         "lib_src/solvers/SolverBase.h",
         "lib_src/solvers/SyncedNesterov.cuh",
     ],
-    copts = ["--std=c++17"],
+    copts = ["--std=c++17", "-O3"],
     deps = [
         ":ANCF3243Data",
         ":cpu_utils",

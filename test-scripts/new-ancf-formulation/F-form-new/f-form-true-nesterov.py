@@ -81,7 +81,7 @@ H = 1.0  # Height
 W = 1.0  # Width
 L = 2.0  # Length
 
-n_beam = 2  # Number of beam elements
+n_beam = 150  # Number of beam elements
 
 
 # Each vector is 8x1
@@ -695,8 +695,16 @@ for step in range(Nt):
     end_y_du[-1, step] = y12[tip_idx + 1]
     end_z_du[-1, step] = z12[tip_idx + 1]
 
+    print("x12")
+    print(x12)
+
+    print("y12")
+    print(y12)
+
     print("z12")
     print(z12)
+
+    
 
 
 plt.figure()
