@@ -363,7 +363,7 @@ void SyncedNesterovSolver::OneStepNesterov()
     HANDLE_ERROR(cudaEventCreate(&start));
     HANDLE_ERROR(cudaEventCreate(&stop));
 
-    int threads = 256;
+    int threads = 128;
 
     cudaDeviceProp props;
     HANDLE_ERROR(cudaGetDeviceProperties(&props, 0));
