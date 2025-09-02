@@ -1,5 +1,5 @@
 #pragma once
-#include "GPUMemoryManager.cuh"
+#include "ANCF3243Data.cuh"
 
 __device__ __forceinline__ void compute_deformation_gradient(int, int, GPU_ANCF3243_Data *);
 __device__ __forceinline__ void compute_p_from_F(int, int, GPU_ANCF3243_Data *);

@@ -1,4 +1,4 @@
-#include "../lib_src/GPUMemoryManager.cuh"
+#include "../lib_src/elements/ANCF3243Data.cuh"
 #include "../lib_utils/cpu_utils.h"
 #include "../lib_utils/csv_utils.h"
 #include <Eigen/Dense>

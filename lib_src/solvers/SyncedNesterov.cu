@@ -1,10 +1,10 @@
 #include "SyncedNesterov.cuh"
-#include "../GPUMemoryManager.cuh"
-#include "../GPUMemoryManagerKernels.cuh"
+#include "../elements/ANCF3243Data.cuh"
+#include "../elements/ANCF3243DataKernels.cuh"
 #include <cooperative_groups.h>
 namespace cg = cooperative_groups;
 
-__device__ double solver_grad_L(int tid, GPU_ANCF3243_Data *d_data, NesterovSolver *solver)
+__device__ double solver_grad_L(int tid, GPU_ANCF3243_Data *d_data, SyncedNesterovSolver *solver)
 {
     double res = 0.0;
 
@@ -40,7 +40,7 @@ __device__ double solver_grad_L(int tid, GPU_ANCF3243_Data *d_data, NesterovSolv
 }
 
 __global__ void
-one_step_nesterov_kernel(GPU_ANCF3243_Data *d_data, NesterovSolver *d_nesterov_solver)
+one_step_nesterov_kernel(GPU_ANCF3243_Data *d_data, SyncedNesterovSolver *d_nesterov_solver)
 {
     cg::grid_group grid = cg::this_grid();
 
@@ -357,7 +357,7 @@ one_step_nesterov_kernel(GPU_ANCF3243_Data *d_data, NesterovSolver *d_nesterov_s
     grid.sync();
 }
 
-void NesterovSolver::OneStepNesterov()
+void SyncedNesterovSolver::OneStepNesterov()
 {
     cudaEvent_t start, stop;
     HANDLE_ERROR(cudaEventCreate(&start));

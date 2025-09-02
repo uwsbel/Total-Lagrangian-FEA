@@ -2,7 +2,7 @@ load("@rules_cuda//cuda:defs.bzl", "cuda_library")
 # ========================================
 
 # ========================================
-# utility library section (put this first since gpu_memory_manager depends on it)
+# utility library section (put this first since ANCF3243Data depends on it)
 cc_library(
     name = "cpu_utils",
     srcs = ["lib_utils/cpu_utils.cc"],
@@ -28,10 +28,10 @@ cc_library(
 # ========================================
 # element library section
 cuda_library(
-    name = "gpu_memory_manager",
-    srcs = ["lib_src/GPUMemoryManager.cu"],
-    hdrs = ["lib_src/GPUMemoryManager.cuh",
-            "lib_src/GPUMemoryManagerKernels.cuh",],
+    name = "ANCF3243Data",
+    srcs = ["lib_src/elements/ANCF3243Data.cu"],
+    hdrs = ["lib_src/elements/ANCF3243Data.cuh",
+            "lib_src/elements/ANCF3243DataKernels.cuh",],
     copts = ["--std=c++17"],
     linkopts = ["-lcusolver","-lcublas"],
     deps = [
@@ -55,7 +55,7 @@ cuda_library(
     ],
     copts = ["--std=c++17"],
     deps = [
-        ":gpu_memory_manager",
+        ":ANCF3243Data",
         ":cpu_utils",
         "@eigen//:eigen",
     ],
@@ -70,7 +70,7 @@ cc_binary(
     srcs = ["lib_bin/test.cc"],
     copts = ["--std=c++17"],
     deps = [
-        ":gpu_memory_manager",
+        ":ANCF3243Data",
         ":cpu_utils",
         ":solvers",
         "@eigen//:eigen",
@@ -88,7 +88,7 @@ cc_test(
         "data/utest/**/*",
     ]),
     deps = [
-        ":gpu_memory_manager",
+        ":ANCF3243Data",
         ":cpu_utils",
         "@eigen//:eigen",
         "@googletest//:gtest_main",

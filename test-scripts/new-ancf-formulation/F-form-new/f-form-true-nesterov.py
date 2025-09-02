@@ -81,7 +81,7 @@ H = 1.0  # Height
 W = 1.0  # Width
 L = 2.0  # Length
 
-n_beam = 3  # Number of beam elements
+n_beam = 2  # Number of beam elements
 
 
 # Each vector is 8x1
@@ -410,7 +410,7 @@ for a in range(n_beam):
         
 
 
-Nt = 1  # Number of time steps
+Nt = 10  # Number of time steps
 
 end_x = np.zeros((n_beam, Nt))
 end_y = np.zeros((n_beam, Nt))
@@ -550,8 +550,8 @@ for step in range(Nt):
         v = v_guess.copy()
         lam = lam_guess.copy()
 
-        max_outer = 1
-        max_inner = 20
+        max_outer = 5
+        max_inner = 200
         inner_tol = 1e-6   # tolerance on iterate change (can relax)
         outer_tol = 1e-6
 
@@ -694,6 +694,9 @@ for step in range(Nt):
     end_x_du[-1, step] = x12[tip_idx + 1]
     end_y_du[-1, step] = y12[tip_idx + 1]
     end_z_du[-1, step] = z12[tip_idx + 1]
+
+    print("z12")
+    print(z12)
 
 
 plt.figure()

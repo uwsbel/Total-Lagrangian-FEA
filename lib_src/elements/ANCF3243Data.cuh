@@ -9,7 +9,7 @@
 #include <Eigen/Dense>
 
 // Add this include at the top:
-#include "../lib_utils/quadrature_utils.h"
+#include "../../lib_utils/quadrature_utils.h"
 
 // Definition of GPU_ANCF3243 and data access device functions
 #pragma once

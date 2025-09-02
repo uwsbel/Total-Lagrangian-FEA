@@ -1,18 +1,21 @@
 #pragma once
 #include "SolverBase.h"
-#include "../GPUMemoryManager.cuh"
+#include "../elements/ANCF3243Data.cuh"
 
-struct NesterovParams
+// this is a true first order Nesterov method
+// fully synced, and each inner iteration will compute the full gradient
+
+struct SyncedNesterovParams
 {
     double alpha, rho, inner_tol, outer_tol;
     int max_outer, max_inner;
     double time_step;
 };
 
-class NesterovSolver : public SolverBase
+class SyncedNesterovSolver : public SolverBase
 {
 public:
-    NesterovSolver(GPU_ANCF3243_Data *data) : d_data_(data), n_coef_(data->get_n_coef()), n_beam_(data->get_n_beam())
+    SyncedNesterovSolver(GPU_ANCF3243_Data *data) : d_data_(data), n_coef_(data->get_n_coef()), n_beam_(data->get_n_beam())
     {
         cudaMalloc(&d_v_guess_, n_coef_ * 3 * sizeof(double));
         cudaMalloc(&d_v_prev_, n_coef_ * 3 * sizeof(double));
@@ -32,14 +35,14 @@ public:
         cudaMalloc(&d_time_step_, sizeof(double));
         cudaMalloc(&d_solver_rho_, sizeof(double));
 
-        cudaMalloc(&d_nesterov_solver_, sizeof(NesterovSolver));
+        cudaMalloc(&d_nesterov_solver_, sizeof(SyncedNesterovSolver));
 
         cudaMalloc(&d_x12_prev, n_coef_ * sizeof(double));
         cudaMalloc(&d_y12_prev, n_coef_ * sizeof(double));
         cudaMalloc(&d_z12_prev, n_coef_ * sizeof(double));
     }
 
-    ~NesterovSolver()
+    ~SyncedNesterovSolver()
     {
         cudaFree(d_v_guess_);
         cudaFree(d_v_prev_);
@@ -68,7 +71,7 @@ public:
 
     void SetParameters(void *params) override
     {
-        NesterovParams *p = static_cast<NesterovParams *>(params);
+        SyncedNesterovParams *p = static_cast<SyncedNesterovParams *>(params);
         cudaMemcpy(d_alpha_, &p->alpha, sizeof(double), cudaMemcpyHostToDevice);
         cudaMemcpy(d_inner_tol_, &p->inner_tol, sizeof(double), cudaMemcpyHostToDevice);
         cudaMemcpy(d_outer_tol_, &p->outer_tol, sizeof(double), cudaMemcpyHostToDevice);
@@ -95,7 +98,7 @@ public:
         cudaMemset(d_lambda_guess_, 0, 12 * sizeof(double));
         cudaMemset(d_g_, 0, n_coef_ * 3 * sizeof(double));
 
-        HANDLE_ERROR(cudaMemcpy(d_nesterov_solver_, this, sizeof(NesterovSolver), cudaMemcpyHostToDevice));
+        HANDLE_ERROR(cudaMemcpy(d_nesterov_solver_, this, sizeof(SyncedNesterovSolver), cudaMemcpyHostToDevice));
     }
 
 #if defined(__CUDACC__)
@@ -174,7 +177,7 @@ public:
 
 private:
     GPU_ANCF3243_Data *d_data_;
-    NesterovSolver *d_nesterov_solver_;
+    SyncedNesterovSolver *d_nesterov_solver_;
     int n_coef_, n_beam_;
 
     double *d_x12_prev, *d_y12_prev, *d_z12_prev;

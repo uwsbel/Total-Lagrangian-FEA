@@ -1,5 +1,5 @@
-#include "GPUMemoryManager.cuh"
-#include "GPUMemoryManagerKernels.cuh"
+#include "ANCF3243Data.cuh"
+#include "ANCF3243DataKernels.cuh"
 #include <iomanip>
 #include <cooperative_groups.h>
 namespace cg = cooperative_groups;

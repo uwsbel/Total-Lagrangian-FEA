@@ -1,7 +1,7 @@
-#include "../lib_src/GPUMemoryManager.cuh"
+#include "../../lib_utils/quadrature_utils.h"
+#include "../lib_src/elements/ANCF3243Data.cuh"
 #include "../lib_src/solvers/SyncedNesterov.cuh"
 #include "../lib_utils/cpu_utils.h"
-#include "../lib_utils/quadrature_utils.h"
 #include <Eigen/Dense>
 #include <cuda_runtime.h>
 #include <iomanip>
@@ -13,7 +13,7 @@ const double rho0 = 2700; // Density
 
 int main() {
   // initialize GPU data structure
-  int n_beam = 2;
+  int n_beam = 2; // this is working
   GPU_ANCF3243_Data gpu_3243_data(n_beam);
   gpu_3243_data.Initialize();
 
@@ -160,8 +160,8 @@ int main() {
 
   // alpha, solver_rho, inner_tol, outer_tol, max_outer, max_inner,
   // timestep
-  NesterovParams params = {1.0e-8, 1e14, 1.0e-6, 1.0e-6, 1, 200, 1.0e-3};
-  NesterovSolver solver(&gpu_3243_data);
+  SyncedNesterovParams params = {1.0e-8, 1e14, 1.0e-6, 1.0e-6, 5, 200, 1.0e-3};
+  SyncedNesterovSolver solver(&gpu_3243_data);
   solver.Setup();
   solver.SetParameters(&params);
   for (int i = 0; i < 10; i++) {
