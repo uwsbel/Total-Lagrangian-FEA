@@ -144,20 +144,20 @@ one_step_nesterov_kernel(GPU_ANCF3243_Data *d_data, SyncedNesterovSolver *d_nest
 
                     // Step 3: Compute internal forces at look-ahead positions
 
+                    // if (tid < d_data->get_n_beam() * Quadrature::N_TOTAL_QP)
+                    // {
+                    //     int elem_idx = tid / Quadrature::N_TOTAL_QP;
+                    //     int qp_idx = tid % Quadrature::N_TOTAL_QP;
+                    //     compute_deformation_gradient(elem_idx, qp_idx, d_data);
+                    // }
+
+                    // grid.sync();
+
                     if (tid < d_data->get_n_beam() * Quadrature::N_TOTAL_QP)
                     {
                         int elem_idx = tid / Quadrature::N_TOTAL_QP;
                         int qp_idx = tid % Quadrature::N_TOTAL_QP;
-                        compute_deformation_gradient(elem_idx, qp_idx, d_data);
-                    }
-
-                    grid.sync();
-
-                    if (tid < d_data->get_n_beam() * Quadrature::N_TOTAL_QP)
-                    {
-                        int elem_idx = tid / Quadrature::N_TOTAL_QP;
-                        int qp_idx = tid % Quadrature::N_TOTAL_QP;
-                        compute_p_from_F(elem_idx, qp_idx, d_data);
+                        compute_p(elem_idx, qp_idx, d_data);
                     }
 
                     grid.sync();

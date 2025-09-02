@@ -494,9 +494,9 @@ struct GPU_ANCF3243_Data
 
     void CalcMassMatrix();
 
-    void CalcDeformationGradient();
+    // void CalcDeformationGradient();
 
-    void CalcPFromF();
+    void CalcP();
 
     void CalcInternalForce();
 

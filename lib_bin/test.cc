@@ -87,29 +87,11 @@ int main() {
     std::cout << std::endl;
   }
 
-  gpu_3243_data.CalcDeformationGradient();
-
-  std::vector<std::vector<Eigen::MatrixXd>> deformation_gradient;
-  gpu_3243_data.RetrieveDeformationGradientToCPU(deformation_gradient);
-
-  // Set highest precision for cout
+  // // Set highest precision for cout
   std::cout << std::fixed << std::setprecision(17);
-  std::cout << "deformation gradient:" << std::endl;
 
-  for (int i = 0; i < deformation_gradient.size(); i++) // elements
-  {
-    std::cout << "Element " << i << ":" << std::endl;
-    for (int j = 0; j < deformation_gradient[i].size();
-         j++) // quadrature points
-    {
-      std::cout << "  QP " << j << ":" << std::endl;
-      std::cout << deformation_gradient[i][j] << std::endl; // 3x3 matrix
-      std::cout << std::endl; // Extra space between matrices
-    }
-  }
-
-  gpu_3243_data.CalcPFromF();
-  std::cout << "done calculating p from f" << std::endl;
+  gpu_3243_data.CalcP();
+  std::cout << "done calculating p" << std::endl;
 
   std::vector<std::vector<Eigen::MatrixXd>> p_from_F;
   gpu_3243_data.RetrievePFromFToCPU(p_from_F);
@@ -170,6 +152,7 @@ int main() {
 
   Eigen::VectorXd x12, y12, z12;
   gpu_3243_data.RetrievePositionToCPU(x12, y12, z12);
+
   std::cout << "x12:" << std::endl;
   for (int i = 0; i < x12.size(); i++) {
     std::cout << x12(i) << " ";

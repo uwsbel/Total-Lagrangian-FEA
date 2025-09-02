@@ -1,8 +1,7 @@
 #pragma once
 #include "ANCF3243Data.cuh"
 
-__device__ __forceinline__ void compute_deformation_gradient(int, int, GPU_ANCF3243_Data *);
-__device__ __forceinline__ void compute_p_from_F(int, int, GPU_ANCF3243_Data *);
+__device__ __forceinline__ void compute_p(int, int, GPU_ANCF3243_Data *);
 __device__ __forceinline__ void compute_internal_force(int, int, GPU_ANCF3243_Data *);
 __device__ __forceinline__ void compute_constraint_data(GPU_ANCF3243_Data *);
 
@@ -99,9 +98,11 @@ __device__ __forceinline__ void calc_det_J_xi(double xi,
     // clang-format on
 }
 
-__device__ __forceinline__ void compute_deformation_gradient(int elem_idx, int qp_idx, GPU_ANCF3243_Data *d_data)
+__device__ __forceinline__ void compute_p(int elem_idx, int qp_idx, GPU_ANCF3243_Data *d_data)
 {
     // clang-format off
+    // --- Compute C = F^T * F ---
+
     // Initialize F to zero
     #pragma unroll
     for (int i = 0; i < 3; i++)
@@ -112,8 +113,6 @@ __device__ __forceinline__ void compute_deformation_gradient(int elem_idx, int q
             d_data->F(elem_idx, qp_idx)(i, j) = 0.0;
         }
     }
-
-
 
     // Extract local nodal coordinates (e vectors)
     double e[8][3]; // 8 nodes, each with 3 coordinates
@@ -151,13 +150,7 @@ __device__ __forceinline__ void compute_deformation_gradient(int elem_idx, int q
             }
         }
     }
-    // clang-format on
-}
 
-__device__ __forceinline__ void compute_p_from_F(int elem_idx, int qp_idx, GPU_ANCF3243_Data *d_data)
-{
-    // clang-format off
-    // --- Compute C = F^T * F ---
     double FtF[3][3] = {0.0};
     
     #pragma unroll
@@ -252,8 +245,6 @@ __device__ __forceinline__ void compute_internal_force(int elem_idx, int node_id
             for (int c = 0; c < 3; ++c)
             {
                 f_i[r] += (d_data->P(elem_idx, qp_idx)(r, c) * grad_s[c]) * scale * geom;
-                // printf("P(%d, %d)(%d, %d) = %.17f\n", elem_idx, qp_idx, r, c, d_data->P(elem_idx, qp_idx)(r, c));
-                //  printf("f_i[%d] += P(%d, %d)(%d, %d) * grad_s[%d] * scale = %f\n", r, elem_idx, qp_idx, r, c, c, f_i[r]);
             }
         }
     }

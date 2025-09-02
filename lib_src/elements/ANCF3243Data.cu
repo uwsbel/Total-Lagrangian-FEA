@@ -91,17 +91,17 @@ __global__ void mass_matrix_qp_kernel(GPU_ANCF3243_Data *d_data)
   }
 }
 
-__global__ void deformation_gradient_kernel(GPU_ANCF3243_Data *d_data)
-{
-  int thread_idx = blockIdx.x * blockDim.x + threadIdx.x;
-  int elem_idx = thread_idx / Quadrature::N_TOTAL_QP;
-  int qp_idx = thread_idx % Quadrature::N_TOTAL_QP;
+// __global__ void deformation_gradient_kernel(GPU_ANCF3243_Data *d_data)
+// {
+//   int thread_idx = blockIdx.x * blockDim.x + threadIdx.x;
+//   int elem_idx = thread_idx / Quadrature::N_TOTAL_QP;
+//   int qp_idx = thread_idx % Quadrature::N_TOTAL_QP;
 
-  if (elem_idx >= d_data->get_n_beam() || qp_idx >= Quadrature::N_TOTAL_QP)
-    return;
+//   if (elem_idx >= d_data->get_n_beam() || qp_idx >= Quadrature::N_TOTAL_QP)
+//     return;
 
-  compute_deformation_gradient(elem_idx, qp_idx, d_data);
-}
+//   compute_deformation_gradient(elem_idx, qp_idx, d_data);
+// }
 
 __global__ void calc_p_kernel(GPU_ANCF3243_Data *d_data)
 {
@@ -112,18 +112,18 @@ __global__ void calc_p_kernel(GPU_ANCF3243_Data *d_data)
   if (elem_idx >= d_data->get_n_beam() || qp_idx >= Quadrature::N_TOTAL_QP)
     return;
 
-  compute_p_from_F(elem_idx, qp_idx, d_data);
+  compute_p(elem_idx, qp_idx, d_data);
 }
 
-void GPU_ANCF3243_Data::CalcDeformationGradient()
-{
-  int threads = 128;
-  int blocks = (n_beam * Quadrature::N_TOTAL_QP + threads - 1) / threads;
-  deformation_gradient_kernel<<<blocks, threads>>>(d_data);
-  cudaDeviceSynchronize();
-}
+// void GPU_ANCF3243_Data::CalcDeformationGradient()
+// {
+//   int threads = 128;
+//   int blocks = (n_beam * Quadrature::N_TOTAL_QP + threads - 1) / threads;
+//   deformation_gradient_kernel<<<blocks, threads>>>(d_data);
+//   cudaDeviceSynchronize();
+// }
 
-void GPU_ANCF3243_Data::CalcPFromF()
+void GPU_ANCF3243_Data::CalcP()
 {
   int threads = 128;
   int blocks = (n_beam * Quadrature::N_TOTAL_QP + threads - 1) / threads;
