@@ -26,7 +26,7 @@ __device__ double solver_grad_L(int tid, GPU_ANCF3243_Data *d_data, SyncedNester
 
     if (tid == 3 * d_data->get_n_coef() - 10)
     {
-        res -= 3100.0;
+        res -= 10000.0;
     }
 
     // Constraints
