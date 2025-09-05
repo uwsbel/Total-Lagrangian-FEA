@@ -491,7 +491,7 @@ print("Mass matrix:\n", df.to_string(float_format="%.3f"))
 
 
 
-Nt = 40  # Number of time steps
+Nt = 20  # Number of time steps
 
 ds_du_pre = {}  # Precomputed ∂s/∂(u,v,w) at each quadrature point
 
@@ -530,6 +530,8 @@ lam_bb = np.zeros(n_constr)
 v_guess = v.copy()  # Initial guess for velocity
 lam_bb_guess = lam_bb.copy()    # Initial guess for Lagrange multipliers
 rho_bb = 1e14
+
+endz_pos = []
 
 
 
@@ -709,8 +711,8 @@ for step in range(Nt):
     u_P, v_P, w_P = 1.0, 0.0, 0.0
 
     # Basis and shape functions
-    b = b_vec(u_P, v_P, w_P)        # (8,)
-    s_at_P = B_inv @ b              # (8,)
+    b = b_vec(u_P, v_P, w_P)        
+    s_at_P = B_inv @ b              
 
     # External force at point P
     if step <= 200:
@@ -766,9 +768,14 @@ for step in range(Nt):
         y12[i] = q_new[3 * i + 1]
         z12[i] = q_new[3 * i + 2]
 
+    endz_pos.append(z12[20])
+
     print("x12: ")
     print(x12)
     print("y12: ")
     print(y12)
     print("z12: ")
     print(z12)
+
+
+print(endz_pos)
