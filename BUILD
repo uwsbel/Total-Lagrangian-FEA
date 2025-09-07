@@ -31,7 +31,23 @@ cuda_library(
     name = "ANCF3243Data",
     srcs = ["lib_src/elements/ANCF3243Data.cu"],
     hdrs = ["lib_src/elements/ANCF3243Data.cuh",
-            "lib_src/elements/ANCF3243DataKernels.cuh",],
+            "lib_src/elements/ANCF3243DataKernels.cuh",
+            "lib_src/elements/ElementBase.h"],
+    copts = ["--std=c++17", "-O3"],
+    linkopts = ["-lcusolver","-lcublas"],
+    deps = [
+        ":cpu_utils",  # Add dependency on cpu_utils for quadrature.h
+        "@eigen//:eigen"
+    ],
+    visibility = ["//visibility:public"],
+)
+
+cuda_library(
+    name = "ANCF3443Data",
+    srcs = ["lib_src/elements/ANCF3443Data.cu"],
+    hdrs = ["lib_src/elements/ANCF3443Data.cuh",
+            "lib_src/elements/ANCF3443DataKernels.cuh",
+            "lib_src/elements/ElementBase.h"],
     copts = ["--std=c++17", "-O3"],
     linkopts = ["-lcusolver","-lcublas"],
     deps = [
@@ -56,6 +72,7 @@ cuda_library(
     copts = ["--std=c++17", "-O3"],
     deps = [
         ":ANCF3243Data",
+        ":ANCF3443Data",
         ":cpu_utils",
         "@eigen//:eigen",
     ],
@@ -66,11 +83,23 @@ cuda_library(
 # ========================================
 # cc binary section
 cc_binary(
-    name = "test",
-    srcs = ["lib_bin/test.cc"],
+    name = "test_ancf3243",
+    srcs = ["lib_bin/test_ancf3243.cc"],
     copts = ["--std=c++17"],
     deps = [
         ":ANCF3243Data",
+        ":cpu_utils",
+        ":solvers",
+        "@eigen//:eigen",
+    ],
+)
+
+cc_binary(
+    name = "test_ancf3443",
+    srcs = ["lib_bin/test_ancf3443.cc"],
+    copts = ["--std=c++17"],
+    deps = [
+        ":ANCF3443Data",
         ":cpu_utils",
         ":solvers",
         "@eigen//:eigen",

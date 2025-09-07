@@ -5,14 +5,14 @@
 #include <iostream>
 #include <vector>
 #include <cuda_runtime.h>
-#include "ElementBase.h"
 
+#include "ElementBase.h"
 #include <Eigen/Dense>
 
 // Add this include at the top:
 #include "../../lib_utils/quadrature_utils.h"
 
-// Definition of GPU_ANCF3243 and data access device functions
+// Definition of GPU_ANCF3443 and data access device functions
 #pragma once
 
 #ifndef HANDLE_ERROR_MACRO
@@ -31,7 +31,7 @@ static void HandleError(cudaError_t err, const char *file, int line)
 
 //
 // define a SAP data strucutre
-struct GPU_ANCF3243_Data : public ElementBase
+struct GPU_ANCF3443_Data : public ElementBase
 {
 #if defined(__CUDACC__)
 
@@ -292,9 +292,6 @@ struct GPU_ANCF3243_Data : public ElementBase
     {
         return *d_mu;
     }
-    __device__ int gpu_n_beam() const { return n_beam; }
-
-    __device__ int gpu_n_coef() const { return n_coef; }
 
     //===========================================
 
@@ -309,13 +306,15 @@ struct GPU_ANCF3243_Data : public ElementBase
     }
 
 #endif
+
     __host__ __device__ int get_n_beam() const { return n_beam; }
     __host__ __device__ int get_n_coef() const { return n_coef; }
+
     // Constructor
-    GPU_ANCF3243_Data(int num_beams) : n_beam(num_beams)
+    GPU_ANCF3443_Data(int num_beams) : n_beam(num_beams)
     {
         n_coef = Quadrature::N_SHAPE + 4 * (n_beam - 1);
-        type = TYPE_3243;
+        type = TYPE_3443;
     }
 
     void Initialize()
@@ -350,7 +349,7 @@ struct GPU_ANCF3243_Data : public ElementBase
         HANDLE_ERROR(cudaMalloc(&d_f_elem_out, n_coef * 3 * sizeof(double)));
 
         // copy struct to device
-        HANDLE_ERROR(cudaMalloc(&d_data, sizeof(GPU_ANCF3243_Data)));
+        HANDLE_ERROR(cudaMalloc(&d_data, sizeof(GPU_ANCF3443_Data)));
 
         // beam data
         HANDLE_ERROR(cudaMalloc(&d_H, sizeof(double)));
@@ -391,7 +390,7 @@ struct GPU_ANCF3243_Data : public ElementBase
     {
         if (is_setup)
         {
-            std::cerr << "GPU_ANCF3243_Data is already set up." << std::endl;
+            std::cerr << "GPU_ANCF3443_Data is already set up." << std::endl;
             return;
         }
 
@@ -436,7 +435,7 @@ struct GPU_ANCF3243_Data : public ElementBase
         HANDLE_ERROR(cudaMemcpy(d_mu, &mu, sizeof(double), cudaMemcpyHostToDevice));
         HANDLE_ERROR(cudaMemcpy(d_lambda, &lambda, sizeof(double), cudaMemcpyHostToDevice));
 
-        HANDLE_ERROR(cudaMemcpy(d_data, this, sizeof(GPU_ANCF3243_Data), cudaMemcpyHostToDevice));
+        HANDLE_ERROR(cudaMemcpy(d_data, this, sizeof(GPU_ANCF3443_Data), cudaMemcpyHostToDevice));
 
         HANDLE_ERROR(cudaMemset(d_constraint, 0, 12 * sizeof(double)));
         HANDLE_ERROR(cudaMemset(d_constraint_jac, 0, 12 * (n_coef * 3) * sizeof(double)));
@@ -517,10 +516,7 @@ struct GPU_ANCF3243_Data : public ElementBase
 
     void RetrievePositionToCPU(Eigen::VectorXd &x12, Eigen::VectorXd &y12, Eigen::VectorXd &z12);
 
-    GPU_ANCF3243_Data *d_data; // Storing GPU copy of SAPGPUData
-
-    int n_beam;
-    int n_coef;
+    GPU_ANCF3443_Data *d_data; // Storing GPU copy of SAPGPUData
 
 private:
     double *d_B_inv;
@@ -544,4 +540,7 @@ private:
     double *d_constraint, *d_constraint_jac;
 
     bool is_setup = false;
+
+    int n_beam;
+    int n_coef;
 };

@@ -1,10 +1,12 @@
 #include "SyncedNesterov.cuh"
 #include "../elements/ANCF3243Data.cuh"
 #include "../elements/ANCF3243DataKernels.cuh"
+#include "../elements/ANCF3443Data.cuh"
+#include "../elements/ANCF3443DataKernels.cuh"
 #include <cooperative_groups.h>
 namespace cg = cooperative_groups;
 
-__device__ double solver_grad_L(int tid, GPU_ANCF3243_Data *d_data, SyncedNesterovSolver *solver)
+__device__ double solver_grad_L(int tid, ElementBase *d_data, SyncedNesterovSolver *solver)
 {
     double res = 0.0;
 
@@ -14,15 +16,34 @@ __device__ double solver_grad_L(int tid, GPU_ANCF3243_Data *d_data, SyncedNester
     // Mass matrix contribution
     for (int node_j = 0; node_j < d_data->get_n_coef(); node_j++)
     {
-        double mass_ij = *(d_data->node_values(node_i, node_j));
-        int tid_j = node_j * 3 + dof_i;
+        double mass_ij = 0.0;
+        if (d_data->type == TYPE_3243)
+        {
+            auto *data = static_cast<GPU_ANCF3243_Data *>(d_data);
+            mass_ij = data->node_values()(node_i, node_j);
+        }
+        else if (d_data->type == TYPE_3443)
+        {
+            auto *data = static_cast<GPU_ANCF3443_Data *>(d_data);
+            mass_ij = data->node_values()(node_i, node_j);
+        }
 
+        int tid_j = node_j * 3 + dof_i;
         double v_diff = solver->v_guess()[tid_j] - solver->v_prev()[tid_j];
         res += mass_ij * v_diff / solver->solver_time_step();
     }
 
     // Internal force
-    res -= (-d_data->f_elem_out()(tid));
+    if (d_data->type == TYPE_3243)
+    {
+        auto *data = static_cast<GPU_ANCF3243_Data *>(d_data);
+        res -= (-data->f_elem_out()(tid));
+    }
+    else if (d_data->type == TYPE_3443)
+    {
+        auto *data = static_cast<GPU_ANCF3443_Data *>(d_data);
+        res -= (-data->f_elem_out()(tid));
+    }
 
     if (tid == 3 * d_data->get_n_coef() - 10)
     {
@@ -32,15 +53,30 @@ __device__ double solver_grad_L(int tid, GPU_ANCF3243_Data *d_data, SyncedNester
     // Constraints
     for (int i = 0; i < 12; i++)
     {
-        res += d_data->constraint_jac()(i, tid) *
-               (solver->lambda_guess()[i] + *solver->solver_rho() * solver->solver_time_step() * d_data->constraint()[i]);
+        double constraint_jac_val = 0.0;
+        double constraint_val = 0.0;
+
+        if (d_data->type == TYPE_3243)
+        {
+            auto *data = static_cast<GPU_ANCF3243_Data *>(d_data);
+            constraint_jac_val = data->constraint_jac()(i, tid);
+            constraint_val = data->constraint()[i];
+        }
+        else if (d_data->type == TYPE_3443)
+        {
+            auto *data = static_cast<GPU_ANCF3443_Data *>(d_data);
+            constraint_jac_val = data->constraint_jac()(i, tid);
+            constraint_val = data->constraint()[i];
+        }
+
+        res += constraint_jac_val * (solver->lambda_guess()[i] + *solver->solver_rho() * solver->solver_time_step() * constraint_val);
     }
 
     return res;
 }
 
 __global__ void
-one_step_nesterov_kernel(GPU_ANCF3243_Data *d_data, SyncedNesterovSolver *d_nesterov_solver)
+one_step_nesterov_kernel(ElementBase *d_data, SyncedNesterovSolver *d_nesterov_solver)
 {
     cg::grid_group grid = cg::this_grid();
 
@@ -49,9 +85,20 @@ one_step_nesterov_kernel(GPU_ANCF3243_Data *d_data, SyncedNesterovSolver *d_nest
     // assign x12_prev, y12_prev, z12_prev
     if (tid < d_data->get_n_coef())
     {
-        d_nesterov_solver->x12_prev()(tid) = d_data->x12()(tid);
-        d_nesterov_solver->y12_prev()(tid) = d_data->y12()(tid);
-        d_nesterov_solver->z12_prev()(tid) = d_data->z12()(tid);
+        if (d_data->type == TYPE_3243)
+        {
+            auto *data = static_cast<GPU_ANCF3243_Data *>(d_data);
+            d_nesterov_solver->x12_prev()(tid) = data->x12()(tid);
+            d_nesterov_solver->y12_prev()(tid) = data->y12()(tid);
+            d_nesterov_solver->z12_prev()(tid) = data->z12()(tid);
+        }
+        else if (d_data->type == TYPE_3443)
+        {
+            auto *data = static_cast<GPU_ANCF3443_Data *>(d_data);
+            d_nesterov_solver->x12_prev()(tid) = data->x12()(tid);
+            d_nesterov_solver->y12_prev()(tid) = data->y12()(tid);
+            d_nesterov_solver->z12_prev()(tid) = data->z12()(tid);
+        }
     }
 
     grid.sync();
@@ -124,9 +171,20 @@ one_step_nesterov_kernel(GPU_ANCF3243_Data *d_data, SyncedNesterovSolver *d_nest
                     // Step 2: Update scratch positions using look-ahead velocities
                     if (tid < d_data->get_n_coef())
                     {
-                        d_data->x12()(tid) = d_nesterov_solver->x12_prev()(tid) + d_nesterov_solver->solver_time_step() * d_nesterov_solver->v_guess()(tid * 3 + 0);
-                        d_data->y12()(tid) = d_nesterov_solver->y12_prev()(tid) + d_nesterov_solver->solver_time_step() * d_nesterov_solver->v_guess()(tid * 3 + 1);
-                        d_data->z12()(tid) = d_nesterov_solver->z12_prev()(tid) + d_nesterov_solver->solver_time_step() * d_nesterov_solver->v_guess()(tid * 3 + 2);
+                        if (d_data->type == TYPE_3243)
+                        {
+                            auto *data = static_cast<GPU_ANCF3243_Data *>(d_data);
+                            data->x12()(tid) = d_nesterov_solver->x12_prev()(tid) + d_nesterov_solver->solver_time_step() * d_nesterov_solver->v_guess()(tid * 3 + 0);
+                            data->y12()(tid) = d_nesterov_solver->y12_prev()(tid) + d_nesterov_solver->solver_time_step() * d_nesterov_solver->v_guess()(tid * 3 + 1);
+                            data->z12()(tid) = d_nesterov_solver->z12_prev()(tid) + d_nesterov_solver->solver_time_step() * d_nesterov_solver->v_guess()(tid * 3 + 2);
+                        }
+                        else if (d_data->type == TYPE_3443)
+                        {
+                            auto *data = static_cast<GPU_ANCF3443_Data *>(d_data);
+                            data->x12()(tid) = d_nesterov_solver->x12_prev()(tid) + d_nesterov_solver->solver_time_step() * d_nesterov_solver->v_guess()(tid * 3 + 0);
+                            data->y12()(tid) = d_nesterov_solver->y12_prev()(tid) + d_nesterov_solver->solver_time_step() * d_nesterov_solver->v_guess()(tid * 3 + 1);
+                            data->z12()(tid) = d_nesterov_solver->z12_prev()(tid) + d_nesterov_solver->solver_time_step() * d_nesterov_solver->v_guess()(tid * 3 + 2);
+                        }
                     }
 
                     grid.sync();
@@ -157,7 +215,14 @@ one_step_nesterov_kernel(GPU_ANCF3243_Data *d_data, SyncedNesterovSolver *d_nest
                     {
                         int elem_idx = tid / Quadrature::N_TOTAL_QP;
                         int qp_idx = tid % Quadrature::N_TOTAL_QP;
-                        compute_p(elem_idx, qp_idx, d_data);
+                        if (d_data->type == TYPE_3243)
+                        {
+                            ancf3243_compute_p(elem_idx, qp_idx, static_cast<GPU_ANCF3243_Data *>(d_data));
+                        }
+                        else if (d_data->type == TYPE_3443)
+                        {
+                            ancf3443_compute_p(elem_idx, qp_idx, static_cast<GPU_ANCF3443_Data *>(d_data));
+                        }
                     }
 
                     grid.sync();
@@ -166,7 +231,14 @@ one_step_nesterov_kernel(GPU_ANCF3243_Data *d_data, SyncedNesterovSolver *d_nest
                     {
                         int elem_idx = tid / Quadrature::N_SHAPE;
                         int node_idx = tid % Quadrature::N_SHAPE;
-                        compute_internal_force(elem_idx, node_idx, d_data);
+                        if (d_data->type == TYPE_3243)
+                        {
+                            ancf3243_compute_internal_force(elem_idx, node_idx, static_cast<GPU_ANCF3243_Data *>(d_data));
+                        }
+                        else if (d_data->type == TYPE_3443)
+                        {
+                            ancf3443_compute_internal_force(elem_idx, node_idx, static_cast<GPU_ANCF3443_Data *>(d_data));
+                        }
                     }
 
                     grid.sync();
@@ -176,14 +248,17 @@ one_step_nesterov_kernel(GPU_ANCF3243_Data *d_data, SyncedNesterovSolver *d_nest
                     //     printf("post f_elem_out");
                     //     for (int i = 0; i < 3 * d_data->get_n_coef(); i++)
                     //     {
-                    //         printf("%f ", d_data->f_elem_out()(i));
+                    //         printf("%f ", d_nesterov_solver->g()(i));
                     //     }
                     //     printf("\n");
                     // }
 
                     if (tid == 0)
                     {
-                        compute_constraint_data(d_data);
+                        if (d_data->type == TYPE_3243)
+                            ancf3243_compute_constraint_data(static_cast<GPU_ANCF3243_Data *>(d_data));
+                        else if (d_data->type == TYPE_3443)
+                            ancf3443_compute_constraint_data(static_cast<GPU_ANCF3443_Data *>(d_data));
                     }
 
                     grid.sync();
@@ -305,9 +380,20 @@ one_step_nesterov_kernel(GPU_ANCF3243_Data *d_data, SyncedNesterovSolver *d_nest
             // Update positions: q_new = q_prev + h * v (parallel across threads)
             if (tid < d_data->get_n_coef())
             {
-                d_data->x12()(tid) = d_nesterov_solver->x12_prev()(tid) + d_nesterov_solver->v_guess()(tid * 3 + 0) * d_nesterov_solver->solver_time_step();
-                d_data->y12()(tid) = d_nesterov_solver->y12_prev()(tid) + d_nesterov_solver->v_guess()(tid * 3 + 1) * d_nesterov_solver->solver_time_step();
-                d_data->z12()(tid) = d_nesterov_solver->z12_prev()(tid) + d_nesterov_solver->v_guess()(tid * 3 + 2) * d_nesterov_solver->solver_time_step();
+                if (d_data->type == TYPE_3243)
+                {
+                    auto *data = static_cast<GPU_ANCF3243_Data *>(d_data);
+                    data->x12()(tid) = d_nesterov_solver->x12_prev()(tid) + d_nesterov_solver->v_guess()(tid * 3 + 0) * d_nesterov_solver->solver_time_step();
+                    data->y12()(tid) = d_nesterov_solver->y12_prev()(tid) + d_nesterov_solver->v_guess()(tid * 3 + 1) * d_nesterov_solver->solver_time_step();
+                    data->z12()(tid) = d_nesterov_solver->z12_prev()(tid) + d_nesterov_solver->v_guess()(tid * 3 + 2) * d_nesterov_solver->solver_time_step();
+                }
+                else if (d_data->type == TYPE_3443)
+                {
+                    auto *data = static_cast<GPU_ANCF3443_Data *>(d_data);
+                    data->x12()(tid) = d_nesterov_solver->x12_prev()(tid) + d_nesterov_solver->v_guess()(tid * 3 + 0) * d_nesterov_solver->solver_time_step();
+                    data->y12()(tid) = d_nesterov_solver->y12_prev()(tid) + d_nesterov_solver->v_guess()(tid * 3 + 1) * d_nesterov_solver->solver_time_step();
+                    data->z12()(tid) = d_nesterov_solver->z12_prev()(tid) + d_nesterov_solver->v_guess()(tid * 3 + 2) * d_nesterov_solver->solver_time_step();
+                }
             }
 
             grid.sync();
@@ -316,19 +402,48 @@ one_step_nesterov_kernel(GPU_ANCF3243_Data *d_data, SyncedNesterovSolver *d_nest
             if (tid == 0)
             {
                 // Compute constraints at new position
-                compute_constraint_data(d_data);
+                if (d_data->type == TYPE_3243)
+                {
+                    ancf3243_compute_constraint_data(static_cast<GPU_ANCF3243_Data *>(d_data));
+                }
+                else if (d_data->type == TYPE_3443)
+                {
+                    ancf3443_compute_constraint_data(static_cast<GPU_ANCF3443_Data *>(d_data));
+                }
 
                 // Dual variable update: lam += rho * h * c(q_new)
                 for (int i = 0; i < 12; i++)
                 {
-                    d_nesterov_solver->lambda_guess()[i] += *d_nesterov_solver->solver_rho() * d_nesterov_solver->solver_time_step() * d_data->constraint()[i];
+                    double constraint_val = 0.0;
+                    if (d_data->type == TYPE_3243)
+                    {
+                        auto *data = static_cast<GPU_ANCF3243_Data *>(d_data);
+                        constraint_val = data->constraint()[i];
+                    }
+                    else if (d_data->type == TYPE_3443)
+                    {
+                        auto *data = static_cast<GPU_ANCF3443_Data *>(d_data);
+                        constraint_val = data->constraint()[i];
+                    }
+                    d_nesterov_solver->lambda_guess()[i] += *d_nesterov_solver->solver_rho() * d_nesterov_solver->solver_time_step() * constraint_val;
                 }
 
                 // Termination on the norm of constraint < outer_tol
                 double norm_constraint = 0.0;
                 for (int i = 0; i < 12; i++)
                 {
-                    norm_constraint += d_data->constraint()[i] * d_data->constraint()[i];
+                    double constraint_val = 0.0;
+                    if (d_data->type == TYPE_3243)
+                    {
+                        auto *data = static_cast<GPU_ANCF3243_Data *>(d_data);
+                        constraint_val = data->constraint()[i];
+                    }
+                    else if (d_data->type == TYPE_3443)
+                    {
+                        auto *data = static_cast<GPU_ANCF3443_Data *>(d_data);
+                        constraint_val = data->constraint()[i];
+                    }
+                    norm_constraint += constraint_val * constraint_val;
                 }
                 norm_constraint = sqrt(norm_constraint);
                 printf("norm_constraint: %.17f\n", norm_constraint);
@@ -349,9 +464,20 @@ one_step_nesterov_kernel(GPU_ANCF3243_Data *d_data, SyncedNesterovSolver *d_nest
     // explicit integration
     if (tid < d_data->get_n_coef())
     {
-        d_data->x12()(tid) = d_nesterov_solver->x12_prev()(tid) + d_nesterov_solver->v_guess()(tid * 3 + 0) * d_nesterov_solver->solver_time_step();
-        d_data->y12()(tid) = d_nesterov_solver->y12_prev()(tid) + d_nesterov_solver->v_guess()(tid * 3 + 1) * d_nesterov_solver->solver_time_step();
-        d_data->z12()(tid) = d_nesterov_solver->z12_prev()(tid) + d_nesterov_solver->v_guess()(tid * 3 + 2) * d_nesterov_solver->solver_time_step();
+        if (d_data->type == TYPE_3243)
+        {
+            auto *data = static_cast<GPU_ANCF3243_Data *>(d_data);
+            data->x12()(tid) = d_nesterov_solver->x12_prev()(tid) + d_nesterov_solver->v_guess()(tid * 3 + 0) * d_nesterov_solver->solver_time_step();
+            data->y12()(tid) = d_nesterov_solver->y12_prev()(tid) + d_nesterov_solver->v_guess()(tid * 3 + 1) * d_nesterov_solver->solver_time_step();
+            data->z12()(tid) = d_nesterov_solver->z12_prev()(tid) + d_nesterov_solver->v_guess()(tid * 3 + 2) * d_nesterov_solver->solver_time_step();
+        }
+        else if (d_data->type == TYPE_3443)
+        {
+            auto *data = static_cast<GPU_ANCF3443_Data *>(d_data);
+            data->x12()(tid) = d_nesterov_solver->x12_prev()(tid) + d_nesterov_solver->v_guess()(tid * 3 + 0) * d_nesterov_solver->solver_time_step();
+            data->y12()(tid) = d_nesterov_solver->y12_prev()(tid) + d_nesterov_solver->v_guess()(tid * 3 + 1) * d_nesterov_solver->solver_time_step();
+            data->z12()(tid) = d_nesterov_solver->z12_prev()(tid) + d_nesterov_solver->v_guess()(tid * 3 + 2) * d_nesterov_solver->solver_time_step();
+        }
     }
 
     grid.sync();
@@ -376,7 +502,18 @@ void SyncedNesterovSolver::OneStepNesterov()
     int blocksNeeded = (N + threads - 1) / threads;
     int blocks = std::min(blocksNeeded, maxCoopBlocks);
 
-    void *args[] = {&d_data_->d_data, &d_nesterov_solver_};
+    ElementBase *element_data = nullptr;
+    if (d_data_->type == TYPE_3243)
+    {
+        auto *typed_data = static_cast<GPU_ANCF3243_Data *>(d_data_);
+        element_data = typed_data->d_data;
+    }
+    else if (d_data_->type == TYPE_3443)
+    {
+        auto *typed_data = static_cast<GPU_ANCF3443_Data *>(d_data_);
+        element_data = typed_data->d_data;
+    }
+    void *args[] = {&element_data, &d_nesterov_solver_};
 
     HANDLE_ERROR(cudaEventRecord(start));
     HANDLE_ERROR(cudaLaunchCooperativeKernel((void *)one_step_nesterov_kernel, blocks, threads, args));

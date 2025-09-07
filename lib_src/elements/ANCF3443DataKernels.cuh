@@ -1,12 +1,12 @@
 #pragma once
-#include "ANCF3243Data.cuh"
+#include "ANCF3443Data.cuh"
 
-__device__ __forceinline__ void ancf3243_compute_p(int, int, GPU_ANCF3243_Data *);
-__device__ __forceinline__ void ancf3243_compute_internal_force(int, int, GPU_ANCF3243_Data *);
-__device__ __forceinline__ void ancf3243_compute_constraint_data(GPU_ANCF3243_Data *);
+__device__ __forceinline__ void ancf3443_compute_p(int, int, GPU_ANCF3443_Data *);
+__device__ __forceinline__ void ancf3443_compute_internal_force(int, int, GPU_ANCF3443_Data *);
+__device__ __forceinline__ void ancf3443_compute_constraint_data(GPU_ANCF3443_Data *);
 
 // Device function: matrix-vector multiply (8x8 * 8x1)
-__device__ __forceinline__ void ancf3243_mat_vec_mul8(Eigen::Map<Eigen::MatrixXd> A, const double *x, double *out)
+__device__ __forceinline__ void ancf3443_mat_vec_mul8(Eigen::Map<Eigen::MatrixXd> A, const double *x, double *out)
 {
     // clang-format off
     #pragma unroll
@@ -23,12 +23,12 @@ __device__ __forceinline__ void ancf3243_mat_vec_mul8(Eigen::Map<Eigen::MatrixXd
 }
 
 // Device function to compute determinant of 3x3 matrix
-__device__ __forceinline__ double ancf3243_det3x3(const double *J)
+__device__ __forceinline__ double ancf3443_det3x3(const double *J)
 {
     return J[0] * (J[4] * J[8] - J[5] * J[7]) - J[1] * (J[3] * J[8] - J[5] * J[6]) + J[2] * (J[3] * J[7] - J[4] * J[6]);
 }
 
-__device__ __forceinline__ void ancf3243_b_vec(double u, double v, double w, double *out)
+__device__ __forceinline__ void ancf3443_b_vec(double u, double v, double w, double *out)
 {
     out[0] = 1.0;
     out[1] = u;
@@ -40,16 +40,16 @@ __device__ __forceinline__ void ancf3243_b_vec(double u, double v, double w, dou
     out[7] = u * u * u;
 }
 
-__device__ __forceinline__ void ancf3243_b_vec_xi(double xi, double eta, double zeta, double L, double W, double H, double *out)
+__device__ __forceinline__ void ancf3443_b_vec_xi(double xi, double eta, double zeta, double L, double W, double H, double *out)
 {
     double u = L * xi / 2.0;
     double v = W * eta / 2.0;
     double w = H * zeta / 2.0;
-    ancf3243_b_vec(u, v, w, out);
+    ancf3443_b_vec(u, v, w, out);
 }
 
 // Device function for Jacobian determinant in normalized coordinates
-__device__ __forceinline__ void ancf3243_calc_det_J_xi(double xi,
+__device__ __forceinline__ void ancf3443_calc_det_J_xi(double xi,
                                                        double eta,
                                                        double zeta,
                                                        Eigen::Map<Eigen::MatrixXd> B_inv,
@@ -67,9 +67,9 @@ __device__ __forceinline__ void ancf3243_calc_det_J_xi(double xi,
     double db_dzeta[Quadrature::N_SHAPE] = {0.0, 0.0, 0.0, H / 2, 0.0, (L * H / 4) * xi, 0.0, 0.0};
 
     double ds_dxi[Quadrature::N_SHAPE], ds_deta[Quadrature::N_SHAPE], ds_dzeta[Quadrature::N_SHAPE];
-    ancf3243_mat_vec_mul8(B_inv, db_dxi, ds_dxi);
-    ancf3243_mat_vec_mul8(B_inv, db_deta, ds_deta);
-    ancf3243_mat_vec_mul8(B_inv, db_dzeta, ds_dzeta);
+    ancf3443_mat_vec_mul8(B_inv, db_dxi, ds_dxi);
+    ancf3443_mat_vec_mul8(B_inv, db_deta, ds_deta);
+    ancf3443_mat_vec_mul8(B_inv, db_dzeta, ds_dzeta);
 
     // Nodal matrix: 3 × 8
     // J = N_mat_jac @ np.column_stack([ds_dxi, ds_deta, ds_dzeta])
@@ -98,7 +98,7 @@ __device__ __forceinline__ void ancf3243_calc_det_J_xi(double xi,
     // clang-format on
 }
 
-__device__ __forceinline__ void ancf3243_compute_p(int elem_idx, int qp_idx, GPU_ANCF3243_Data *d_data)
+__device__ __forceinline__ void ancf3443_compute_p(int elem_idx, int qp_idx, GPU_ANCF3443_Data *d_data)
 {
     // clang-format off
     // --- Compute C = F^T * F ---
@@ -175,6 +175,7 @@ __device__ __forceinline__ void ancf3243_compute_p(int elem_idx, int qp_idx, GPU
         }
 
     // 2. Compute G = F * Ft
+
     double G[3][3] = {0}; // G = F * F^T
     #pragma unroll
     for (int i = 0; i < 3; ++i)
@@ -210,7 +211,7 @@ __device__ __forceinline__ void ancf3243_compute_p(int elem_idx, int qp_idx, GPU
     // clang-format on
 }
 
-__device__ __forceinline__ void ancf3243_compute_internal_force(int elem_idx, int node_idx, GPU_ANCF3243_Data *d_data)
+__device__ __forceinline__ void ancf3443_compute_internal_force(int elem_idx, int node_idx, GPU_ANCF3443_Data *d_data)
 {
 
     double f_i[3] = {0};
@@ -258,7 +259,7 @@ __device__ __forceinline__ void ancf3243_compute_internal_force(int elem_idx, in
     // clang-format on
 }
 
-__device__ __forceinline__ void ancf3243_compute_constraint_data(GPU_ANCF3243_Data *d_data)
+__device__ __forceinline__ void ancf3443_compute_constraint_data(GPU_ANCF3443_Data *d_data)
 {
     int thread_idx = blockIdx.x * blockDim.x + threadIdx.x;
 

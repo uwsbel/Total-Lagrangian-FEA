@@ -1,6 +1,8 @@
 #pragma once
 #include "SolverBase.h"
+#include "../elements/ElementBase.h"
 #include "../elements/ANCF3243Data.cuh"
+#include "../elements/ANCF3443Data.cuh"
 
 // this is a true first order Nesterov method
 // fully synced, and each inner iteration will compute the full gradient
@@ -15,7 +17,7 @@ struct SyncedNesterovParams
 class SyncedNesterovSolver : public SolverBase
 {
 public:
-    SyncedNesterovSolver(GPU_ANCF3243_Data *data) : d_data_(data), n_coef_(data->get_n_coef()), n_beam_(data->get_n_beam())
+    SyncedNesterovSolver(ElementBase *data) : d_data_(data), n_coef_(data->get_n_coef()), n_beam_(data->get_n_beam())
     {
         cudaMalloc(&d_v_guess_, n_coef_ * 3 * sizeof(double));
         cudaMalloc(&d_v_prev_, n_coef_ * 3 * sizeof(double));
@@ -176,7 +178,7 @@ public:
     void Solve() override { OneStepNesterov(); }
 
 private:
-    GPU_ANCF3243_Data *d_data_;
+    ElementBase *d_data_;
     SyncedNesterovSolver *d_nesterov_solver_;
     int n_coef_, n_beam_;
 
