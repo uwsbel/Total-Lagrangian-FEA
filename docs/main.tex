@@ -1,0 +1,188 @@
+\documentclass[11pt]{article}
+
+% Optional packages
+\usepackage[utf8]{inputenc}   % for UTF-8 encoding
+\usepackage{graphicx}         % for including figures
+\usepackage{amsmath, amssymb, amsthm}
+\usepackage{geometry}
+\geometry{margin=1in}
+\usepackage{enumitem}
+\usepackage{hyperref}
+\usepackage{xcolor}
+
+\input{macros.tex}
+
+\title{Iterative Stochastic Gradient-Based Total Lagrangian Formulation for Flexible Multi-Body Systems}
+\author{SBEL Team \\ University of Wisconsin-Madison}
+\date{\today} % or leave empty with \date{}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+This document outlines the design of a Total Lagrangian finite element solver in Project Chrono, targeting GPU acceleration and first-order optimization in a stochastic setting. The solver frames each time step as an optimization problem whose first-order optimality conditions recover the equations of motion. Optimization is performed using stochastic gradient methods with momentum, combined with Augmented Lagrangian Methods (ALM) for handling bilateral constraints and contact/friction.
+\end{abstract}
+
+\section{Highlights of the Approach}
+\begin{itemize}
+    \item The parallelism is on a per nodal unknown basis. 
+    \begin{itemize}
+        \item Tasks that appear on a per-element basis parallel will be cast to be on a per-nodal unknown basis.
+    \end{itemize}
+    \item The solver is a minimization-based solver. It does not use Hessian information. It is gradient-based, first order.
+    \item We favor Nesterov or AdamW. To the extent possible, we want to avoid global synchronizations.
+    \item We are going to use coopreative threads. As such, the entire grid should be device resident. This places a constraint on the grid size.
+    \item The approach is stochastic because system-level synchronization will not be necessarily enforced at each iteration, and a thread might work with slightly stale neighboring states (which nonetheless get continuously updated). At each time step, we might “system-level” synchronize after 100 Nesterov iterations, then every 50 iterations, then 10, and close to convergence at each iteration. Each iteration will be exceptionally fast and embarrassingly parallel: a GPU thread only evaluates one equation of motion residual and updates its state in shared and/or global memory. The 100, 50, 10 values are exemplary – it remains to investigate how to tune online the frequency of the system-level synchronizations to accelerate convergence
+\end{itemize}
+
+
+\section{Core Concepts}
+\subsection{Discretization and State}
+\begin{itemize}[leftmargin=*]
+\item \textbf{Kinematics}: Total Lagrangian (reference-space quantities fixed).
+\item \textbf{Precompute (CPU)}: shape function gradients $\nabla_0 N$, quadrature weights, reference volumes.
+\item \textbf{State}: generalized positions $q$, velocities $v$, multipliers $\lambda$, ALM penalties $\mu$.
+\end{itemize}
+
+
+\subsection{Variational Time Stepping}
+\SBELcomment{Add the variational time stepping objective here.}
+
+\subsection{First-Order Optimizers}
+\begin{itemize}[leftmargin=*]
+\item \textbf{Nesterov Accelerated Gradient (NAG)}
+\item \textbf{Heavy-Ball (Polyak)}
+\item \textbf{AdamW} with decoupled weight decay, acting as damping.
+\end{itemize}
+Each optimizer is applied in a fully parallel fashion, thread-per-nodal unknown.
+
+
+\subsection{Asynchronous / Stochastic Execution}
+\begin{itemize}[leftmargin=*]
+\item Each thread owns one nodal unknown (might have two own two or three nodal unknowns, for very large problems; this is because we have to fit the grid size into the GPU).
+\item Threads read neighboring states; values may be stale.
+\item Periodic synchronization ensures system-level coherence.
+\end{itemize}
+
+
+\subsection{Constraints via ALM}
+\begin{itemize}[leftmargin=*]
+\item \textbf{Equalities}: $c(q) = 0$.
+\item \textbf{Contact}: $g_n(q) \geq 0$.
+\item \textbf{Friction}: proximal projection onto the Coulomb cone. After each update of the contact/friction multipliers, snap them back into the admissible Coulomb cone via a simple closed-form projection.
+\item \textbf{ALM Update}: $\lambda \leftarrow \lambda + \mu h(q)$, with $h(q)$ the violation.
+\end{itemize}
+
+
+\section{GPU Implementation Notes}
+\begin{itemize}[leftmargin=*]
+\item Structure-of-Arrays (SoA) layout for $q, v, m$.
+\item Kernels: element residuals, scatter to nodes, primal update, contact detection, constraint updates.
+\item Use FP32 for element math; accumulate sampled energy in FP64.
+\item Atomics acceptable in FP32; shared memory staging for hot spots.
+\end{itemize}
+
+
+\section{Synchronization Strategy}
+\begin{itemize}[leftmargin=*]
+\item Start with global sync every 100 iterations.
+\item Reduce to 50, then 10, finally every iteration near convergence.
+\item Sync triggers: plateau in sampled residuals, sentinel constraint stagnation, excessive displacement.
+\end{itemize}
+
+
+\section{Mini-Batching}
+\begin{itemize}[leftmargin=*]
+\item Batch over elements for internal forces.
+\item Batch over constraints for ALM.
+\item Interleave batches to reduce drift (e.g., 2:1 ratio).
+\end{itemize}
+
+
+\section{Stability Enhancements}
+\begin{itemize}[leftmargin=*]
+\item Mass-scaled step sizes $\alpha_i \propto 1/(m_i + \eta k_i \Delta t^2)$.
+\item Gradient clipping at per-block percentiles.
+\item Light Rayleigh damping to suppress chatter.
+\end{itemize}
+
+
+\section{Why this Approach?}
+When advancing many small time steps (e.g., $\Delta t = 10^{-4}$), it is inefficient to launch one GPU kernel per step. Instead, a persistent cooperative kernel can execute hundreds of time steps on-device before returning control to the host, reducing overhead and keeping all state resident in GPU memory.
+
+\section{Approach}
+\subsection{Persistent Cooperative Kernel}
+\begin{itemize}[leftmargin=*]
+  \item Launch once with \texttt{cudaLaunchCooperativeKernel} so that grid-wide synchronization is available.
+  \item Inside the kernel, advance $N$ time steps (e.g., 100) using a device-side loop.
+  \item Each iteration computes element residuals, constraint updates, and optimizer steps.
+  \item Periodically use \texttt{grid.sync()} for system-level coherence.
+\end{itemize}
+
+\subsection{Synchronization Strategy}
+\begin{itemize}[leftmargin=*]
+  \item Perform global syncs infrequently: every 100, 50, 10, then 1 iteration near convergence.
+  \item At sync points:
+    \begin{itemize}
+      \item Refit/rebuild BVHs for contact.
+      \item Update active sets for contact/friction.
+      \item Publish snapshots for host output.
+    \end{itemize}
+\end{itemize}
+
+\subsection{Occupancy and Kernel Design}
+\begin{itemize}[leftmargin=*]
+  \item Cooperative kernels require all blocks resident simultaneously; configure grid size accordingly.
+  \item Use grid-stride loops so persistent blocks can cover arbitrary problem sizes.
+  \item Keep optimizer state (e.g., AdamW $m,v$) in SoA arrays; minimize shared memory usage.
+  \item Stage element contributions in shared memory, then scatter with atomics.
+\end{itemize}
+
+\subsection{Watchdog Considerations}
+\begin{itemize}[leftmargin=*]
+  \item On Windows WDDM, long kernels risk TDR termination ($\sim$2s).
+  \item Mitigations:
+    \begin{itemize}
+      \item Use TCC-mode GPUs or WSL compute mode.
+      \item Chunk into smaller launches (10--50 ms wall time each) and chain with CUDA Graphs.
+    \end{itemize}
+\end{itemize}
+
+\subsection{Output Handling}
+\begin{itemize}[leftmargin=*]
+  \item Device tracks physical time; output triggered when $t \geq t_{\text{next}}$.
+  \item Snapshots staged into global memory; one warp or block writes, others wait at grid-sync.
+  \item Optional: asynchronous copies via pinned buffers and host polling for streaming output.
+\end{itemize}
+
+\section{Benefits}
+\begin{itemize}[leftmargin=*]
+  \item Eliminates launch overhead for each time step.
+  \item Keeps data on-GPU, improving locality.
+  \item Matches stochastic first-order optimization: most iterations are asynchronous, with coherence enforced only at sync points.
+  \item Provides flexibility for output scheduling (e.g., $\Delta t = 10^{-4}$, advance from 2.36 s to 2.37 s with 100 steps before host handoff).
+\end{itemize}
+
+\section{Timeline}
+\begin{enumerate}[leftmargin=*]
+\item \textbf{Weeks 1--2}: Element library, TL kinematics, gradient kernel, BB + backtracking.
+\item \textbf{Week 3}: Variational time stepping objective, inertial prediction, patch tests.
+\item \textbf{Weeks 4--5}: Contact detection (BVH broadphase, narrowphase), unilateral ALM.
+\item \textbf{Week 6}: Friction via prox projection, sliding tests.
+\item \textbf{Week 7}: Bilateral constraints (joints) as ALM equalities.
+\item \textbf{Week 8}: Many-body tests, constraint coupling, performance profiling.
+\item \textbf{Week 9+}: Adaptive synchronization, parameter auto-tuning, mixed precision optimization.
+\end{enumerate}
+
+
+\section{Conclusion}
+Using a persistent cooperative kernel to integrate many time steps per host launch aligns well with a stochastic, gradient-based TL-FEA solver. The design reduces overhead, maximizes GPU utilization, and allows coarse-grained synchronization for contact and constraint updates.
+
+\bibliographystyle{ieeetr} % or another style
+\bibliography{BibFiles/refsMBS} % assumes references.bib
+
+\end{document}
+
+
+\end{document}
