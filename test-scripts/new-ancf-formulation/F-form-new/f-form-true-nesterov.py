@@ -81,7 +81,7 @@ H = 1.0  # Height
 W = 1.0  # Width
 L = 2.0  # Length
 
-n_beam = 150  # Number of beam elements
+n_beam = 3  # Number of beam elements
 
 
 # Each vector is 8x1
@@ -410,7 +410,7 @@ for a in range(n_beam):
         
 
 
-Nt = 100  # Number of time steps
+Nt = 30  # Number of time steps
 
 end_x = np.zeros((n_beam, Nt))
 end_y = np.zeros((n_beam, Nt))
@@ -635,7 +635,7 @@ for step in range(Nt):
 
     # External force at point P
     if step <= 200:
-        f_P = np.array([0.0, 0.0, 3100.0])
+        f_P = np.array([0.0, 0.0, 10000.0])
     else:
         f_P = np.array([0.0, 0.0, 0.0])
 

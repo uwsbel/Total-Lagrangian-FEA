@@ -436,10 +436,10 @@ struct GPU_ANCF3243_Data : public ElementBase
         HANDLE_ERROR(cudaMemcpy(d_mu, &mu, sizeof(double), cudaMemcpyHostToDevice));
         HANDLE_ERROR(cudaMemcpy(d_lambda, &lambda, sizeof(double), cudaMemcpyHostToDevice));
 
-        HANDLE_ERROR(cudaMemcpy(d_data, this, sizeof(GPU_ANCF3243_Data), cudaMemcpyHostToDevice));
-
         HANDLE_ERROR(cudaMemset(d_constraint, 0, 12 * sizeof(double)));
         HANDLE_ERROR(cudaMemset(d_constraint_jac, 0, 12 * (n_coef * 3) * sizeof(double)));
+
+        HANDLE_ERROR(cudaMemcpy(d_data, this, sizeof(GPU_ANCF3243_Data), cudaMemcpyHostToDevice));
 
         is_setup = true;
     }
@@ -485,10 +485,10 @@ struct GPU_ANCF3243_Data : public ElementBase
         HANDLE_ERROR(cudaFree(d_lambda));
         HANDLE_ERROR(cudaFree(d_mu));
 
-        HANDLE_ERROR(cudaFree(d_data));
-
         HANDLE_ERROR(cudaFree(d_constraint));
         HANDLE_ERROR(cudaFree(d_constraint_jac));
+
+        HANDLE_ERROR(cudaFree(d_data));
     }
 
     void CalcDsDuPre();

@@ -16,6 +16,10 @@ public:
 
     virtual ~ElementBase() {}
 
+    ElementBase *d_data;
+
+    // Do not use virtual function in solver class
+    // CUDA cannot use virtual function
     virtual __host__ __device__ int get_n_beam() const = 0;
     virtual __host__ __device__ int get_n_coef() const = 0;
 

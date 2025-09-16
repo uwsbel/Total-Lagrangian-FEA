@@ -153,11 +153,11 @@ int main()
 
   // alpha, solver_rho, inner_tol, outer_tol, max_outer, max_inner,
   // timestep
-  SyncedNesterovParams params = {1.0e-8, 1e14, 1.0e-8, 1.0e-8, 5, 200, 1.0e-3};
+  SyncedNesterovParams params = {1.0e-8, 1e14, 1.0e-6, 1.0e-6, 5, 200, 1.0e-3};
   SyncedNesterovSolver solver(&gpu_3243_data);
   solver.Setup();
   solver.SetParameters(&params);
-  for (int i = 0; i < 4000; i++)
+  for (int i = 0; i < 30; i++)
   {
     solver.Solve();
   }

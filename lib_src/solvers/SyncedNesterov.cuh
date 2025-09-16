@@ -17,8 +17,30 @@ struct SyncedNesterovParams
 class SyncedNesterovSolver : public SolverBase
 {
 public:
-    SyncedNesterovSolver(ElementBase *data) : d_data_(data), n_coef_(data->get_n_coef()), n_beam_(data->get_n_beam())
+    SyncedNesterovSolver(ElementBase *data) : n_coef_(data->get_n_coef()), n_beam_(data->get_n_beam())
     {
+        // Type-based casting to get the correct d_data from derived class
+        if (data->type == TYPE_3243)
+        {
+            auto *typed_data = static_cast<GPU_ANCF3243_Data *>(data);
+            d_data_ = typed_data->d_data; // This accesses the derived class's d_data
+        }
+        else if (data->type == TYPE_3443)
+        {
+            auto *typed_data = static_cast<GPU_ANCF3443_Data *>(data);
+            d_data_ = typed_data->d_data; // This accesses the derived class's d_data
+        }
+        else
+        {
+            d_data_ = nullptr;
+            std::cerr << "Unknown element type!" << std::endl;
+        }
+
+        if (d_data_ == nullptr)
+        {
+            std::cerr << "d_data_ is null in SyncedNesterovSolver constructor" << std::endl;
+        }
+
         cudaMalloc(&d_v_guess_, n_coef_ * 3 * sizeof(double));
         cudaMalloc(&d_v_prev_, n_coef_ * 3 * sizeof(double));
         cudaMalloc(&d_v_k_, n_coef_ * 3 * sizeof(double));
@@ -172,6 +194,9 @@ public:
         return Eigen::Map<Eigen::VectorXd>(d_z12_prev, n_coef_);
     }
 #endif
+
+    __host__ __device__ int get_n_coef() const { return n_coef_; }
+    __host__ __device__ int get_n_beam() const { return n_beam_; }
 
     void OneStepNesterov();
 

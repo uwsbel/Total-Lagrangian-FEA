@@ -6,7 +6,7 @@
 #include <cooperative_groups.h>
 namespace cg = cooperative_groups;
 
-__device__ double solver_grad_L(int tid, ElementBase *d_data, SyncedNesterovSolver *solver)
+__device__ double solver_grad_L(int tid, ElementBase *d_data, SyncedNesterovSolver *d_solver)
 {
     double res = 0.0;
 
@@ -14,7 +14,7 @@ __device__ double solver_grad_L(int tid, ElementBase *d_data, SyncedNesterovSolv
     int dof_i = tid % 3;
 
     // Mass matrix contribution
-    for (int node_j = 0; node_j < d_data->get_n_coef(); node_j++)
+    for (int node_j = 0; node_j < d_solver->get_n_coef(); node_j++)
     {
         double mass_ij = 0.0;
         if (d_data->type == TYPE_3243)
@@ -29,8 +29,8 @@ __device__ double solver_grad_L(int tid, ElementBase *d_data, SyncedNesterovSolv
         }
 
         int tid_j = node_j * 3 + dof_i;
-        double v_diff = solver->v_guess()[tid_j] - solver->v_prev()[tid_j];
-        res += mass_ij * v_diff / solver->solver_time_step();
+        double v_diff = d_solver->v_guess()[tid_j] - d_solver->v_prev()[tid_j];
+        res += mass_ij * v_diff / d_solver->solver_time_step();
     }
 
     // Internal force
@@ -45,7 +45,7 @@ __device__ double solver_grad_L(int tid, ElementBase *d_data, SyncedNesterovSolv
         res -= (-data->f_elem_out()(tid));
     }
 
-    if (tid == 3 * d_data->get_n_coef() - 10)
+    if (tid == 3 * d_solver->get_n_coef() - 10)
     {
         res -= 10000.0;
     }
@@ -69,7 +69,7 @@ __device__ double solver_grad_L(int tid, ElementBase *d_data, SyncedNesterovSolv
             constraint_val = data->constraint()[i];
         }
 
-        res += constraint_jac_val * (solver->lambda_guess()[i] + *solver->solver_rho() * solver->solver_time_step() * constraint_val);
+        res += constraint_jac_val * (d_solver->lambda_guess()[i] + *d_solver->solver_rho() * d_solver->solver_time_step() * constraint_val);
     }
 
     return res;
@@ -83,7 +83,8 @@ one_step_nesterov_kernel(ElementBase *d_data, SyncedNesterovSolver *d_nesterov_s
     int tid = blockIdx.x * blockDim.x + threadIdx.x;
 
     // assign x12_prev, y12_prev, z12_prev
-    if (tid < d_data->get_n_coef())
+
+    if (tid < d_nesterov_solver->get_n_coef())
     {
         if (d_data->type == TYPE_3243)
         {
@@ -126,13 +127,12 @@ one_step_nesterov_kernel(ElementBase *d_data, SyncedNesterovSolver *d_nesterov_s
             {
                 *d_nesterov_solver->prev_norm_g() = 0.0;
                 *d_nesterov_solver->norm_g() = 0.0;
-                printf("resetting\n");
             }
 
             grid.sync();
 
             // Initialize for valid threads only
-            if (tid < d_data->get_n_coef() * 3)
+            if (tid < d_nesterov_solver->get_n_coef() * 3)
             {
                 v_prev = d_nesterov_solver->v_prev()(tid);
                 v_k = d_nesterov_solver->v_guess()(tid);
@@ -156,7 +156,7 @@ one_step_nesterov_kernel(ElementBase *d_data, SyncedNesterovSolver *d_nesterov_s
 
                     // Step 1: Each thread computes its look-ahead velocity component
                     double y = 0.0; // Declare y here
-                    if (tid < d_data->get_n_coef() * 3)
+                    if (tid < d_nesterov_solver->get_n_coef() * 3)
                     {
                         t_next = 0.5 * (1.0 + sqrt(1.0 + 4.0 * t * t));
                         double beta = (t - 1.0) / t_next;
@@ -169,7 +169,7 @@ one_step_nesterov_kernel(ElementBase *d_data, SyncedNesterovSolver *d_nesterov_s
                     grid.sync();
 
                     // Step 2: Update scratch positions using look-ahead velocities
-                    if (tid < d_data->get_n_coef())
+                    if (tid < d_nesterov_solver->get_n_coef())
                     {
                         if (d_data->type == TYPE_3243)
                         {
@@ -211,7 +211,7 @@ one_step_nesterov_kernel(ElementBase *d_data, SyncedNesterovSolver *d_nesterov_s
 
                     // grid.sync();
 
-                    if (tid < d_data->get_n_beam() * Quadrature::N_TOTAL_QP)
+                    if (tid < d_nesterov_solver->get_n_beam() * Quadrature::N_TOTAL_QP)
                     {
                         int elem_idx = tid / Quadrature::N_TOTAL_QP;
                         int qp_idx = tid % Quadrature::N_TOTAL_QP;
@@ -227,7 +227,7 @@ one_step_nesterov_kernel(ElementBase *d_data, SyncedNesterovSolver *d_nesterov_s
 
                     grid.sync();
 
-                    if (tid < d_data->get_n_beam() * Quadrature::N_SHAPE)
+                    if (tid < d_nesterov_solver->get_n_beam() * Quadrature::N_SHAPE)
                     {
                         int elem_idx = tid / Quadrature::N_SHAPE;
                         int node_idx = tid % Quadrature::N_SHAPE;
@@ -263,7 +263,7 @@ one_step_nesterov_kernel(ElementBase *d_data, SyncedNesterovSolver *d_nesterov_s
 
                     grid.sync();
 
-                    if (tid < d_data->get_n_coef() * 3)
+                    if (tid < d_nesterov_solver->get_n_coef() * 3)
                     {
                         double g = solver_grad_L(tid, d_data, d_nesterov_solver);
                         d_nesterov_solver->g()[tid] = g;
@@ -297,7 +297,7 @@ one_step_nesterov_kernel(ElementBase *d_data, SyncedNesterovSolver *d_nesterov_s
                     {
                         // calculate norm of g
                         double norm_g = 0.0;
-                        for (int i = 0; i < 3 * d_data->get_n_coef(); i++)
+                        for (int i = 0; i < 3 * d_nesterov_solver->get_n_coef(); i++)
                         {
                             norm_g += d_nesterov_solver->g()(i) * d_nesterov_solver->g()(i);
                         }
@@ -314,7 +314,7 @@ one_step_nesterov_kernel(ElementBase *d_data, SyncedNesterovSolver *d_nesterov_s
                     grid.sync();
 
                     // Step 4: Compute gradients and update velocities
-                    if (tid < d_data->get_n_coef() * 3)
+                    if (tid < d_nesterov_solver->get_n_coef() * 3)
                     {
                         v_next = y - d_nesterov_solver->solver_alpha() * d_nesterov_solver->g()[tid];
 
@@ -329,7 +329,7 @@ one_step_nesterov_kernel(ElementBase *d_data, SyncedNesterovSolver *d_nesterov_s
                     {
                         double norm_v_next = 0.0;
                         double norm_v_k = 0.0;
-                        for (int i = 0; i < 3 * d_data->get_n_coef(); i++)
+                        for (int i = 0; i < 3 * d_nesterov_solver->get_n_coef(); i++)
                         {
                             norm_v_next += d_nesterov_solver->v_next()(i) * d_nesterov_solver->v_next()(i);
                             norm_v_k += d_nesterov_solver->v_k()(i) * d_nesterov_solver->v_k()(i);
@@ -347,7 +347,7 @@ one_step_nesterov_kernel(ElementBase *d_data, SyncedNesterovSolver *d_nesterov_s
 
                     grid.sync();
 
-                    if (tid < d_data->get_n_coef() * 3)
+                    if (tid < d_nesterov_solver->get_n_coef() * 3)
                     {
                         // Update for next iteration
                         v_km1 = v_k;
@@ -370,7 +370,7 @@ one_step_nesterov_kernel(ElementBase *d_data, SyncedNesterovSolver *d_nesterov_s
             }
 
             // After inner loop convergence, update v_prev for next outer iteration
-            if (tid < d_data->get_n_coef() * 3)
+            if (tid < d_nesterov_solver->get_n_coef() * 3)
             {
                 d_nesterov_solver->v_prev()[tid] = d_nesterov_solver->v_guess()[tid];
             }
@@ -378,7 +378,7 @@ one_step_nesterov_kernel(ElementBase *d_data, SyncedNesterovSolver *d_nesterov_s
             grid.sync();
 
             // Update positions: q_new = q_prev + h * v (parallel across threads)
-            if (tid < d_data->get_n_coef())
+            if (tid < d_nesterov_solver->get_n_coef())
             {
                 if (d_data->type == TYPE_3243)
                 {
@@ -462,7 +462,7 @@ one_step_nesterov_kernel(ElementBase *d_data, SyncedNesterovSolver *d_nesterov_s
 
     // finally write data back to x12, y12, z12
     // explicit integration
-    if (tid < d_data->get_n_coef())
+    if (tid < d_nesterov_solver->get_n_coef())
     {
         if (d_data->type == TYPE_3243)
         {
@@ -502,18 +502,7 @@ void SyncedNesterovSolver::OneStepNesterov()
     int blocksNeeded = (N + threads - 1) / threads;
     int blocks = std::min(blocksNeeded, maxCoopBlocks);
 
-    ElementBase *element_data = nullptr;
-    if (d_data_->type == TYPE_3243)
-    {
-        auto *typed_data = static_cast<GPU_ANCF3243_Data *>(d_data_);
-        element_data = typed_data->d_data;
-    }
-    else if (d_data_->type == TYPE_3443)
-    {
-        auto *typed_data = static_cast<GPU_ANCF3443_Data *>(d_data_);
-        element_data = typed_data->d_data;
-    }
-    void *args[] = {&element_data, &d_nesterov_solver_};
+    void *args[] = {&d_data_, &d_nesterov_solver_};
 
     HANDLE_ERROR(cudaEventRecord(start));
     HANDLE_ERROR(cudaLaunchCooperativeKernel((void *)one_step_nesterov_kernel, blocks, threads, args));
