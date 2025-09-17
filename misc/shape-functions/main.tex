@@ -43,7 +43,8 @@ B3-24 (Beam) & 2 & 4 & 8 \\
 B3-34 (Beam) & 3 & 4 & 12 \\
 S3-44 (Shell) & 4 & 4 & 16 \\
 S3-92 (Shell) & 9 & 2 & 18 \\
-Q27 (Hex) & 27 & 1 & 27 \\
+Q27 (Hex - Lagrange) & 27 & 1 & 27 \\
+Q27 (Hex - Monomial) & 27 & 1 & 27 \\
 Tet10 (Tetrahedron) & 10 & 1 & 10 \\
 \bottomrule
 \end{tabular}
@@ -183,6 +184,28 @@ The 1D quadratic Lagrange polynomials used as the basis are:
 The resulting vector of 27 shape functions, $\mathbf{s}(\xi, \eta, \zeta)$, are tensor products of the 1D Lagrange polynomials. The expressions are:
 \[ \mathbf{s} = \input{latex_output/hex_q27_lagrange/shape_functions.tex} \]
 
+\subsection{Hexahedron Q27 Monomial Element (27 nodes, 1 DOF per node)}
+The Q27 Monomial element has the following characteristics:
+\begin{itemize}
+    \item Element type: 27-Node Hexahedron with Monomial Basis (Q27 Monomial)
+    \item Number of nodes: 27
+    \item Number of degrees of freedom per node: 1 (position vector $\mathbf{r}$)
+    \item Total number of degrees of freedom: 27
+    \item Basis: Explicit monomial basis functions (not Lagrange polynomials)
+\end{itemize}
+
+\subsubsection{Node Locations}
+The nodal locations in the reference coordinate system are:
+\input{latex_output/hex_27_monomial/node_locations.tex}
+
+\subsubsection{Monomial Basis Functions}
+The vector of 27 monomial basis functions, $\mathbf{b}(u, v, w)$, is:
+\[ \mathbf{b} = \input{latex_output/hex_27_monomial/basis_functions.tex} \]
+
+\subsubsection{Shape Functions}
+The resulting vector of 27 shape functions, $\mathbf{s}(u, v, w)$, is derived from $\mathbf{s} = \mathbf{B}^{-1} \mathbf{b}$. The expressions are:
+\[ \mathbf{s} = \input{latex_output/hex_27_monomial/shape_functions.tex} \]
+
 \section{Tetrahedron Elements}
 
 \subsection{Tet10 Element (10 nodes, 1 DOF per node)}
@@ -230,6 +253,10 @@ For the S3-44 element, the inverse of the matrix $\mathbf{B}$ used in the deriva
 \subsection{S3-92 Element}
 For the S3-92 element, the inverse of the matrix $\mathbf{B}$ used in the derivation is:
 \[ \mathbf{B}^{-1} = \resizebox{\linewidth}{!}{$\input{latex_output/shell_92/B_inv_matrix.tex}$} \]
+
+\subsection{Q27 Monomial Element}
+For the Q27 Monomial element, the inverse of the matrix $\mathbf{B}$ used in the derivation is:
+\[ \mathbf{B}^{-1} = \resizebox{\linewidth}{!}{$\input{latex_output/hex_27_monomial/B_inv_matrix.tex}$} \]
 
 \subsection{Tet10 Element}
 For the Tet10 element, the inverse of the matrix $\mathbf{B}$ used in the derivation is:

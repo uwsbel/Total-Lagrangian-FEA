@@ -12,6 +12,7 @@ python3 beam_34.py
 python3 shell_44.py
 python3 shell_92.py
 python3 hex_27.py
+python3 hex_27_basis.py
 python3 tet_10.py
 echo "Python files completed!"
 
