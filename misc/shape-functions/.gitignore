@@ -1,0 +1,20 @@
+# LaTeX build artifacts (keep .tex sources tracked)
+*.aux
+*.log
+*.out
+*.pdf
+*.synctex.gz
+*.toc
+*.lof
+*.lot
+*.bbl
+*.blg
+*.dvi
+*.fls
+*.fdb_latexmk
+
+
+# Ignore all latex_output directories
+latex_output/
+
+

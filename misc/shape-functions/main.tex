@@ -1,0 +1,238 @@
+% Use pdflatex to compile the document.
+% !TEX program = pdflatex
+\documentclass[12pt]{article}
+\batchmode
+
+% Essential packages
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{geometry}
+\usepackage{graphicx}
+\usepackage{float}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{longtable}
+\usepackage{multirow}
+\usepackage{resizegather}
+
+% Page setup
+\geometry{margin=1in}
+
+% Document information
+\title{ANCF Shape Functions}
+\author{Ganesh Arivoli, Dan Negrut}
+
+\begin{document}
+
+\maketitle
+
+\section{Introduction}
+This report presents the symbolic generation of shape functions for various ANCF (Absolute Nodal Coordinate Formulation) elements using SymPy. The elements include beam and shell elements with different nodal configurations and degrees of freedom.
+
+\section{Element Overview}
+The following elements have been analyzed:
+
+\begin{table}[h]
+\centering
+\begin{tabular}{llll}
+\toprule
+Element Type & Nodes & DOF per Node & Total DOF \\
+\midrule
+B3-22 (Beam) & 2 & 2 & 4 \\
+B3-24 (Beam) & 2 & 4 & 8 \\
+B3-34 (Beam) & 3 & 4 & 12 \\
+S3-44 (Shell) & 4 & 4 & 16 \\
+S3-92 (Shell) & 9 & 2 & 18 \\
+Q27 (Hex) & 27 & 1 & 27 \\
+Tet10 (Tetrahedron) & 10 & 1 & 10 \\
+\bottomrule
+\end{tabular}
+\caption{Element configurations}
+\end{table}
+
+\section{Beam Elements}
+
+\subsection{B3-22 Element (2 nodes, 2 DOF per node)}
+The B3-22 element has the following characteristics:
+\begin{itemize}
+    \item Element type: Beam element
+    \item Number of nodes: 2
+    \item Number of degrees of freedom per node: 2 (position vector $\mathbf{r}$ and the position gradient $\frac{\partial \mathbf{r}}{\partial u}$)
+    \item Total number of degrees of freedom: 4
+\end{itemize}
+
+\subsubsection{Node Locations}
+The nodal locations in the reference coordinate system are:
+\input{latex_output/beam_22/node_locations.tex}
+
+\subsubsection{Monomial Basis Functions}
+The vector of 4 monomial basis functions, $\mathbf{b}(u)$, is:
+\[ \mathbf{b} = \input{latex_output/beam_22/basis_functions.tex} \]
+
+\subsubsection{Shape Functions}
+The resulting vector of 4 shape functions, $\mathbf{s}(u)$, is derived from $\mathbf{s} = \mathbf{B}_{12}^{-1} \mathbf{b}$. The expressions are:
+\[ \mathbf{s} = \input{latex_output/beam_22/shape_functions.tex} \]
+
+\subsection{B3-24 Element (2 nodes, 4 DOF per node)}
+The B3-24 element has the following characteristics:
+\begin{itemize}
+    \item Element type: Beam element
+    \item Number of nodes: 2
+    \item Number of degrees of freedom per node: 4 (position vector $\mathbf{r}$, and the position gradients $\frac{\partial \mathbf{r}}{\partial u}$, $\frac{\partial \mathbf{r}}{\partial v}$, and $\frac{\partial \mathbf{r}}{\partial w}$)
+    \item Total number of degrees of freedom: 8
+\end{itemize}
+
+\subsubsection{Node Locations}
+The nodal locations in the reference coordinate system are:
+\input{latex_output/beam_24/node_locations.tex}
+
+\subsubsection{Monomial Basis Functions}
+The vector of 8 monomial basis functions, $\mathbf{b}(u, v, w)$, is:
+\[ \mathbf{b} = \input{latex_output/beam_24/basis_functions.tex} \]
+
+\subsubsection{Shape Functions}
+The resulting vector of 8 shape functions, $\mathbf{s}(u, v, w)$, is derived from $\mathbf{s} = \mathbf{B}_{12}^{-1} \mathbf{b}$. The expressions are:
+\[ \mathbf{s} = \input{latex_output/beam_24/shape_functions.tex} \]
+
+\subsection{B3-34 Element (3 nodes, 4 DOF per node)}
+The B3-34 element has the following characteristics:
+\begin{itemize}
+    \item Element type: Beam element
+    \item Number of nodes: 3
+    \item Number of degrees of freedom per node: 4 (position vector $\mathbf{r}$, and the position gradients $\frac{\partial \mathbf{r}}{\partial u}$, $\frac{\partial \mathbf{r}}{\partial v}$, and $\frac{\partial \mathbf{r}}{\partial w}$)
+    \item Total number of degrees of freedom: 12
+\end{itemize}
+
+\subsubsection{Node Locations}
+The nodal locations in the reference coordinate system are:
+\input{latex_output/beam_34/node_locations.tex}
+
+\subsubsection{Monomial Basis Functions}
+The vector of 12 monomial basis functions, $\mathbf{b}(u, v, w)$, is:
+\[ \mathbf{b} = \input{latex_output/beam_34/basis_functions.tex} \]
+
+\subsubsection{Shape Functions}
+The resulting vector of 12 shape functions, $\mathbf{s}(u, v, w)$, is derived from $\mathbf{s} = \mathbf{B}_{12}^{-1} \mathbf{b}$. The expressions are:
+\[ \mathbf{s} = \input{latex_output/beam_34/shape_functions.tex} \]
+
+\section{Shell Elements}
+
+\subsection{S3-44 Element (4 nodes, 4 DOF per node)}
+The S3-44 element has the following characteristics:
+\begin{itemize}
+    \item Element type: Shell element
+    \item Number of nodes: 4
+    \item Number of degrees of freedom per node: 4 (position vector $\mathbf{r}$, and the position gradients $\frac{\partial \mathbf{r}}{\partial u}$, $\frac{\partial \mathbf{r}}{\partial v}$, and $\frac{\partial \mathbf{r}}{\partial w}$)
+    \item Total number of degrees of freedom: 16
+\end{itemize}
+
+\subsubsection{Node Locations}
+The nodal locations in the reference coordinate system are:
+\input{latex_output/shell_44/node_locations.tex}
+
+\subsubsection{Monomial Basis Functions}
+The vector of 16 monomial basis functions, $\mathbf{b}(u, v, w)$, is:
+\[ \mathbf{b} = \input{latex_output/shell_44/basis_functions.tex} \]
+
+\subsubsection{Shape Functions}
+The resulting vector of 16 shape functions, $\mathbf{s}(u, v, w)$, is derived from $\mathbf{s} = \mathbf{B}^{-1} \mathbf{b}$. The expressions are:
+\[ \mathbf{s} = \input{latex_output/shell_44/shape_functions.tex} \]
+
+\subsection{S3-92 Element (9 nodes, 2 DOF per node)}
+The S3-92 element has the following characteristics:
+\begin{itemize}
+    \item Element type: Shell element
+    \item Number of nodes: 9
+    \item Number of degrees of freedom per node: 2 (position vector $\mathbf{r}$ and one gradient)
+    \item Total number of degrees of freedom: 18
+\end{itemize}
+
+\subsubsection{Node Locations}
+The nodal locations in the reference coordinate system are:
+\input{latex_output/shell_92/node_locations.tex}
+
+\subsubsection{Monomial Basis Functions}
+The vector of 18 monomial basis functions, $\mathbf{b}(u, v, w)$, is:
+\[ \mathbf{b} = \input{latex_output/shell_92/basis_functions.tex} \]
+
+\subsubsection{Shape Functions}
+The resulting vector of 18 shape functions, $\mathbf{s}(u, v, w)$, is derived from $\mathbf{s} = \mathbf{B}^{-1} \mathbf{b}$. The expressions are:
+\[ \mathbf{s} = \input{latex_output/shell_92/shape_functions.tex} \]
+
+\section{Hex Elements}
+
+\subsection{Hexahedron Q27 Element (27 nodes, 1 DOF per node)}
+The Q27 element has the following characteristics:
+\begin{itemize}
+    \item Element type: 27-Node Lagrange Hexahedron (Q27)
+    \item Number of nodes: 27
+    \item Number of degrees of freedom per node: 1 (position vector $\mathbf{r}$)
+    \item Total number of degrees of freedom: 27
+    \item Basis: Tensor product of 1D quadratic Lagrange polynomials
+\end{itemize}
+
+\subsubsection{Node Locations}
+The nodal locations in the reference coordinate system are:
+\input{latex_output/hex_q27_lagrange/node_locations.tex}
+
+\subsubsection{1D Lagrange Polynomials}
+The 1D quadratic Lagrange polynomials used as the basis are:
+\[ \mathbf{L}(s) = \input{latex_output/hex_q27_lagrange/1D_lagrange_polynomials.tex} \]
+
+\subsubsection{Shape Functions}
+The resulting vector of 27 shape functions, $\mathbf{s}(\xi, \eta, \zeta)$, are tensor products of the 1D Lagrange polynomials. The expressions are:
+\[ \mathbf{s} = \input{latex_output/hex_q27_lagrange/shape_functions.tex} \]
+
+\section{Tetrahedron Elements}
+
+\subsection{Tet10 Element (10 nodes, 1 DOF per node)}
+The Tet10 element has the following characteristics:
+\begin{itemize}
+    \item Element type: 10-Node Tetrahedron (Tet10)
+    \item Number of nodes: 10
+    \item Number of degrees of freedom per node: 1 (position vector $\mathbf{r}$)
+    \item Total number of degrees of freedom: 10
+    \item Basis: Quadratic monomial basis functions
+\end{itemize}
+
+\subsubsection{Node Locations}
+The nodal locations in the reference coordinate system are:
+\input{latex_output/tet_10/node_locations.tex}
+
+\subsubsection{Monomial Basis Functions}
+The vector of 10 monomial basis functions, $\mathbf{b}(u, v, w)$, is:
+\[ \mathbf{b} = \input{latex_output/tet_10/basis_functions.tex} \]
+
+\subsubsection{Shape Functions}
+The resulting vector of 10 shape functions, $\mathbf{s}(u, v, w)$, is derived from $\mathbf{s} = \mathbf{B}^{-1} \mathbf{b}$. The expressions are:
+\[ \mathbf{s} = \input{latex_output/tet_10/shape_functions.tex} \]
+
+\appendix
+
+\section{Inverse B Matrices}
+
+\subsection{B3-22 Element}
+For the B3-22 element, the inverse of the matrix $\mathbf{B}_{12}$ used in the derivation is:
+\[ \mathbf{B}_{12}^{-1} = \input{latex_output/beam_22/B_inv_matrix.tex} \]
+
+\subsection{B3-24 Element}
+For the B3-24 element, the inverse of the matrix $\mathbf{B}_{12}$ used in the derivation is:
+\[ \mathbf{B}_{12}^{-1} = \input{latex_output/beam_24/B_inv_matrix.tex} \]
+
+\subsection{B3-34 Element}
+For the B3-34 element, the inverse of the matrix $\mathbf{B}_{12}$ used in the derivation is:
+\[ \mathbf{B}_{12}^{-1} = \input{latex_output/beam_34/B_inv_matrix.tex} \]
+
+\subsection{S3-44 Element}
+For the S3-44 element, the inverse of the matrix $\mathbf{B}$ used in the derivation is:
+\[ \mathbf{B}^{-1} = \resizebox{\linewidth}{!}{$\input{latex_output/shell_44/B_inv_matrix.tex}$} \]
+
+\subsection{S3-92 Element}
+For the S3-92 element, the inverse of the matrix $\mathbf{B}$ used in the derivation is:
+\[ \mathbf{B}^{-1} = \resizebox{\linewidth}{!}{$\input{latex_output/shell_92/B_inv_matrix.tex}$} \]
+
+\subsection{Tet10 Element}
+For the Tet10 element, the inverse of the matrix $\mathbf{B}$ used in the derivation is:
+\[ \mathbf{B}^{-1} = \input{latex_output/tet_10/B_inv_matrix.tex} \]
+
+\end{document} 
