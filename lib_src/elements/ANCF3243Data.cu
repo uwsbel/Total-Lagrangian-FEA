@@ -44,12 +44,9 @@ __global__ void mass_matrix_qp_kernel(GPU_ANCF3243_Data *d_data)
   int thread_global = blockIdx.x * blockDim.x + threadIdx.x;
   int elem = thread_global / (Quadrature::N_SHAPE * Quadrature::N_SHAPE);
   int item_local = thread_global % (Quadrature::N_SHAPE * Quadrature::N_SHAPE);
-  printf("in kernel pre\n");
 
   if (elem >= d_data->gpu_n_beam())
     return;
-
-  printf("in kernel\n");
 
   for (int qp_local = 0; qp_local < n_qp_per_elem; qp_local++)
   {
