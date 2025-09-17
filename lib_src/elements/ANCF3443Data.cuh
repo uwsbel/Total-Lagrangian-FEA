@@ -305,6 +305,10 @@ struct GPU_ANCF3443_Data : public ElementBase
         return d_node_values + j + i * n_coef;
     }
 
+    __device__ int gpu_n_beam() const { return n_beam; }
+
+    __device__ int gpu_n_coef() const { return n_coef; }
+
 #endif
 
     __host__ __device__ int get_n_beam() const { return n_beam; }

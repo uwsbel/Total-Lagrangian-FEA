@@ -44,7 +44,7 @@ __global__ void mass_matrix_qp_kernel(GPU_ANCF3443_Data *d_data)
   int thread_global = blockIdx.x * blockDim.x + threadIdx.x;
   int elem = thread_global / (Quadrature::N_SHAPE * Quadrature::N_SHAPE);
   int item_local = thread_global % (Quadrature::N_SHAPE * Quadrature::N_SHAPE);
-  if (elem >= d_data->get_n_beam())
+  if (elem >= d_data->gpu_n_beam())
     return;
 
   for (int qp_local = 0; qp_local < n_qp_per_elem; qp_local++)
@@ -97,7 +97,7 @@ __global__ void calc_p_kernel(GPU_ANCF3443_Data *d_data)
   int elem_idx = thread_idx / Quadrature::N_TOTAL_QP;
   int qp_idx = thread_idx % Quadrature::N_TOTAL_QP;
 
-  if (elem_idx >= d_data->get_n_beam() || qp_idx >= Quadrature::N_TOTAL_QP)
+  if (elem_idx >= d_data->gpu_n_beam() || qp_idx >= Quadrature::N_TOTAL_QP)
     return;
 
   ancf3443_compute_p(elem_idx, qp_idx, d_data);
@@ -162,7 +162,9 @@ void GPU_ANCF3443_Data::CalcMassMatrix()
   // Launch kernel
   int threads = 128;
   int blocks = (N_OUT + threads - 1) / threads;
+  std::cout << "3443 mass matrix kernel launch " << std::endl;
   mass_matrix_qp_kernel<<<blocks, threads>>>(d_data);
+  std::cout << "3443 mass matrix kernel " << std::endl;
 
   cudaDeviceSynchronize();
 }
@@ -174,8 +176,12 @@ void GPU_ANCF3443_Data::RetrieveMassMatrixToCPU(Eigen::MatrixXd &mass_matrix)
 
   mass_matrix.resize(n_coef, n_coef);
 
+  std::cout << "mass matrix size: " << mass_matrix.rows() << " x " << mass_matrix.cols() << std::endl;
+
   // Copy from device to host
   HANDLE_ERROR(cudaMemcpy(mass_matrix.data(), d_node_values, total_size * sizeof(double), cudaMemcpyDeviceToHost));
+
+  std::cout << "done memcpy" << std::endl;
 }
 
 void GPU_ANCF3443_Data::RetrieveInternalForceToCPU(Eigen::VectorXd &internal_force)
@@ -245,7 +251,7 @@ __global__ void compute_internal_force_kernel(GPU_ANCF3443_Data *d_data)
   int elem_idx = thread_idx / Quadrature::N_SHAPE;
   int node_idx = thread_idx % Quadrature::N_SHAPE;
 
-  if (elem_idx >= d_data->get_n_beam() || node_idx >= Quadrature::N_SHAPE)
+  if (elem_idx >= d_data->gpu_n_beam() || node_idx >= Quadrature::N_SHAPE)
     return;
 
   ancf3443_compute_internal_force(elem_idx, node_idx, d_data);
