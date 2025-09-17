@@ -1,3 +1,3 @@
-# NEW-ANCF
+# TL-FEA
 
-Resarch Code for Total Lagrangian Formulation for soft-body simulation using Absolute-Nordal-Coordinate-Formulation
+Research Code for Total-Lagrangian Finite Element Method for flex multibody dynamics.
