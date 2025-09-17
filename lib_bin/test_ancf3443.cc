@@ -28,7 +28,7 @@ int main() {
 
   // Compute B_inv on CPU
   Eigen::MatrixXd h_B_inv(Quadrature::N_SHAPE, Quadrature::N_SHAPE);
-  ANCFCPUUtils::B12_matrix(2.0, 1.0, 1.0, h_B_inv, Quadrature::N_SHAPE);
+  ANCFCPUUtils::ANCF3243_B12_matrix(2.0, 1.0, 1.0, h_B_inv, Quadrature::N_SHAPE);
 
   // Generate nodal coordinates for multiple beams - using Eigen vectors
   Eigen::VectorXd h_x12(gpu_3443_data.get_n_coef());
@@ -38,7 +38,7 @@ int main() {
   Eigen::VectorXd h_y12_jac(gpu_3443_data.get_n_coef());
   Eigen::VectorXd h_z12_jac(gpu_3443_data.get_n_coef());
 
-  ANCFCPUUtils::generate_beam_coordinates(n_beam, h_x12, h_y12, h_z12);
+  ANCFCPUUtils::ANCF3243_generate_beam_coordinates(n_beam, h_x12, h_y12, h_z12);
 
   // print h_x12
   for (int i = 0; i < gpu_3443_data.get_n_coef(); i++) {
@@ -62,8 +62,8 @@ int main() {
   // Calculate offsets - using Eigen vectors
   Eigen::VectorXi h_offset_start(gpu_3443_data.get_n_beam());
   Eigen::VectorXi h_offset_end(gpu_3443_data.get_n_beam());
-  ANCFCPUUtils::calculate_offsets(gpu_3443_data.get_n_beam(), h_offset_start,
-                                  h_offset_end);
+  ANCFCPUUtils::ANCF3243_calculate_offsets(gpu_3443_data.get_n_beam(), h_offset_start,
+                                           h_offset_end);
 
   gpu_3443_data.Setup(L, W, H, rho0, nu, E, h_B_inv, Quadrature::gauss_xi_m,
                       Quadrature::gauss_xi, Quadrature::gauss_eta,

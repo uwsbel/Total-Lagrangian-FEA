@@ -3,7 +3,8 @@
 #include <gtest/gtest.h>
 
 // Test fixture class for ANCF tests
-class ANCFUtilsTest : public ::testing::Test {
+class ANCFUtilsTest : public ::testing::Test
+{
 protected:
   void SetUp() override {}
 
@@ -14,12 +15,13 @@ protected:
 // Tests for calculate_offsets
 // ========================================
 
-TEST_F(ANCFUtilsTest, CalculateOffsets_SingleBeam) {
+TEST_F(ANCFUtilsTest, CalculateOffsets_SingleBeam)
+{
   const int n_beam = 1;
 
   Eigen::VectorXi offset_start(n_beam), offset_end(n_beam);
 
-  ANCFCPUUtils::calculate_offsets(n_beam, offset_start, offset_end);
+  ANCFCPUUtils::ANCF3243_calculate_offsets(n_beam, offset_start, offset_end);
 
   // Check vector sizes
   EXPECT_EQ(offset_start.size(), n_beam);
@@ -32,12 +34,13 @@ TEST_F(ANCFUtilsTest, CalculateOffsets_SingleBeam) {
   EXPECT_EQ(offset_end(0), 7);
 }
 
-TEST_F(ANCFUtilsTest, CalculateOffsets_TwoBeams) {
+TEST_F(ANCFUtilsTest, CalculateOffsets_TwoBeams)
+{
   const int n_beam = 2;
 
   Eigen::VectorXi offset_start(n_beam), offset_end(n_beam);
 
-  ANCFCPUUtils::calculate_offsets(n_beam, offset_start, offset_end);
+  ANCFCPUUtils::ANCF3243_calculate_offsets(n_beam, offset_start, offset_end);
 
   // Check offset values for two beams
   // Beam 0: offset_start(0) = 0 * 4 = 0, offset_end(0) = 0 + 7 = 7
@@ -48,19 +51,21 @@ TEST_F(ANCFUtilsTest, CalculateOffsets_TwoBeams) {
   EXPECT_EQ(offset_end(1), 11);
 }
 
-TEST_F(ANCFUtilsTest, CalculateOffsets_MultipleBeams) {
+TEST_F(ANCFUtilsTest, CalculateOffsets_MultipleBeams)
+{
   const int n_beam = 5;
 
   Eigen::VectorXi offset_start(n_beam), offset_end(n_beam);
 
-  ANCFCPUUtils::calculate_offsets(n_beam, offset_start, offset_end);
+  ANCFCPUUtils::ANCF3243_calculate_offsets(n_beam, offset_start, offset_end);
 
   // Check vector sizes
   EXPECT_EQ(offset_start.size(), n_beam);
   EXPECT_EQ(offset_end.size(), n_beam);
 
   // Check pattern: offset_start(i) = i * 4, offset_end(i) = offset_start(i) + 7
-  for (int i = 0; i < n_beam; ++i) {
+  for (int i = 0; i < n_beam; ++i)
+  {
     EXPECT_EQ(offset_start(i), i * 4);
     EXPECT_EQ(offset_end(i), offset_start(i) + 7);
   }
@@ -78,15 +83,17 @@ TEST_F(ANCFUtilsTest, CalculateOffsets_MultipleBeams) {
   EXPECT_EQ(offset_end(4), 23);
 }
 
-TEST_F(ANCFUtilsTest, CalculateOffsets_VerifySpan) {
+TEST_F(ANCFUtilsTest, CalculateOffsets_VerifySpan)
+{
   const int n_beam = 3;
 
   Eigen::VectorXi offset_start(n_beam), offset_end(n_beam);
 
-  ANCFCPUUtils::calculate_offsets(n_beam, offset_start, offset_end);
+  ANCFCPUUtils::ANCF3243_calculate_offsets(n_beam, offset_start, offset_end);
 
   // Verify that each beam spans exactly 8 elements (0-7 inclusive)
-  for (int i = 0; i < n_beam; ++i) {
+  for (int i = 0; i < n_beam; ++i)
+  {
     int span = offset_end(i) - offset_start(i) + 1;
     EXPECT_EQ(span, 8) << "Beam " << i << " should span 8 elements";
   }
