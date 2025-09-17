@@ -31,8 +31,8 @@ TEST(Test3243, MassMatrix2Beams)
   const double nu = 0.33;   // Poisson's ratio
   const double rho0 = 2700; // Density
 
-  Eigen::MatrixXd h_B_inv(Quadrature::N_SHAPE, Quadrature::N_SHAPE);
-  ANCFCPUUtils::ANCF3243_B12_matrix(2.0, 1.0, 1.0, h_B_inv, Quadrature::N_SHAPE);
+  Eigen::MatrixXd h_B_inv(Quadrature::N_SHAPE_3243, Quadrature::N_SHAPE_3243);
+  ANCFCPUUtils::ANCF3243_B12_matrix(2.0, 1.0, 1.0, h_B_inv, Quadrature::N_SHAPE_3243);
 
   Eigen::VectorXd h_x12(gpu_3243_data.get_n_coef());
   Eigen::VectorXd h_y12(gpu_3243_data.get_n_coef());
@@ -45,11 +45,11 @@ TEST(Test3243, MassMatrix2Beams)
   ANCFCPUUtils::ANCF3243_calculate_offsets(gpu_3243_data.get_n_beam(), h_offset_start,
                                            h_offset_end);
 
-  gpu_3243_data.Setup(L, W, H, rho0, nu, E, h_B_inv, Quadrature::gauss_xi_m,
-                      Quadrature::gauss_xi, Quadrature::gauss_eta,
-                      Quadrature::gauss_zeta, Quadrature::weight_xi_m,
-                      Quadrature::weight_xi, Quadrature::weight_eta,
-                      Quadrature::weight_zeta, h_x12, h_y12, h_z12,
+  gpu_3243_data.Setup(L, W, H, rho0, nu, E, h_B_inv, Quadrature::gauss_xi_m_6,
+                      Quadrature::gauss_xi_3, Quadrature::gauss_eta_2,
+                      Quadrature::gauss_zeta_2, Quadrature::weight_xi_m_6,
+                      Quadrature::weight_xi_3, Quadrature::weight_eta_2,
+                      Quadrature::weight_zeta_2, h_x12, h_y12, h_z12,
                       h_offset_start, h_offset_end);
 
   gpu_3243_data.CalcDsDuPre();
@@ -97,8 +97,8 @@ TEST(Test3243, MassMatrix3Beams)
   const double nu = 0.33;   // Poisson's ratio
   const double rho0 = 2700; // Density
 
-  Eigen::MatrixXd h_B_inv(Quadrature::N_SHAPE, Quadrature::N_SHAPE);
-  ANCFCPUUtils::ANCF3243_B12_matrix(2.0, 1.0, 1.0, h_B_inv, Quadrature::N_SHAPE);
+  Eigen::MatrixXd h_B_inv(Quadrature::N_SHAPE_3243, Quadrature::N_SHAPE_3243);
+  ANCFCPUUtils::ANCF3243_B12_matrix(2.0, 1.0, 1.0, h_B_inv, Quadrature::N_SHAPE_3243);
 
   Eigen::VectorXd h_x12(gpu_3243_data.get_n_coef());
   Eigen::VectorXd h_y12(gpu_3243_data.get_n_coef());
@@ -111,11 +111,11 @@ TEST(Test3243, MassMatrix3Beams)
   ANCFCPUUtils::ANCF3243_calculate_offsets(gpu_3243_data.get_n_beam(), h_offset_start,
                                            h_offset_end);
 
-  gpu_3243_data.Setup(L, W, H, rho0, nu, E, h_B_inv, Quadrature::gauss_xi_m,
-                      Quadrature::gauss_xi, Quadrature::gauss_eta,
-                      Quadrature::gauss_zeta, Quadrature::weight_xi_m,
-                      Quadrature::weight_xi, Quadrature::weight_eta,
-                      Quadrature::weight_zeta, h_x12, h_y12, h_z12,
+  gpu_3243_data.Setup(L, W, H, rho0, nu, E, h_B_inv, Quadrature::gauss_xi_m_6,
+                      Quadrature::gauss_xi_3, Quadrature::gauss_eta_2,
+                      Quadrature::gauss_zeta_2, Quadrature::weight_xi_m_6,
+                      Quadrature::weight_xi_3, Quadrature::weight_eta_2,
+                      Quadrature::weight_zeta_2, h_x12, h_y12, h_z12,
                       h_offset_start, h_offset_end);
 
   gpu_3243_data.CalcDsDuPre();

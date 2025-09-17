@@ -38,16 +38,16 @@ struct GPU_ANCF3443_Data : public ElementBase
     // Const get functions
     __device__ const Eigen::Map<Eigen::MatrixXd> B_inv() const
     {
-        int row_size = Quadrature::N_SHAPE;
-        int col_size = Quadrature::N_SHAPE;
+        int row_size = Quadrature::N_SHAPE_3243;
+        int col_size = Quadrature::N_SHAPE_3243;
         return Eigen::Map<Eigen::MatrixXd>(d_B_inv, row_size, col_size);
     }
 
     __device__ Eigen::Map<Eigen::MatrixXd> ds_du_pre(int qp_idx) const
     {
-        int row_size = Quadrature::N_SHAPE;
+        int row_size = Quadrature::N_SHAPE_3243;
         int col_size = 3;
-        double *qp_data = d_ds_du_pre + qp_idx * Quadrature::N_SHAPE * 3;
+        double *qp_data = d_ds_du_pre + qp_idx * Quadrature::N_SHAPE_3243 * 3;
         return Eigen::Map<Eigen::MatrixXd>(qp_data, row_size, col_size);
     }
 
@@ -153,52 +153,52 @@ struct GPU_ANCF3443_Data : public ElementBase
 
     __device__ Eigen::Map<Eigen::VectorXd> x12(int elem)
     {
-        return Eigen::Map<Eigen::VectorXd>(d_x12 + elem * (Quadrature::N_SHAPE / 2), Quadrature::N_SHAPE);
+        return Eigen::Map<Eigen::VectorXd>(d_x12 + elem * (Quadrature::N_SHAPE_3243 / 2), Quadrature::N_SHAPE_3243);
     }
 
     __device__ Eigen::Map<Eigen::VectorXd> const x12(int elem) const
     {
-        return Eigen::Map<Eigen::VectorXd>(d_x12 + elem * (Quadrature::N_SHAPE / 2), Quadrature::N_SHAPE);
+        return Eigen::Map<Eigen::VectorXd>(d_x12 + elem * (Quadrature::N_SHAPE_3243 / 2), Quadrature::N_SHAPE_3243);
     }
 
     __device__ Eigen::Map<Eigen::VectorXd> y12(int elem)
     {
-        return Eigen::Map<Eigen::VectorXd>(d_y12 + elem * (Quadrature::N_SHAPE / 2), Quadrature::N_SHAPE);
+        return Eigen::Map<Eigen::VectorXd>(d_y12 + elem * (Quadrature::N_SHAPE_3243 / 2), Quadrature::N_SHAPE_3243);
     }
 
     __device__ Eigen::Map<Eigen::VectorXd> const y12(int elem) const
     {
-        return Eigen::Map<Eigen::VectorXd>(d_y12 + elem * (Quadrature::N_SHAPE / 2), Quadrature::N_SHAPE);
+        return Eigen::Map<Eigen::VectorXd>(d_y12 + elem * (Quadrature::N_SHAPE_3243 / 2), Quadrature::N_SHAPE_3243);
     }
 
     __device__ Eigen::Map<Eigen::VectorXd> z12(int elem)
     {
-        return Eigen::Map<Eigen::VectorXd>(d_z12 + elem * (Quadrature::N_SHAPE / 2), Quadrature::N_SHAPE);
+        return Eigen::Map<Eigen::VectorXd>(d_z12 + elem * (Quadrature::N_SHAPE_3243 / 2), Quadrature::N_SHAPE_3243);
     }
 
     __device__ Eigen::Map<Eigen::VectorXd> const z12(int elem) const
     {
-        return Eigen::Map<Eigen::VectorXd>(d_z12 + elem * (Quadrature::N_SHAPE / 2), Quadrature::N_SHAPE);
+        return Eigen::Map<Eigen::VectorXd>(d_z12 + elem * (Quadrature::N_SHAPE_3243 / 2), Quadrature::N_SHAPE_3243);
     }
 
     __device__ Eigen::Map<Eigen::MatrixXd> F(int elem_idx, int qp_idx)
     {
-        return Eigen::Map<Eigen::MatrixXd>(d_F + (elem_idx * Quadrature::N_TOTAL_QP + qp_idx) * 9, 3, 3);
+        return Eigen::Map<Eigen::MatrixXd>(d_F + (elem_idx * Quadrature::N_TOTAL_QP_3_2_2 + qp_idx) * 9, 3, 3);
     }
 
     __device__ const Eigen::Map<Eigen::MatrixXd> F(int elem_idx, int qp_idx) const
     {
-        return Eigen::Map<Eigen::MatrixXd>(d_F + (elem_idx * Quadrature::N_TOTAL_QP + qp_idx) * 9, 3, 3);
+        return Eigen::Map<Eigen::MatrixXd>(d_F + (elem_idx * Quadrature::N_TOTAL_QP_3_2_2 + qp_idx) * 9, 3, 3);
     }
 
     __device__ Eigen::Map<Eigen::MatrixXd> P(int elem_idx, int qp_idx)
     {
-        return Eigen::Map<Eigen::MatrixXd>(d_P + (elem_idx * Quadrature::N_TOTAL_QP + qp_idx) * 9, 3, 3);
+        return Eigen::Map<Eigen::MatrixXd>(d_P + (elem_idx * Quadrature::N_TOTAL_QP_3_2_2 + qp_idx) * 9, 3, 3);
     }
 
     __device__ const Eigen::Map<Eigen::MatrixXd> P(int elem_idx, int qp_idx) const
     {
-        return Eigen::Map<Eigen::MatrixXd>(d_P + (elem_idx * Quadrature::N_TOTAL_QP + qp_idx) * 9, 3, 3);
+        return Eigen::Map<Eigen::MatrixXd>(d_P + (elem_idx * Quadrature::N_TOTAL_QP_3_2_2 + qp_idx) * 9, 3, 3);
     }
 
     __device__ Eigen::Map<Eigen::VectorXd> f_elem_out(int global_node_idx)
@@ -317,14 +317,14 @@ struct GPU_ANCF3443_Data : public ElementBase
     // Constructor
     GPU_ANCF3443_Data(int num_beams) : n_beam(num_beams)
     {
-        n_coef = Quadrature::N_SHAPE + 4 * (n_beam - 1);
+        n_coef = Quadrature::N_SHAPE_3243 + 4 * (n_beam - 1);
         type = TYPE_3443;
     }
 
     void Initialize()
     {
-        HANDLE_ERROR(cudaMalloc(&d_B_inv, Quadrature::N_SHAPE * Quadrature::N_SHAPE * sizeof(double)));
-        HANDLE_ERROR(cudaMalloc(&d_ds_du_pre, Quadrature::N_TOTAL_QP * Quadrature::N_SHAPE * 3 * sizeof(double)));
+        HANDLE_ERROR(cudaMalloc(&d_B_inv, Quadrature::N_SHAPE_3243 * Quadrature::N_SHAPE_3243 * sizeof(double)));
+        HANDLE_ERROR(cudaMalloc(&d_ds_du_pre, Quadrature::N_TOTAL_QP_3_2_2 * Quadrature::N_SHAPE_3243 * 3 * sizeof(double)));
 
         HANDLE_ERROR(cudaMalloc(&d_gauss_xi_m, Quadrature::N_QP_6 * sizeof(double)));
         HANDLE_ERROR(cudaMalloc(&d_gauss_xi, Quadrature::N_QP_3 * sizeof(double)));
@@ -348,8 +348,8 @@ struct GPU_ANCF3443_Data : public ElementBase
 
         HANDLE_ERROR(cudaMalloc(&d_node_values, n_coef * n_coef * sizeof(double)));
 
-        HANDLE_ERROR(cudaMalloc(&d_F, n_beam * Quadrature::N_TOTAL_QP * 3 * 3 * sizeof(double)));
-        HANDLE_ERROR(cudaMalloc(&d_P, n_beam * Quadrature::N_TOTAL_QP * 3 * 3 * sizeof(double)));
+        HANDLE_ERROR(cudaMalloc(&d_F, n_beam * Quadrature::N_TOTAL_QP_3_2_2 * 3 * 3 * sizeof(double)));
+        HANDLE_ERROR(cudaMalloc(&d_P, n_beam * Quadrature::N_TOTAL_QP_3_2_2 * 3 * 3 * sizeof(double)));
         HANDLE_ERROR(cudaMalloc(&d_f_elem_out, n_coef * 3 * sizeof(double)));
 
         // copy struct to device
@@ -398,7 +398,7 @@ struct GPU_ANCF3443_Data : public ElementBase
             return;
         }
 
-        HANDLE_ERROR(cudaMemcpy(d_B_inv, h_B_inv.data(), Quadrature::N_SHAPE * Quadrature::N_SHAPE * sizeof(double), cudaMemcpyHostToDevice));
+        HANDLE_ERROR(cudaMemcpy(d_B_inv, h_B_inv.data(), Quadrature::N_SHAPE_3243 * Quadrature::N_SHAPE_3243 * sizeof(double), cudaMemcpyHostToDevice));
 
         HANDLE_ERROR(cudaMemcpy(d_gauss_xi_m, gauss_xi_m.data(), Quadrature::N_QP_6 * sizeof(double), cudaMemcpyHostToDevice));
         HANDLE_ERROR(cudaMemcpy(d_gauss_xi, gauss_xi.data(), Quadrature::N_QP_3 * sizeof(double), cudaMemcpyHostToDevice));
@@ -423,8 +423,8 @@ struct GPU_ANCF3443_Data : public ElementBase
         HANDLE_ERROR(cudaMemset(d_node_values, 0, n_coef * n_coef * sizeof(double)));
 
         cudaMemset(d_f_elem_out, 0, n_coef * 3 * sizeof(double));
-        cudaMemset(d_F, 0, n_beam * Quadrature::N_TOTAL_QP * 3 * 3 * sizeof(double));
-        cudaMemset(d_P, 0, n_beam * Quadrature::N_TOTAL_QP * 3 * 3 * sizeof(double));
+        cudaMemset(d_F, 0, n_beam * Quadrature::N_TOTAL_QP_3_2_2 * 3 * 3 * sizeof(double));
+        cudaMemset(d_P, 0, n_beam * Quadrature::N_TOTAL_QP_3_2_2 * 3 * 3 * sizeof(double));
 
         HANDLE_ERROR(cudaMemcpy(d_H, &height, sizeof(double), cudaMemcpyHostToDevice));
         HANDLE_ERROR(cudaMemcpy(d_W, &width, sizeof(double), cudaMemcpyHostToDevice));

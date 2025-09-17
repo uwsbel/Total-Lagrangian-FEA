@@ -20,17 +20,17 @@ __global__ void ds_du_pre_kernel(double L, double W, double H, GPU_ANCF3443_Data
   double v = W * eta / 2.0;
   double w = H * zeta / 2.0;
 
-  double db_du[Quadrature::N_SHAPE] = {0, 1, 0, 0, v, w, 2 * u, 3 * u * u};
-  double db_dv[Quadrature::N_SHAPE] = {0, 0, 1, 0, u, 0, 0, 0};
-  double db_dw[Quadrature::N_SHAPE] = {0, 0, 0, 1, 0, u, 0, 0};
+  double db_du[Quadrature::N_SHAPE_3243] = {0, 1, 0, 0, v, w, 2 * u, 3 * u * u};
+  double db_dv[Quadrature::N_SHAPE_3243] = {0, 0, 1, 0, u, 0, 0, 0};
+  double db_dw[Quadrature::N_SHAPE_3243] = {0, 0, 0, 1, 0, u, 0, 0};
 
-  double ds_du[Quadrature::N_SHAPE], ds_dv[Quadrature::N_SHAPE], ds_dw[Quadrature::N_SHAPE];
+  double ds_du[Quadrature::N_SHAPE_3243], ds_dv[Quadrature::N_SHAPE_3243], ds_dw[Quadrature::N_SHAPE_3243];
   ancf3443_mat_vec_mul8(d_data->B_inv(), db_du, ds_du);
   ancf3443_mat_vec_mul8(d_data->B_inv(), db_dv, ds_dv);
   ancf3443_mat_vec_mul8(d_data->B_inv(), db_dw, ds_dw);
 
   // Store as 8x3 matrix: for each i in 0..7, store ds_du, ds_dv, ds_dw as columns
-  for (int i = 0; i < Quadrature::N_SHAPE; ++i)
+  for (int i = 0; i < Quadrature::N_SHAPE_3243; ++i)
   {
     d_data->ds_du_pre(idx)(i, 0) = ds_du[i];
     d_data->ds_du_pre(idx)(i, 1) = ds_dv[i];
@@ -42,8 +42,8 @@ __global__ void mass_matrix_qp_kernel(GPU_ANCF3443_Data *d_data)
 {
   int n_qp_per_elem = Quadrature::N_QP_6 * Quadrature::N_QP_2 * Quadrature::N_QP_2;
   int thread_global = blockIdx.x * blockDim.x + threadIdx.x;
-  int elem = thread_global / (Quadrature::N_SHAPE * Quadrature::N_SHAPE);
-  int item_local = thread_global % (Quadrature::N_SHAPE * Quadrature::N_SHAPE);
+  int elem = thread_global / (Quadrature::N_SHAPE_3243 * Quadrature::N_SHAPE_3243);
+  int item_local = thread_global % (Quadrature::N_SHAPE_3243 * Quadrature::N_SHAPE_3243);
   if (elem >= d_data->gpu_n_beam())
     return;
 
@@ -82,8 +82,8 @@ __global__ void mass_matrix_qp_kernel(GPU_ANCF3443_Data *d_data)
     double detJ = ancf3443_det3x3(J);
 
     // For each local node, output (global_node, value)
-    int i_local = item_local / Quadrature::N_SHAPE;        // Local node index (0-7)
-    int j_local = item_local % Quadrature::N_SHAPE;        // Local shape function index (0-7)
+    int i_local = item_local / Quadrature::N_SHAPE_3243;   // Local node index (0-7)
+    int j_local = item_local % Quadrature::N_SHAPE_3243;   // Local shape function index (0-7)
     int i_global = d_data->offset_start()(elem) + i_local; // Global node index
     int j_global = d_data->offset_start()(elem) + j_local; // Global shape function index
 
@@ -94,10 +94,10 @@ __global__ void mass_matrix_qp_kernel(GPU_ANCF3443_Data *d_data)
 __global__ void calc_p_kernel(GPU_ANCF3443_Data *d_data)
 {
   int thread_idx = blockIdx.x * blockDim.x + threadIdx.x;
-  int elem_idx = thread_idx / Quadrature::N_TOTAL_QP;
-  int qp_idx = thread_idx % Quadrature::N_TOTAL_QP;
+  int elem_idx = thread_idx / Quadrature::N_TOTAL_QP_3_2_2;
+  int qp_idx = thread_idx % Quadrature::N_TOTAL_QP_3_2_2;
 
-  if (elem_idx >= d_data->gpu_n_beam() || qp_idx >= Quadrature::N_TOTAL_QP)
+  if (elem_idx >= d_data->gpu_n_beam() || qp_idx >= Quadrature::N_TOTAL_QP_3_2_2)
     return;
 
   ancf3443_compute_p(elem_idx, qp_idx, d_data);
@@ -106,7 +106,7 @@ __global__ void calc_p_kernel(GPU_ANCF3443_Data *d_data)
 void GPU_ANCF3443_Data::CalcP()
 {
   int threads = 128;
-  int blocks = (n_beam * Quadrature::N_TOTAL_QP + threads - 1) / threads;
+  int blocks = (n_beam * Quadrature::N_TOTAL_QP_3_2_2 + threads - 1) / threads;
   calc_p_kernel<<<blocks, threads>>>(d_data);
   cudaDeviceSynchronize();
 }
@@ -123,24 +123,24 @@ void GPU_ANCF3443_Data::CalcDsDuPre()
 void GPU_ANCF3443_Data::PrintDsDuPre()
 {
   // Allocate host memory for all quadrature points
-  const int total_size = Quadrature::N_TOTAL_QP * Quadrature::N_SHAPE * 3;
+  const int total_size = Quadrature::N_TOTAL_QP_3_2_2 * Quadrature::N_SHAPE_3243 * 3;
   double *h_ds_du_pre_raw = new double[total_size];
 
   // Copy from device to host
   HANDLE_ERROR(cudaMemcpy(h_ds_du_pre_raw, d_ds_du_pre, total_size * sizeof(double), cudaMemcpyDeviceToHost));
 
   // Print each quadrature point's matrix
-  for (int qp = 0; qp < Quadrature::N_TOTAL_QP; ++qp)
+  for (int qp = 0; qp < Quadrature::N_TOTAL_QP_3_2_2; ++qp)
   {
     std::cout << "\n=== Quadrature Point " << qp << " ===" << std::endl;
 
     // Create Eigen::Map for this quadrature point's data
-    double *qp_data = h_ds_du_pre_raw + qp * Quadrature::N_SHAPE * 3;
-    Eigen::Map<Eigen::MatrixXd> ds_du_matrix(qp_data, Quadrature::N_SHAPE, 3);
+    double *qp_data = h_ds_du_pre_raw + qp * Quadrature::N_SHAPE_3243 * 3;
+    Eigen::Map<Eigen::MatrixXd> ds_du_matrix(qp_data, Quadrature::N_SHAPE_3243, 3);
 
     // Print the 8x3 matrix with column headers
     std::cout << "        ds/du       ds/dv       ds/dw" << std::endl;
-    for (int i = 0; i < Quadrature::N_SHAPE; ++i)
+    for (int i = 0; i < Quadrature::N_SHAPE_3243; ++i)
     {
       std::cout << "Node " << i << ": ";
       for (int j = 0; j < 3; ++j)
@@ -157,7 +157,7 @@ void GPU_ANCF3443_Data::PrintDsDuPre()
 void GPU_ANCF3443_Data::CalcMassMatrix()
 {
   // Mass terms computation
-  const int N_OUT = n_beam * Quadrature::N_SHAPE * Quadrature::N_SHAPE;
+  const int N_OUT = n_beam * Quadrature::N_SHAPE_3243 * Quadrature::N_SHAPE_3243;
 
   // Launch kernel
   int threads = 128;
@@ -197,11 +197,11 @@ void GPU_ANCF3443_Data::RetrieveDeformationGradientToCPU(std::vector<std::vector
   deformation_gradient.resize(n_beam);
   for (int i = 0; i < n_beam; i++)
   {
-    deformation_gradient[i].resize(Quadrature::N_TOTAL_QP);
-    for (int j = 0; j < Quadrature::N_TOTAL_QP; j++)
+    deformation_gradient[i].resize(Quadrature::N_TOTAL_QP_3_2_2);
+    for (int j = 0; j < Quadrature::N_TOTAL_QP_3_2_2; j++)
     {
       deformation_gradient[i][j].resize(3, 3);
-      HANDLE_ERROR(cudaMemcpy(deformation_gradient[i][j].data(), d_F + i * Quadrature::N_TOTAL_QP * 3 * 3 + j * 3 * 3, 3 * 3 * sizeof(double), cudaMemcpyDeviceToHost));
+      HANDLE_ERROR(cudaMemcpy(deformation_gradient[i][j].data(), d_F + i * Quadrature::N_TOTAL_QP_3_2_2 * 3 * 3 + j * 3 * 3, 3 * 3 * sizeof(double), cudaMemcpyDeviceToHost));
     }
   }
 }
@@ -211,11 +211,11 @@ void GPU_ANCF3443_Data::RetrievePFromFToCPU(std::vector<std::vector<Eigen::Matri
   p_from_F.resize(n_beam);
   for (int i = 0; i < n_beam; i++)
   {
-    p_from_F[i].resize(Quadrature::N_TOTAL_QP);
-    for (int j = 0; j < Quadrature::N_TOTAL_QP; j++)
+    p_from_F[i].resize(Quadrature::N_TOTAL_QP_3_2_2);
+    for (int j = 0; j < Quadrature::N_TOTAL_QP_3_2_2; j++)
     {
       p_from_F[i][j].resize(3, 3);
-      HANDLE_ERROR(cudaMemcpy(p_from_F[i][j].data(), d_P + i * Quadrature::N_TOTAL_QP * 3 * 3 + j * 3 * 3, 3 * 3 * sizeof(double), cudaMemcpyDeviceToHost));
+      HANDLE_ERROR(cudaMemcpy(p_from_F[i][j].data(), d_P + i * Quadrature::N_TOTAL_QP_3_2_2 * 3 * 3 + j * 3 * 3, 3 * 3 * sizeof(double), cudaMemcpyDeviceToHost));
     }
   }
 }
@@ -248,10 +248,10 @@ void GPU_ANCF3443_Data::RetrievePositionToCPU(Eigen::VectorXd &x12, Eigen::Vecto
 __global__ void compute_internal_force_kernel(GPU_ANCF3443_Data *d_data)
 {
   int thread_idx = blockIdx.x * blockDim.x + threadIdx.x;
-  int elem_idx = thread_idx / Quadrature::N_SHAPE;
-  int node_idx = thread_idx % Quadrature::N_SHAPE;
+  int elem_idx = thread_idx / Quadrature::N_SHAPE_3243;
+  int node_idx = thread_idx % Quadrature::N_SHAPE_3243;
 
-  if (elem_idx >= d_data->gpu_n_beam() || node_idx >= Quadrature::N_SHAPE)
+  if (elem_idx >= d_data->gpu_n_beam() || node_idx >= Quadrature::N_SHAPE_3243)
     return;
 
   ancf3443_compute_internal_force(elem_idx, node_idx, d_data);
@@ -260,7 +260,7 @@ __global__ void compute_internal_force_kernel(GPU_ANCF3443_Data *d_data)
 void GPU_ANCF3443_Data::CalcInternalForce()
 {
   int threads = 128;
-  int blocks = (n_beam * Quadrature::N_SHAPE + threads - 1) / threads;
+  int blocks = (n_beam * Quadrature::N_SHAPE_3243 + threads - 1) / threads;
   compute_internal_force_kernel<<<blocks, threads>>>(d_data);
   cudaDeviceSynchronize();
 }
@@ -273,7 +273,7 @@ __global__ void compute_constraint_data_kernel(GPU_ANCF3443_Data *d_data)
 void GPU_ANCF3443_Data::CalcConstraintData()
 {
   int threads = 128;
-  int blocks = (n_beam * Quadrature::N_SHAPE + threads - 1) / threads;
+  int blocks = (n_beam * Quadrature::N_SHAPE_3243 + threads - 1) / threads;
   compute_constraint_data_kernel<<<blocks, threads>>>(d_data);
   cudaDeviceSynchronize();
 }

@@ -202,19 +202,19 @@ one_step_nesterov_kernel(ElementBase *d_data, SyncedNesterovSolver *d_nesterov_s
 
                     // Step 3: Compute internal forces at look-ahead positions
 
-                    // if (tid < d_data->get_n_beam() * Quadrature::N_TOTAL_QP)
+                    // if (tid < d_data->get_n_beam() * Quadrature::N_TOTAL_QP_3_2_2)
                     // {
-                    //     int elem_idx = tid / Quadrature::N_TOTAL_QP;
-                    //     int qp_idx = tid % Quadrature::N_TOTAL_QP;
+                    //     int elem_idx = tid / Quadrature::N_TOTAL_QP_3_2_2;
+                    //     int qp_idx = tid % Quadrature::N_TOTAL_QP_3_2_2;
                     //     compute_deformation_gradient(elem_idx, qp_idx, d_data);
                     // }
 
                     // grid.sync();
 
-                    if (tid < d_nesterov_solver->get_n_beam() * Quadrature::N_TOTAL_QP)
+                    if (tid < d_nesterov_solver->get_n_beam() * Quadrature::N_TOTAL_QP_3_2_2)
                     {
-                        int elem_idx = tid / Quadrature::N_TOTAL_QP;
-                        int qp_idx = tid % Quadrature::N_TOTAL_QP;
+                        int elem_idx = tid / Quadrature::N_TOTAL_QP_3_2_2;
+                        int qp_idx = tid % Quadrature::N_TOTAL_QP_3_2_2;
                         if (d_data->type == TYPE_3243)
                         {
                             ancf3243_compute_p(elem_idx, qp_idx, static_cast<GPU_ANCF3243_Data *>(d_data));
@@ -227,10 +227,10 @@ one_step_nesterov_kernel(ElementBase *d_data, SyncedNesterovSolver *d_nesterov_s
 
                     grid.sync();
 
-                    if (tid < d_nesterov_solver->get_n_beam() * Quadrature::N_SHAPE)
+                    if (tid < d_nesterov_solver->get_n_beam() * Quadrature::N_SHAPE_3243)
                     {
-                        int elem_idx = tid / Quadrature::N_SHAPE;
-                        int node_idx = tid % Quadrature::N_SHAPE;
+                        int elem_idx = tid / Quadrature::N_SHAPE_3243;
+                        int node_idx = tid % Quadrature::N_SHAPE_3243;
                         if (d_data->type == TYPE_3243)
                         {
                             ancf3243_compute_internal_force(elem_idx, node_idx, static_cast<GPU_ANCF3243_Data *>(d_data));
@@ -498,7 +498,7 @@ void SyncedNesterovSolver::OneStepNesterov()
     HANDLE_ERROR(cudaOccupancyMaxActiveBlocksPerMultiprocessor(&maxBlocksPerSm, one_step_nesterov_kernel, threads, 0));
     int maxCoopBlocks = maxBlocksPerSm * props.multiProcessorCount;
 
-    int N = max(n_coef_ * 3, n_beam_ * Quadrature::N_TOTAL_QP);
+    int N = max(n_coef_ * 3, n_beam_ * Quadrature::N_TOTAL_QP_3_2_2);
     int blocksNeeded = (N + threads - 1) / threads;
     int blocks = std::min(blocksNeeded, maxCoopBlocks);
 

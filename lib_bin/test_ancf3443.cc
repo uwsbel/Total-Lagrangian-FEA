@@ -11,7 +11,8 @@ const double E = 7e8;     // Young's modulus
 const double nu = 0.33;   // Poisson's ratio
 const double rho0 = 2700; // Density
 
-int main() {
+int main()
+{
   // initialize GPU data structure
   int n_beam = 3; // this is working
   GPU_ANCF3443_Data gpu_3443_data(n_beam);
@@ -27,8 +28,8 @@ int main() {
   std::cout << "Total nodes: " << gpu_3443_data.get_n_coef() << std::endl;
 
   // Compute B_inv on CPU
-  Eigen::MatrixXd h_B_inv(Quadrature::N_SHAPE, Quadrature::N_SHAPE);
-  ANCFCPUUtils::ANCF3243_B12_matrix(2.0, 1.0, 1.0, h_B_inv, Quadrature::N_SHAPE);
+  Eigen::MatrixXd h_B_inv(Quadrature::N_SHAPE_3243, Quadrature::N_SHAPE_3243);
+  ANCFCPUUtils::ANCF3243_B12_matrix(2.0, 1.0, 1.0, h_B_inv, Quadrature::N_SHAPE_3243);
 
   // Generate nodal coordinates for multiple beams - using Eigen vectors
   Eigen::VectorXd h_x12(gpu_3443_data.get_n_coef());
@@ -41,17 +42,20 @@ int main() {
   ANCFCPUUtils::ANCF3243_generate_beam_coordinates(n_beam, h_x12, h_y12, h_z12);
 
   // print h_x12
-  for (int i = 0; i < gpu_3443_data.get_n_coef(); i++) {
+  for (int i = 0; i < gpu_3443_data.get_n_coef(); i++)
+  {
     printf("h_x12(%d) = %f\n", i, h_x12(i));
   }
 
   // print h_y12
-  for (int i = 0; i < gpu_3443_data.get_n_coef(); i++) {
+  for (int i = 0; i < gpu_3443_data.get_n_coef(); i++)
+  {
     printf("h_y12(%d) = %f\n", i, h_y12(i));
   }
 
   // print h_z12
-  for (int i = 0; i < gpu_3443_data.get_n_coef(); i++) {
+  for (int i = 0; i < gpu_3443_data.get_n_coef(); i++)
+  {
     printf("h_z12(%d) = %f\n", i, h_z12(i));
   }
 
@@ -65,11 +69,11 @@ int main() {
   ANCFCPUUtils::ANCF3243_calculate_offsets(gpu_3443_data.get_n_beam(), h_offset_start,
                                            h_offset_end);
 
-  gpu_3443_data.Setup(L, W, H, rho0, nu, E, h_B_inv, Quadrature::gauss_xi_m,
-                      Quadrature::gauss_xi, Quadrature::gauss_eta,
-                      Quadrature::gauss_zeta, Quadrature::weight_xi_m,
-                      Quadrature::weight_xi, Quadrature::weight_eta,
-                      Quadrature::weight_zeta, h_x12, h_y12, h_z12,
+  gpu_3443_data.Setup(L, W, H, rho0, nu, E, h_B_inv, Quadrature::gauss_xi_m_6,
+                      Quadrature::gauss_xi_3, Quadrature::gauss_eta_2,
+                      Quadrature::gauss_zeta_2, Quadrature::weight_xi_m_6,
+                      Quadrature::weight_xi_3, Quadrature::weight_eta_2,
+                      Quadrature::weight_zeta_2, h_x12, h_y12, h_z12,
                       h_offset_start, h_offset_end);
 
   gpu_3443_data.CalcDsDuPre();
@@ -87,8 +91,10 @@ int main() {
   std::cout << "done RetrieveMassMatrixToCPU" << std::endl;
 
   std::cout << "mass matrix:" << std::endl;
-  for (int i = 0; i < mass_matrix.rows(); i++) {
-    for (int j = 0; j < mass_matrix.cols(); j++) {
+  for (int i = 0; i < mass_matrix.rows(); i++)
+  {
+    for (int j = 0; j < mass_matrix.cols(); j++)
+    {
       std::cout << mass_matrix(i, j) << " ";
     }
     std::cout << std::endl;
@@ -104,7 +110,8 @@ int main() {
   gpu_3443_data.RetrievePFromFToCPU(p_from_F);
   std::cout << "p from f:" << std::endl;
 
-  for (int i = 0; i < p_from_F.size(); i++) {
+  for (int i = 0; i < p_from_F.size(); i++)
+  {
     std::cout << "Element " << i << ":" << std::endl;
     for (int j = 0; j < p_from_F[i].size(); j++) // quadrature points
     {
@@ -120,7 +127,8 @@ int main() {
   Eigen::VectorXd internal_force;
   gpu_3443_data.RetrieveInternalForceToCPU(internal_force);
   std::cout << "internal force:" << std::endl;
-  for (int i = 0; i < internal_force.size(); i++) {
+  for (int i = 0; i < internal_force.size(); i++)
+  {
     std::cout << internal_force(i) << " ";
   }
 
@@ -132,7 +140,8 @@ int main() {
   Eigen::VectorXd constraint;
   gpu_3443_data.RetrieveConstraintDataToCPU(constraint);
   std::cout << "constraint:" << std::endl;
-  for (int i = 0; i < constraint.size(); i++) {
+  for (int i = 0; i < constraint.size(); i++)
+  {
     std::cout << constraint(i) << " ";
   }
   std::cout << std::endl;
@@ -140,8 +149,10 @@ int main() {
   Eigen::MatrixXd constraint_jac;
   gpu_3443_data.RetrieveConstraintJacobianToCPU(constraint_jac);
   std::cout << "constraint jacobian:" << std::endl;
-  for (int i = 0; i < constraint_jac.rows(); i++) {
-    for (int j = 0; j < constraint_jac.cols(); j++) {
+  for (int i = 0; i < constraint_jac.rows(); i++)
+  {
+    for (int j = 0; j < constraint_jac.cols(); j++)
+    {
       std::cout << constraint_jac(i, j) << " ";
     }
     std::cout << std::endl;
@@ -153,7 +164,8 @@ int main() {
   SyncedNesterovSolver solver(&gpu_3443_data);
   solver.Setup();
   solver.SetParameters(&params);
-  for (int i = 0; i < 30; i++) {
+  for (int i = 0; i < 30; i++)
+  {
     solver.Solve();
   }
 
@@ -161,21 +173,24 @@ int main() {
   gpu_3443_data.RetrievePositionToCPU(x12, y12, z12);
 
   std::cout << "x12:" << std::endl;
-  for (int i = 0; i < x12.size(); i++) {
+  for (int i = 0; i < x12.size(); i++)
+  {
     std::cout << x12(i) << " ";
   }
 
   std::cout << std::endl;
 
   std::cout << "y12:" << std::endl;
-  for (int i = 0; i < y12.size(); i++) {
+  for (int i = 0; i < y12.size(); i++)
+  {
     std::cout << y12(i) << " ";
   }
 
   std::cout << std::endl;
 
   std::cout << "z12:" << std::endl;
-  for (int i = 0; i < z12.size(); i++) {
+  for (int i = 0; i < z12.size(); i++)
+  {
     std::cout << z12(i) << " ";
   }
 
