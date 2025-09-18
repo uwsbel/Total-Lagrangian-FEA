@@ -215,22 +215,22 @@ struct GPU_ANCF3443_Data : public ElementBase
 
     __device__ Eigen::Map<Eigen::MatrixXd> F(int elem_idx, int qp_idx)
     {
-        return Eigen::Map<Eigen::MatrixXd>(d_F + (elem_idx * Quadrature::N_TOTAL_QP_3_2_2 + qp_idx) * 9, 3, 3);
+        return Eigen::Map<Eigen::MatrixXd>(d_F + (elem_idx * Quadrature::N_TOTAL_QP_4_4_3 + qp_idx) * 9, 3, 3);
     }
 
     __device__ const Eigen::Map<Eigen::MatrixXd> F(int elem_idx, int qp_idx) const
     {
-        return Eigen::Map<Eigen::MatrixXd>(d_F + (elem_idx * Quadrature::N_TOTAL_QP_3_2_2 + qp_idx) * 9, 3, 3);
+        return Eigen::Map<Eigen::MatrixXd>(d_F + (elem_idx * Quadrature::N_TOTAL_QP_4_4_3 + qp_idx) * 9, 3, 3);
     }
 
     __device__ Eigen::Map<Eigen::MatrixXd> P(int elem_idx, int qp_idx)
     {
-        return Eigen::Map<Eigen::MatrixXd>(d_P + (elem_idx * Quadrature::N_TOTAL_QP_3_2_2 + qp_idx) * 9, 3, 3);
+        return Eigen::Map<Eigen::MatrixXd>(d_P + (elem_idx * Quadrature::N_TOTAL_QP_4_4_3 + qp_idx) * 9, 3, 3);
     }
 
     __device__ const Eigen::Map<Eigen::MatrixXd> P(int elem_idx, int qp_idx) const
     {
-        return Eigen::Map<Eigen::MatrixXd>(d_P + (elem_idx * Quadrature::N_TOTAL_QP_3_2_2 + qp_idx) * 9, 3, 3);
+        return Eigen::Map<Eigen::MatrixXd>(d_P + (elem_idx * Quadrature::N_TOTAL_QP_4_4_3 + qp_idx) * 9, 3, 3);
     }
 
     __device__ Eigen::Map<Eigen::VectorXd> f_elem_out(int global_node_idx)
@@ -255,22 +255,22 @@ struct GPU_ANCF3443_Data : public ElementBase
 
     __device__ Eigen::Map<Eigen::VectorXd> constraint()
     {
-        return Eigen::Map<Eigen::VectorXd>(d_constraint, 12);
+        return Eigen::Map<Eigen::VectorXd>(d_constraint, 24);
     }
 
     __device__ const Eigen::Map<Eigen::VectorXd> constraint() const
     {
-        return Eigen::Map<Eigen::VectorXd>(d_constraint, 12);
+        return Eigen::Map<Eigen::VectorXd>(d_constraint, 24);
     }
 
     __device__ Eigen::Map<Eigen::MatrixXd> constraint_jac()
     {
-        return Eigen::Map<Eigen::MatrixXd>(d_constraint_jac, 12, n_coef * 3);
+        return Eigen::Map<Eigen::MatrixXd>(d_constraint_jac, 24, n_coef * 3);
     }
 
     __device__ const Eigen::Map<Eigen::MatrixXd> constraint_jac() const
     {
-        return Eigen::Map<Eigen::MatrixXd>(d_constraint_jac, 12, n_coef * 3);
+        return Eigen::Map<Eigen::MatrixXd>(d_constraint_jac, 24, n_coef * 3);
     }
 
     // ================================
@@ -373,8 +373,8 @@ struct GPU_ANCF3443_Data : public ElementBase
 
         HANDLE_ERROR(cudaMalloc(&d_node_values, n_coef * n_coef * sizeof(double)));
 
-        HANDLE_ERROR(cudaMalloc(&d_F, n_beam * Quadrature::N_TOTAL_QP_3_2_2 * 3 * 3 * sizeof(double)));
-        HANDLE_ERROR(cudaMalloc(&d_P, n_beam * Quadrature::N_TOTAL_QP_3_2_2 * 3 * 3 * sizeof(double)));
+        HANDLE_ERROR(cudaMalloc(&d_F, n_beam * Quadrature::N_TOTAL_QP_4_4_3 * 3 * 3 * sizeof(double)));
+        HANDLE_ERROR(cudaMalloc(&d_P, n_beam * Quadrature::N_TOTAL_QP_4_4_3 * 3 * 3 * sizeof(double)));
         HANDLE_ERROR(cudaMalloc(&d_f_elem_out, n_coef * 3 * sizeof(double)));
 
         // copy struct to device
@@ -392,8 +392,8 @@ struct GPU_ANCF3443_Data : public ElementBase
         HANDLE_ERROR(cudaMalloc(&d_mu, sizeof(double)));
 
         // constraint data
-        HANDLE_ERROR(cudaMalloc(&d_constraint, 12 * sizeof(double)));
-        HANDLE_ERROR(cudaMalloc(&d_constraint_jac, 12 * (n_coef * 3) * sizeof(double)));
+        HANDLE_ERROR(cudaMalloc(&d_constraint, 24 * sizeof(double)));
+        HANDLE_ERROR(cudaMalloc(&d_constraint_jac, 24 * (n_coef * 3) * sizeof(double)));
     }
 
     void Setup(double length,
@@ -454,8 +454,8 @@ struct GPU_ANCF3443_Data : public ElementBase
         HANDLE_ERROR(cudaMemset(d_node_values, 0, n_coef * n_coef * sizeof(double)));
 
         cudaMemset(d_f_elem_out, 0, n_coef * 3 * sizeof(double));
-        cudaMemset(d_F, 0, n_beam * Quadrature::N_TOTAL_QP_3_2_2 * 3 * 3 * sizeof(double));
-        cudaMemset(d_P, 0, n_beam * Quadrature::N_TOTAL_QP_3_2_2 * 3 * 3 * sizeof(double));
+        cudaMemset(d_F, 0, n_beam * Quadrature::N_TOTAL_QP_4_4_3 * 3 * 3 * sizeof(double));
+        cudaMemset(d_P, 0, n_beam * Quadrature::N_TOTAL_QP_4_4_3 * 3 * 3 * sizeof(double));
 
         HANDLE_ERROR(cudaMemcpy(d_H, &height, sizeof(double), cudaMemcpyHostToDevice));
         HANDLE_ERROR(cudaMemcpy(d_W, &width, sizeof(double), cudaMemcpyHostToDevice));
@@ -472,8 +472,8 @@ struct GPU_ANCF3443_Data : public ElementBase
 
         HANDLE_ERROR(cudaMemcpy(d_data, this, sizeof(GPU_ANCF3443_Data), cudaMemcpyHostToDevice));
 
-        HANDLE_ERROR(cudaMemset(d_constraint, 0, 12 * sizeof(double)));
-        HANDLE_ERROR(cudaMemset(d_constraint_jac, 0, 12 * (n_coef * 3) * sizeof(double)));
+        HANDLE_ERROR(cudaMemset(d_constraint, 0, 24 * sizeof(double)));
+        HANDLE_ERROR(cudaMemset(d_constraint_jac, 0, 24 * (n_coef * 3) * sizeof(double)));
 
         is_setup = true;
     }

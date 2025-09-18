@@ -209,13 +209,16 @@ __device__ __forceinline__ void ancf3443_compute_p(int elem_idx, int qp_idx, GPU
         }
     }
 
-    // Extract local nodal coordinates (e vectors)
-    double x_local[Quadrature::N_SHAPE_3443], y_local[Quadrature::N_SHAPE_3443], z_local[Quadrature::N_SHAPE_3443];
-    d_data->x12_elem(elem_idx, x_local);
-    d_data->y12_elem(elem_idx, y_local);
-    d_data->z12_elem(elem_idx, z_local);
+    // Get local nodal coordinates for this element
+    double x_local_arr[Quadrature::N_SHAPE_3443], y_local_arr[Quadrature::N_SHAPE_3443], z_local_arr[Quadrature::N_SHAPE_3443];
+    d_data->x12_elem(elem_idx, x_local_arr);
+    d_data->y12_elem(elem_idx, y_local_arr);
+    d_data->z12_elem(elem_idx, z_local_arr);
+    Eigen::Map<Eigen::VectorXd> x_local(x_local_arr, Quadrature::N_SHAPE_3443);
+    Eigen::Map<Eigen::VectorXd> y_local(y_local_arr, Quadrature::N_SHAPE_3443);
+    Eigen::Map<Eigen::VectorXd> z_local(z_local_arr, Quadrature::N_SHAPE_3443);
 
-    double e[Quadrature::N_SHAPE_3443][3]; // 4 nodes, each with 3 coordinates (for ANCF3443 element)
+    double e[Quadrature::N_SHAPE_3443][3]; 
     #pragma unroll
     for (int i = 0; i < Quadrature::N_SHAPE_3443; i++)
     {
@@ -227,10 +230,10 @@ __device__ __forceinline__ void ancf3443_compute_p(int elem_idx, int qp_idx, GPU
     // Compute F = sum_i e_i ⊗ ∇s_i
     // F is 3x3 matrix stored in row-major order
     #pragma unroll
-    for (int i = 0; i < Quadrature::N_SHAPE_3243; i++)
+    for (int i = 0; i < Quadrature::N_SHAPE_3443; i++)
     { // Loop over nodes
         // Get gradient of shape function i (∇s_i) - this needs proper indexing
-        // Assuming ds_du_pre is laid out as [qp_total][8][3]
+        // Assuming ds_du_pre is laid out as [qp_total][16][3]
         // You'll need to provide the correct qp_idx for the current quadrature
         // point
         double grad_s_i[3];
@@ -308,6 +311,7 @@ __device__ __forceinline__ void ancf3443_compute_p(int elem_idx, int qp_idx, GPU
         {
             d_data->P(elem_idx, qp_idx)(i, j) = factor * d_data->F(elem_idx, qp_idx)(i, j) + d_data->mu() * (FFF[i][j] - d_data->F(elem_idx, qp_idx)(i, j));
         }
+
     // clang-format on
 }
 
@@ -316,7 +320,7 @@ __device__ __forceinline__ void ancf3443_compute_internal_force(int elem_idx, in
 
     double f_i[3] = {0};
     // int node_base = d_data->offset_start()(elem_idx);
-    int node_base = 0;
+    int global_node_idx = d_data->element_connectivity()(elem_idx, node_idx / 4) * 4 + (node_idx % 4);
     double geom = (d_data->L() * d_data->W() * d_data->H()) / 8.0;
 
     // clang-format off
@@ -325,21 +329,21 @@ __device__ __forceinline__ void ancf3443_compute_internal_force(int elem_idx, in
     #pragma unroll
     for (int d = 0; d < 3; ++d)
     {
-        d_data->f_elem_out(node_base + node_idx)(d) = 0.0;
+        d_data->f_elem_out(global_node_idx)(d) = 0.0;
     }
 
 
     #pragma unroll
-    for (int qp_idx = 0; qp_idx < Quadrature::N_TOTAL_QP_3_2_2; qp_idx++)
+    for (int qp_idx = 0; qp_idx < Quadrature::N_TOTAL_QP_4_4_3; qp_idx++)
     {
         double grad_s[3];
         grad_s[0] = d_data->ds_du_pre(qp_idx)(node_idx, 0);
         grad_s[1] = d_data->ds_du_pre(qp_idx)(node_idx, 1);
         grad_s[2] = d_data->ds_du_pre(qp_idx)(node_idx, 2);
 
-        double scale = d_data->weight_xi()(qp_idx / (Quadrature::N_QP_2 * Quadrature::N_QP_2)) *
-                       d_data->weight_eta()((qp_idx / Quadrature::N_QP_2) % Quadrature::N_QP_2) *
-                       d_data->weight_zeta()(qp_idx % Quadrature::N_QP_2);
+        double scale = d_data->weight_xi()(qp_idx / (Quadrature::N_QP_4 * Quadrature::N_QP_3)) *
+                       d_data->weight_eta()((qp_idx / Quadrature::N_QP_3) % Quadrature::N_QP_4) *
+                       d_data->weight_zeta()(qp_idx % Quadrature::N_QP_4);
         #pragma unroll
         for (int r = 0; r < 3; ++r)
         {
@@ -354,7 +358,7 @@ __device__ __forceinline__ void ancf3443_compute_internal_force(int elem_idx, in
     #pragma unroll
     for (int d = 0; d < 3; ++d)
     {
-        atomicAdd(&d_data->f_elem_out(node_base + node_idx)(d), f_i[d]);
+        atomicAdd(&d_data->f_elem_out(global_node_idx)(d), f_i[d]);
     }
 
     // clang-format on
@@ -366,8 +370,8 @@ __device__ __forceinline__ void ancf3443_compute_constraint_data(GPU_ANCF3443_Da
 
     if (thread_idx == 0)
     {
-        d_data->constraint()[0] = d_data->x12()(0) - (-1.0);
-        d_data->constraint()[1] = d_data->y12()(0) - (1.0);
+        d_data->constraint()[0] = d_data->x12()(0) - (0.0);
+        d_data->constraint()[1] = d_data->y12()(0) - (0.0);
         d_data->constraint()[2] = d_data->z12()(0) - (0.0);
 
         d_data->constraint()[3] = d_data->x12()(1) - (1.0);
@@ -382,7 +386,25 @@ __device__ __forceinline__ void ancf3443_compute_constraint_data(GPU_ANCF3443_Da
         d_data->constraint()[10] = d_data->y12()(3) - (0.0);
         d_data->constraint()[11] = d_data->z12()(3) - (1.0);
 
-        for (int i = 0; i < 12; i++)
+        // ================================================
+
+        d_data->constraint()[12] = d_data->x12()(0) - (0.0);
+        d_data->constraint()[13] = d_data->y12()(0) - (1.0);
+        d_data->constraint()[14] = d_data->z12()(0) - (0.0);
+
+        d_data->constraint()[15] = d_data->x12()(1) - (1.0);
+        d_data->constraint()[16] = d_data->y12()(1) - (0.0);
+        d_data->constraint()[17] = d_data->z12()(1) - (0.0);
+
+        d_data->constraint()[18] = d_data->x12()(2) - (0.0);
+        d_data->constraint()[19] = d_data->y12()(2) - (1.0);
+        d_data->constraint()[20] = d_data->z12()(2) - (0.0);
+
+        d_data->constraint()[21] = d_data->x12()(3) - (0.0);
+        d_data->constraint()[22] = d_data->y12()(3) - (0.0);
+        d_data->constraint()[23] = d_data->z12()(3) - (1.0);
+
+        for (int i = 0; i < 24; i++)
         {
             d_data->constraint_jac()(i, i) = 1.0;
         }

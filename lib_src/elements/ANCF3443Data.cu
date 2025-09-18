@@ -146,10 +146,10 @@ __global__ void mass_matrix_qp_kernel(GPU_ANCF3443_Data *d_data)
 __global__ void calc_p_kernel(GPU_ANCF3443_Data *d_data)
 {
   int thread_idx = blockIdx.x * blockDim.x + threadIdx.x;
-  int elem_idx = thread_idx / Quadrature::N_TOTAL_QP_3_2_2;
-  int qp_idx = thread_idx % Quadrature::N_TOTAL_QP_3_2_2;
+  int elem_idx = thread_idx / Quadrature::N_TOTAL_QP_4_4_3;
+  int qp_idx = thread_idx % Quadrature::N_TOTAL_QP_4_4_3;
 
-  if (elem_idx >= d_data->gpu_n_beam() || qp_idx >= Quadrature::N_TOTAL_QP_3_2_2)
+  if (elem_idx >= d_data->gpu_n_beam() || qp_idx >= Quadrature::N_TOTAL_QP_4_4_3)
     return;
 
   ancf3443_compute_p(elem_idx, qp_idx, d_data);
@@ -158,7 +158,7 @@ __global__ void calc_p_kernel(GPU_ANCF3443_Data *d_data)
 void GPU_ANCF3443_Data::CalcP()
 {
   int threads = 128;
-  int blocks = (n_beam * Quadrature::N_TOTAL_QP_3_2_2 + threads - 1) / threads;
+  int blocks = (n_beam * Quadrature::N_TOTAL_QP_4_4_3 + threads - 1) / threads;
   calc_p_kernel<<<blocks, threads>>>(d_data);
   cudaDeviceSynchronize();
 }
@@ -263,11 +263,11 @@ void GPU_ANCF3443_Data::RetrievePFromFToCPU(std::vector<std::vector<Eigen::Matri
   p_from_F.resize(n_beam);
   for (int i = 0; i < n_beam; i++)
   {
-    p_from_F[i].resize(Quadrature::N_TOTAL_QP_3_2_2);
-    for (int j = 0; j < Quadrature::N_TOTAL_QP_3_2_2; j++)
+    p_from_F[i].resize(Quadrature::N_TOTAL_QP_4_4_3);
+    for (int j = 0; j < Quadrature::N_TOTAL_QP_4_4_3; j++)
     {
       p_from_F[i][j].resize(3, 3);
-      HANDLE_ERROR(cudaMemcpy(p_from_F[i][j].data(), d_P + i * Quadrature::N_TOTAL_QP_3_2_2 * 3 * 3 + j * 3 * 3, 3 * 3 * sizeof(double), cudaMemcpyDeviceToHost));
+      HANDLE_ERROR(cudaMemcpy(p_from_F[i][j].data(), d_P + i * Quadrature::N_TOTAL_QP_4_4_3 * 3 * 3 + j * 3 * 3, 3 * 3 * sizeof(double), cudaMemcpyDeviceToHost));
     }
   }
 }
@@ -300,10 +300,10 @@ void GPU_ANCF3443_Data::RetrievePositionToCPU(Eigen::VectorXd &x12, Eigen::Vecto
 __global__ void compute_internal_force_kernel(GPU_ANCF3443_Data *d_data)
 {
   int thread_idx = blockIdx.x * blockDim.x + threadIdx.x;
-  int elem_idx = thread_idx / Quadrature::N_SHAPE_3243;
-  int node_idx = thread_idx % Quadrature::N_SHAPE_3243;
+  int elem_idx = thread_idx / Quadrature::N_SHAPE_3443;
+  int node_idx = thread_idx % Quadrature::N_SHAPE_3443;
 
-  if (elem_idx >= d_data->gpu_n_beam() || node_idx >= Quadrature::N_SHAPE_3243)
+  if (elem_idx >= d_data->gpu_n_beam() || node_idx >= Quadrature::N_SHAPE_3443)
     return;
 
   ancf3443_compute_internal_force(elem_idx, node_idx, d_data);
@@ -312,7 +312,7 @@ __global__ void compute_internal_force_kernel(GPU_ANCF3443_Data *d_data)
 void GPU_ANCF3443_Data::CalcInternalForce()
 {
   int threads = 128;
-  int blocks = (n_beam * Quadrature::N_SHAPE_3243 + threads - 1) / threads;
+  int blocks = (n_beam * Quadrature::N_SHAPE_3443 + threads - 1) / threads;
   compute_internal_force_kernel<<<blocks, threads>>>(d_data);
   cudaDeviceSynchronize();
 }
@@ -325,7 +325,7 @@ __global__ void compute_constraint_data_kernel(GPU_ANCF3443_Data *d_data)
 void GPU_ANCF3443_Data::CalcConstraintData()
 {
   int threads = 128;
-  int blocks = (n_beam * Quadrature::N_SHAPE_3243 + threads - 1) / threads;
+  int blocks = (n_beam * Quadrature::N_SHAPE_3443 + threads - 1) / threads;
   compute_constraint_data_kernel<<<blocks, threads>>>(d_data);
   cudaDeviceSynchronize();
 }
