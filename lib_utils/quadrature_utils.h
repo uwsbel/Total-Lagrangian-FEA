@@ -11,11 +11,14 @@ namespace Quadrature
     // Quadrature sizes as constexpr constants
     constexpr int N_QP_7 = 7; // 7-point quadrature
     constexpr int N_QP_6 = 6; // 6-point quadrature
+    constexpr int N_QP_4 = 4;
     constexpr int N_QP_3 = 3; // 3-point quadrature
     constexpr int N_QP_2 = 2; // 2-point quadrature
 
     // Total number of quadrature points
     constexpr int N_TOTAL_QP_3_2_2 = N_QP_3 * N_QP_2 * N_QP_2;
+    constexpr int N_TOTAL_QP_4_4_3 = N_QP_4 * N_QP_4 * N_QP_3;
+    constexpr int N_TOTAL_QP_7_7_3 = N_QP_7 * N_QP_7 * N_QP_3;
 
     // Number of elements for shape functions
     constexpr int N_SHAPE_3243 = 8;

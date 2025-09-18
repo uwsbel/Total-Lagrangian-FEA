@@ -54,7 +54,7 @@ namespace ANCFCPUUtils
      * @param z12 Output z coordinates for all nodes
      */
     void ANCF3443_generate_beam_coordinates(int n_beam, Eigen::VectorXd &x12,
-                                            Eigen::VectorXd &y12, Eigen::VectorXd &z12);
+                                            Eigen::VectorXd &y12, Eigen::VectorXd &z12, Eigen::MatrixXi &element_connectivity);
 
     /**
      * Calculate offset indices for ANCF3443 shell elements

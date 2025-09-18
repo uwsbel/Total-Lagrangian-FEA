@@ -98,3 +98,121 @@ TEST_F(ANCFUtilsTest, CalculateOffsets_VerifySpan)
     EXPECT_EQ(span, 8) << "Beam " << i << " should span 8 elements";
   }
 }
+
+// ========================================
+// Tests for 3443 generate_shell_elements
+// ========================================
+
+TEST_F(ANCFUtilsTest, GenerateShellElements3443_2)
+{
+  const int n_beam = 2; // For your 24 DOF, 6-node, 2-element example
+
+  Eigen::MatrixXi element_connectivity;
+  Eigen::VectorXd x12, y12, z12;
+
+  ANCFCPUUtils::ANCF3443_generate_beam_coordinates(n_beam, x12, y12, z12, element_connectivity);
+
+  // Expected arrays
+  double x12_arr[24] = {
+      0.0, 1.0, 0.0, 0.0, // Node 0
+      2.0, 1.0, 0.0, 0.0, // Node 1
+      2.0, 1.0, 0.0, 0.0, // Node 2
+      0.0, 1.0, 0.0, 0.0, // Node 3
+      4.0, 1.0, 0.0, 0.0, // Node 4
+      4.0, 1.0, 0.0, 0.0  // Node 5
+  };
+  double y12_arr[24] = {
+      0.0, 0.0, 1.0, 0.0, // Node 0
+      0.0, 0.0, 1.0, 0.0, // Node 1
+      1.0, 0.0, 1.0, 0.0, // Node 2
+      1.0, 0.0, 1.0, 0.0, // Node 3
+      0.0, 0.0, 1.0, 0.0, // Node 4
+      1.0, 0.0, 1.0, 0.0  // Node 5
+  };
+  double z12_arr[24] = {
+      0.0, 0.0, 0.0, 1.0, // Node 0
+      0.0, 0.0, 0.0, 1.0, // Node 1
+      0.0, 0.0, 0.0, 1.0, // Node 2
+      0.0, 0.0, 0.0, 1.0, // Node 3
+      0.0, 0.0, 0.0, 1.0, // Node 4
+      0.0, 0.0, 0.0, 1.0  // Node 5
+  };
+
+  Eigen::VectorXd x12_expected = Eigen::Map<Eigen::VectorXd>(x12_arr, 24);
+  Eigen::VectorXd y12_expected = Eigen::Map<Eigen::VectorXd>(y12_arr, 24);
+  Eigen::VectorXd z12_expected = Eigen::Map<Eigen::VectorXd>(z12_arr, 24);
+
+  // Check coordinates
+  EXPECT_TRUE(x12.isApprox(x12_expected));
+  EXPECT_TRUE(y12.isApprox(y12_expected));
+  EXPECT_TRUE(z12.isApprox(z12_expected));
+
+  // Check connectivity
+  Eigen::MatrixXi connectivity_expected(2, 4);
+  connectivity_expected << 0, 1, 2, 3,
+      1, 4, 5, 2;
+  EXPECT_EQ(element_connectivity.rows(), 2);
+  EXPECT_EQ(element_connectivity.cols(), 4);
+  EXPECT_TRUE((element_connectivity.array() == connectivity_expected.array()).all());
+}
+
+TEST_F(ANCFUtilsTest, GenerateShellElements3443_3)
+{
+  const int n_beam = 3; // For your 24 DOF, 6-node, 2-element example
+
+  Eigen::MatrixXi element_connectivity;
+  Eigen::VectorXd x12, y12, z12;
+
+  ANCFCPUUtils::ANCF3443_generate_beam_coordinates(n_beam, x12, y12, z12, element_connectivity);
+
+  // Expected arrays
+  double x12_arr[32] = {
+      0.0, 1.0, 0.0, 0.0, // Node 0
+      2.0, 1.0, 0.0, 0.0, // Node 1
+      2.0, 1.0, 0.0, 0.0, // Node 2
+      0.0, 1.0, 0.0, 0.0, // Node 3
+      4.0, 1.0, 0.0, 0.0, // Node 4
+      4.0, 1.0, 0.0, 0.0, // Node 5
+      6.0, 1.0, 0.0, 0.0, // Node 6
+
+      6.0, 1.0, 0.0, 0.0 // Node 7
+  };
+  double y12_arr[32] = {
+      0.0, 0.0, 1.0, 0.0, // Node 0
+      0.0, 0.0, 1.0, 0.0, // Node 1
+      1.0, 0.0, 1.0, 0.0, // Node 2
+      1.0, 0.0, 1.0, 0.0, // Node 3
+      0.0, 0.0, 1.0, 0.0, // Node 4
+      1.0, 0.0, 1.0, 0.0, // Node 5
+      0.0, 0.0, 1.0, 0.0,
+      1.0, 0.0, 1.0, 0.0};
+
+  double z12_arr[32] = {
+      0.0, 0.0, 0.0, 1.0, // Node 0
+      0.0, 0.0, 0.0, 1.0, // Node 1
+      0.0, 0.0, 0.0, 1.0, // Node 2
+      0.0, 0.0, 0.0, 1.0, // Node 3
+      0.0, 0.0, 0.0, 1.0, // Node 4
+      0.0, 0.0, 0.0, 1.0, // Node 5
+      0.0, 0.0, 0.0, 1.0, // Node 6
+      0.0, 0.0, 0.0, 1.0  // Node 7
+  };
+
+  Eigen::VectorXd x12_expected = Eigen::Map<Eigen::VectorXd>(x12_arr, 32);
+  Eigen::VectorXd y12_expected = Eigen::Map<Eigen::VectorXd>(y12_arr, 32);
+  Eigen::VectorXd z12_expected = Eigen::Map<Eigen::VectorXd>(z12_arr, 32);
+
+  // Check coordinates
+  EXPECT_TRUE(x12.isApprox(x12_expected));
+  EXPECT_TRUE(y12.isApprox(y12_expected));
+  EXPECT_TRUE(z12.isApprox(z12_expected));
+
+  // Check connectivity
+  Eigen::MatrixXi connectivity_expected(3, 4);
+  connectivity_expected << 0, 1, 2, 3,
+      1, 4, 5, 2,
+      4, 6, 7, 5;
+  EXPECT_EQ(element_connectivity.rows(), 3);
+  EXPECT_EQ(element_connectivity.cols(), 4);
+  EXPECT_TRUE((element_connectivity.array() == connectivity_expected.array()).all());
+}

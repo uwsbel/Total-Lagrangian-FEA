@@ -278,7 +278,7 @@ namespace ANCFCPUUtils
     B(15, 7) = u4 * v4;
 
     // Compute inverse of B matrix
-    B_inv_out = B.inverse();
+    B_inv_out = B.transpose().inverse();
   }
 
   void ANCF3243_generate_beam_coordinates(int n_beam, Eigen::VectorXd &x12,
@@ -314,6 +314,133 @@ namespace ANCFCPUUtils
 
       // Only shift the first entry of the new beam by x_offset
       x12(base_idx) += x_offset;
+    }
+  }
+
+  void ANCF3443_generate_beam_coordinates(int n_beam, Eigen::VectorXd &x12,
+                                          Eigen::VectorXd &y12, Eigen::VectorXd &z12, Eigen::MatrixXi &element_connectivity)
+  {
+
+    // Number of nodes: 4 for the first element, 2 new for each additional element
+    int n_nodes = 4 + 2 * (n_beam - 1);
+    int N_dof = n_nodes * 4;
+
+    // Resize coordinate arrays
+    x12.resize(N_dof);
+    y12.resize(N_dof);
+    z12.resize(N_dof);
+
+    // Example: Fill with zeros or your own geometry logic
+    x12.setZero();
+    y12.setZero();
+    z12.setZero();
+
+    // Set first 16 elements (4 nodes × 4 DOFs)
+    x12(0) = 0.0;
+    x12(1) = 1.0;
+    x12(2) = 0.0;
+    x12(3) = 0.0; // Node 0
+    x12(4) = 2.0;
+    x12(5) = 1.0;
+    x12(6) = 0.0;
+    x12(7) = 0.0; // Node 1
+    x12(8) = 2.0;
+    x12(9) = 1.0;
+    x12(10) = 0.0;
+    x12(11) = 0.0; // Node 2
+    x12(12) = 0.0;
+    x12(13) = 1.0;
+    x12(14) = 0.0;
+    x12(15) = 0.0; // Node 3
+
+    y12(0) = 0.0;
+    y12(1) = 0.0;
+    y12(2) = 1.0;
+    y12(3) = 0.0; // Node 0
+    y12(4) = 0.0;
+    y12(5) = 0.0;
+    y12(6) = 1.0;
+    y12(7) = 0.0; // Node 1
+    y12(8) = 1.0;
+    y12(9) = 0.0;
+    y12(10) = 1.0;
+    y12(11) = 0.0; // Node 2
+    y12(12) = 1.0;
+    y12(13) = 0.0;
+    y12(14) = 1.0;
+    y12(15) = 0.0; // Node 3
+
+    z12(0) = 0.0;
+    z12(1) = 0.0;
+    z12(2) = 0.0;
+    z12(3) = 1.0; // Node 0
+    z12(4) = 0.0;
+    z12(5) = 0.0;
+    z12(6) = 0.0;
+    z12(7) = 1.0; // Node 1
+    z12(8) = 0.0;
+    z12(9) = 0.0;
+    z12(10) = 0.0;
+    z12(11) = 1.0; // Node 2
+    z12(12) = 0.0;
+    z12(13) = 0.0;
+    z12(14) = 0.0;
+    z12(15) = 1.0; // Node 3
+
+    for (int i = 1; i < n_beam; i++)
+    {
+      // each new beam has 4 additional nodes
+      x12(16 + (i - 1) * 8) = 2.0 * (i + 1);
+      x12(17 + (i - 1) * 8) = 1.0;
+      x12(18 + (i - 1) * 8) = 0.0;
+      x12(19 + (i - 1) * 8) = 0.0;
+      x12(20 + (i - 1) * 8) = 2.0 * (i + 1);
+      x12(21 + (i - 1) * 8) = 1.0;
+      x12(22 + (i - 1) * 8) = 0.0;
+      x12(23 + (i - 1) * 8) = 0.0;
+
+      y12(16 + (i - 1) * 8) = 0.0;
+      y12(17 + (i - 1) * 8) = 0.0;
+      y12(18 + (i - 1) * 8) = 1.0;
+      y12(19 + (i - 1) * 8) = 0.0;
+      y12(20 + (i - 1) * 8) = 1.0;
+      y12(21 + (i - 1) * 8) = 0.0;
+      y12(22 + (i - 1) * 8) = 1.0;
+      y12(23 + (i - 1) * 8) = 0.0;
+
+      z12(16 + (i - 1) * 8) = 0.0;
+      z12(17 + (i - 1) * 8) = 0.0;
+      z12(18 + (i - 1) * 8) = 0.0;
+      z12(19 + (i - 1) * 8) = 1.0;
+      z12(20 + (i - 1) * 8) = 0.0;
+      z12(21 + (i - 1) * 8) = 0.0;
+      z12(22 + (i - 1) * 8) = 0.0;
+      z12(23 + (i - 1) * 8) = 1.0;
+    }
+
+    // build connectivity matrix
+    element_connectivity.resize(n_beam, 4);
+    element_connectivity(0, 0) = 0;
+    element_connectivity(0, 1) = 1;
+    element_connectivity(0, 2) = 2;
+    element_connectivity(0, 3) = 3;
+
+    for (int i = 1; i < n_beam; i++)
+    {
+      if (i == 1)
+      {
+        element_connectivity(i, 0) = 1;
+        element_connectivity(i, 1) = 4;
+        element_connectivity(i, 2) = 5;
+        element_connectivity(i, 3) = 2;
+      }
+      else
+      {
+        element_connectivity(i, 0) = 4 + (i - 2) * 2;
+        element_connectivity(i, 1) = 4 + (i - 1) * 2;
+        element_connectivity(i, 2) = 4 + (i - 1) * 2 + 1;
+        element_connectivity(i, 3) = 5 + (i - 2) * 2;
+      }
     }
   }
 
