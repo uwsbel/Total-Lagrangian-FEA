@@ -14,7 +14,7 @@ const double rho0 = 2700; // Density
 int main()
 {
   // initialize GPU data structure
-  int n_beam = 3; // this is working
+  int n_beam = 2; // this is working
   GPU_ANCF3243_Data gpu_3243_data(n_beam);
   gpu_3243_data.Initialize();
 
@@ -84,15 +84,17 @@ int main()
   gpu_3243_data.RetrieveMassMatrixToCPU(mass_matrix);
 
   std::cout << "mass matrix:" << std::endl;
+  std::cout << "Size of mass matrix: " << mass_matrix.rows() << " x " << mass_matrix.cols() << std::endl;
   for (int i = 0; i < mass_matrix.rows(); i++)
   {
     for (int j = 0; j < mass_matrix.cols(); j++)
     {
-      std::cout << mass_matrix(i, j) << " ";
+      std::cout << std::fixed << std::setprecision(1) << std::setw(6) << mass_matrix(i, j) << " ";
     }
     std::cout << std::endl;
   }
 
+  /*
   // // Set highest precision for cout
   std::cout << std::fixed << std::setprecision(17);
 
@@ -188,6 +190,7 @@ int main()
   }
 
   std::cout << std::endl;
+  */
 
   gpu_3243_data.Destroy();
 

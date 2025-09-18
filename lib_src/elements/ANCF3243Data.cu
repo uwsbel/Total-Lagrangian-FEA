@@ -163,6 +163,11 @@ void GPU_ANCF3243_Data::CalcMassMatrix()
   // Launch kernel
   int threads = 128;
   int blocks = (N_OUT + threads - 1) / threads;
+  
+  // Print total number of threads launched
+  std::cout << "Mass matrix kernel: Launching " << blocks << " blocks with " 
+  << threads << " threads each (" << blocks * threads << " total threads)" << std::endl;
+  
   mass_matrix_qp_kernel<<<blocks, threads>>>(d_data);
 
   cudaDeviceSynchronize();
