@@ -249,11 +249,11 @@ void GPU_ANCF3443_Data::RetrieveDeformationGradientToCPU(std::vector<std::vector
   deformation_gradient.resize(n_beam);
   for (int i = 0; i < n_beam; i++)
   {
-    deformation_gradient[i].resize(Quadrature::N_TOTAL_QP_3_2_2);
-    for (int j = 0; j < Quadrature::N_TOTAL_QP_3_2_2; j++)
+    deformation_gradient[i].resize(Quadrature::N_TOTAL_QP_4_4_3);
+    for (int j = 0; j < Quadrature::N_TOTAL_QP_4_4_3; j++)
     {
       deformation_gradient[i][j].resize(3, 3);
-      HANDLE_ERROR(cudaMemcpy(deformation_gradient[i][j].data(), d_F + i * Quadrature::N_TOTAL_QP_3_2_2 * 3 * 3 + j * 3 * 3, 3 * 3 * sizeof(double), cudaMemcpyDeviceToHost));
+      HANDLE_ERROR(cudaMemcpy(deformation_gradient[i][j].data(), d_F + i * Quadrature::N_TOTAL_QP_4_4_3 * 3 * 3 + j * 3 * 3, 3 * 3 * sizeof(double), cudaMemcpyDeviceToHost));
     }
   }
 }

@@ -343,7 +343,7 @@ __device__ __forceinline__ void ancf3443_compute_internal_force(int elem_idx, in
 
         double scale = d_data->weight_xi()(qp_idx / (Quadrature::N_QP_4 * Quadrature::N_QP_3)) *
                        d_data->weight_eta()((qp_idx / Quadrature::N_QP_3) % Quadrature::N_QP_4) *
-                       d_data->weight_zeta()(qp_idx % Quadrature::N_QP_4);
+                       d_data->weight_zeta()(qp_idx % Quadrature::N_QP_3);
         #pragma unroll
         for (int r = 0; r < 3; ++r)
         {

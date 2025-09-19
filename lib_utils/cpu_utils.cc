@@ -320,8 +320,6 @@ namespace ANCFCPUUtils
   void ANCF3443_generate_beam_coordinates(int n_beam, Eigen::VectorXd &x12,
                                           Eigen::VectorXd &y12, Eigen::VectorXd &z12, Eigen::MatrixXi &element_connectivity)
   {
-
-    // Number of nodes: 4 for the first element, 2 new for each additional element
     int n_nodes = 4 + 2 * (n_beam - 1);
     int N_dof = n_nodes * 4;
 
