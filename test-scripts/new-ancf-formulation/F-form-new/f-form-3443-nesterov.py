@@ -716,7 +716,7 @@ for step in range(Nt):
 
     # External force at point P
     if step <= 200:
-        f_P = np.array([0.0, 0.0, 3100.0])
+        f_P = np.array([0.0, 0.0, 1000.0])
     else:
         f_P = np.array([0.0, 0.0, 0.0])
 

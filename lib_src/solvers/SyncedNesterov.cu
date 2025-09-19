@@ -70,9 +70,32 @@ __device__ double solver_grad_L(int tid, ElementBase *d_data, SyncedNesterovSolv
         res -= (-data->f_elem_out()(tid));
     }
 
-    if (tid == 3 * d_solver->get_n_coef() - 10)
+    if (d_data->type == TYPE_3243)
     {
-        res -= 10000.0;
+        if (tid == 3 * d_solver->get_n_coef() - 10)
+        {
+            // res -= 10000.0;
+            res -= 3100.0;
+        }
+    }
+    else if (d_data->type == TYPE_3443)
+    {
+        if (tid == 3 * d_solver->get_n_coef() - 4)
+        {
+            res -= (-125.0);
+        }
+        else if (tid == 3 * d_solver->get_n_coef() - 10)
+        {
+            res -= (500.0);
+        }
+        else if (tid == 3 * d_solver->get_n_coef() - 16)
+        {
+            res -= (125.0);
+        }
+        else if (tid == 3 * d_solver->get_n_coef() - 22)
+        {
+            res -= (500.0);
+        }
     }
 
     // Constraints
