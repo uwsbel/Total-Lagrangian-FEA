@@ -274,15 +274,15 @@ void GPU_ANCF3443_Data::RetrievePFromFToCPU(std::vector<std::vector<Eigen::Matri
 
 void GPU_ANCF3443_Data::RetrieveConstraintDataToCPU(Eigen::VectorXd &constraint)
 {
-  int expected_size = 12;
+  int expected_size = 24;
   constraint.resize(expected_size);
   HANDLE_ERROR(cudaMemcpy(constraint.data(), d_constraint, expected_size * sizeof(double), cudaMemcpyDeviceToHost));
 }
 
 void GPU_ANCF3443_Data::RetrieveConstraintJacobianToCPU(Eigen::MatrixXd &constraint_jac)
 {
-  int expected_size = 12 * n_coef * 3;
-  constraint_jac.resize(12, n_coef * 3);
+  int expected_size = 24 * n_coef * 3;
+  constraint_jac.resize(24, n_coef * 3);
   HANDLE_ERROR(cudaMemcpy(constraint_jac.data(), d_constraint_jac, expected_size * sizeof(double), cudaMemcpyDeviceToHost));
 }
 

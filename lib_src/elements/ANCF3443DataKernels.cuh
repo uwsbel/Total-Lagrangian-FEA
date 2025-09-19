@@ -388,25 +388,30 @@ __device__ __forceinline__ void ancf3443_compute_constraint_data(GPU_ANCF3443_Da
 
         // ================================================
 
-        d_data->constraint()[12] = d_data->x12()(0) - (0.0);
-        d_data->constraint()[13] = d_data->y12()(0) - (1.0);
-        d_data->constraint()[14] = d_data->z12()(0) - (0.0);
+        d_data->constraint()[12] = d_data->x12()(12) - (0.0);
+        d_data->constraint()[13] = d_data->y12()(12) - (1.0);
+        d_data->constraint()[14] = d_data->z12()(12) - (0.0);
 
-        d_data->constraint()[15] = d_data->x12()(1) - (1.0);
-        d_data->constraint()[16] = d_data->y12()(1) - (0.0);
-        d_data->constraint()[17] = d_data->z12()(1) - (0.0);
+        d_data->constraint()[15] = d_data->x12()(13) - (1.0);
+        d_data->constraint()[16] = d_data->y12()(13) - (0.0);
+        d_data->constraint()[17] = d_data->z12()(13) - (0.0);
 
-        d_data->constraint()[18] = d_data->x12()(2) - (0.0);
-        d_data->constraint()[19] = d_data->y12()(2) - (1.0);
-        d_data->constraint()[20] = d_data->z12()(2) - (0.0);
+        d_data->constraint()[18] = d_data->x12()(14) - (0.0);
+        d_data->constraint()[19] = d_data->y12()(14) - (1.0);
+        d_data->constraint()[20] = d_data->z12()(14) - (0.0);
 
-        d_data->constraint()[21] = d_data->x12()(3) - (0.0);
-        d_data->constraint()[22] = d_data->y12()(3) - (0.0);
-        d_data->constraint()[23] = d_data->z12()(3) - (1.0);
+        d_data->constraint()[21] = d_data->x12()(15) - (0.0);
+        d_data->constraint()[22] = d_data->y12()(15) - (0.0);
+        d_data->constraint()[23] = d_data->z12()(15) - (1.0);
 
-        for (int i = 0; i < 24; i++)
+        for (int i = 0; i < 12; i++)
         {
             d_data->constraint_jac()(i, i) = 1.0;
+        }
+
+        for (int i = 0; i < 12; i++)
+        {
+            d_data->constraint_jac()(i + 12, i + (12 * 3)) = 1.0;
         }
     }
 }
