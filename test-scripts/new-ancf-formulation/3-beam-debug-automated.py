@@ -1,4 +1,5 @@
 import numpy as np
+from beam_mesh_generator import BeamConfig, BeamMeshGenerator
 
 # 4-point Gauss-Legendre quadrature in 1D
 
@@ -37,7 +38,7 @@ nu = 0.33
 rho0 = 2700
 
 mu = E / (2 * (1 + nu))              # Shear modulus μ
-lam_param = (E * nu) / ((1 + nu)*(1 - 2*nu))  # Lamé’s first parameter λ
+lam_param = (E * nu) / ((1 + nu)*(1 - 2*nu))  # Lamé's first parameter λ
 
 H = 1.0  # Height
 W = 1.0  # Width
@@ -45,39 +46,22 @@ L = 2.0  # Length
 
 n_beam = 2  # Number of beam elements
 
+# AUTOMATED MESH GENERATION
+print("Generating mesh using automated system...")
+beam_config = BeamConfig(length=L, width=W, height=H, orientation='x')
+mesh_gen = BeamMeshGenerator(n_beam, beam_config, spacing=2.0)
 
-# Each vector is 8x1
-# The values are x, derivative wrt u, derivative wrt v, derivative wrt w for the two nodes
-x12 = np.array([-1.0, 1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0])
-y12 = np.array([ 1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0])
-z12 = np.array([ 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0])
+# Generate coordinates automatically
+x12, y12, z12 = mesh_gen.generate_nodal_coordinates()
+print(f"Generated coordinates: x={x12.shape}, y={y12.shape}, z={z12.shape}")
 
+# Generate DOF mapping automatically
+beam_dof_ranges = mesh_gen.generate_dof_mapping()
+print(f"DOF ranges: {beam_dof_ranges}")
 
-# Append new blocks for additional beams (besides the first one)
-for i in range(2, n_beam + 1):  # MATLAB loop is inclusive
-    x_offset = 2.0
-
-    # Only shift the first entry of the last beam by x_offset
-    x_block = x12[-4:].copy()
-    x_block[0] += x_offset
-
-    # Last 4 entries for y and z
-    y_block = y12[-4:]
-    z_block = z12[-4:]
-
-    # Append to the nodal arrays
-    x12 = np.concatenate([x12, x_block])
-    y12 = np.concatenate([y12, y_block])
-    z12 = np.concatenate([z12, z_block])
-
-
-
-offset_start = np.zeros(n_beam, dtype=int)
-offset_end   = np.zeros(n_beam, dtype=int)
-
-for i in range(n_beam):
-    offset_start[i] = i * 4
-    offset_end[i]   = offset_start[i] + 7
+# Calculate total DOFs
+N_coef = mesh_gen.get_total_dofs()
+print(f"Total DOFs: {N_coef}")
 
 
 def b_vec(u, v, w):
@@ -183,16 +167,19 @@ def calc_det_J_xi(xi, eta, zeta, B_inv, x12_jac, y12_jac, z12_jac, L, W, H):
 
 
 
-N_coef = 8 + 4 * (n_beam - 1)
 m = np.zeros((N_coef, N_coef))
 
-
+print(f"\nAssembling mass matrix for {n_beam} beams...")
+print(f"Mass matrix size: {N_coef} x {N_coef}")
 
 for elem in range(n_beam):
-    idx = np.arange(offset_start[elem], offset_end[elem] + 1)
+    start_dof, end_dof = beam_dof_ranges[elem]
+    idx = np.arange(start_dof, end_dof + 1)
     x_loc = x12[idx]
     y_loc = y12[idx]
     z_loc = z12[idx]
+
+    print(f"Beam {elem}: DOFs {start_dof}-{end_dof}, coordinates shape: {x_loc.shape}")
 
     for ixi, xi in enumerate(gauss_xi_m):
         weight_u = weight_xi_m[ixi]
@@ -211,11 +198,11 @@ for elem in range(n_beam):
                 J = calc_det_J_xi(xi, eta, zeta, B_inv, x_loc, y_loc, z_loc, L, W, H)
                 detJ = np.linalg.det(J)
 
-                # Assemble local to global
+                # Assemble local to global (all beams use 8 DOFs)
                 for i in range(8):
-                    global_i = offset_start[elem] + i
+                    global_i = start_dof + i
                     for j in range(8):
-                        global_j = offset_start[elem] + j
+                        global_j = start_dof + j
                         m[global_i, global_j] += (
                             rho0 * s[i] * s[j] * weight_u * weight_v * weight_w * detJ
                         )
@@ -228,6 +215,10 @@ for i in range(m.shape[0]):
         print(f"{float(m[i,j]):6.1f}", end=" ")
     print()
 
+# Make mass matrix available for testing
+if __name__ == "__main__":
+    # This will be accessible when imported
+    pass
 
 # from numpy.linalg import matrix_rank
 # r = matrix_rank(m)
