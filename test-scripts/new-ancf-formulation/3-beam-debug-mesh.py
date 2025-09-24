@@ -1,5 +1,5 @@
 import numpy as np
-from beam_mesh_generator import BeamConfig, BeamMeshGenerator
+from grid_mesh_generator import GridMesh
 
 # 4-point Gauss-Legendre quadrature in 1D
 
@@ -44,24 +44,38 @@ H = 1.0  # Height
 W = 1.0  # Width
 L = 2.0  # Length
 
-n_beam = 2  # Number of beam elements
-
 # AUTOMATED MESH GENERATION
-print("Generating mesh using automated system...")
-beam_config = BeamConfig(length=L, position=(1.0, 0, 0), orientation='x')
-mesh_gen = BeamMeshGenerator(n_beam, beam_config)
+print("Generating mesh using GridMesh system...")
+# Create a grid with 2 horizontal elements (X=2*L, Y=0, only horizontal elements)
+# This should create 2 horizontal beam elements with length L each
+grid_mesh = GridMesh(X=2*L, Y=0, L=L, include_horizontal=True, include_vertical=False)
 
 # Generate coordinates automatically
-x12, y12, z12 = mesh_gen.generate_nodal_coordinates()
+x12, y12, z12 = grid_mesh.generate_nodal_coordinates()
 print(f"Generated coordinates: x={x12.shape}, y={y12.shape}, z={z12.shape}")
 
-# Generate DOF mapping automatically
-beam_dof_ranges = mesh_gen.generate_dof_mapping()
-print(f"DOF ranges: {beam_dof_ranges}")
+# Print mesh summary
+mesh_summary = grid_mesh.summary()
+print(f"Mesh summary: {mesh_summary}")
 
-# Calculate total DOFs
-N_coef = mesh_gen.get_total_dofs()
+# Calculate total DOFs (4 DOFs per node)
+N_coef = 4 * grid_mesh.num_nodes
 print(f"Total DOFs: {N_coef}")
+print(f"Number of elements: {grid_mesh.num_elements}")
+
+# Debug: Print element details
+print("\nElement details:")
+for elem in range(grid_mesh.num_elements):
+    element = grid_mesh.get_element(elem)
+    dof_indices = grid_mesh.get_element_dof_indices(elem)
+    print(f"Element {elem}: nodes {element.n0}-{element.n1}, orientation={element.orientation}, length={element.length}")
+    print(f"  DOF indices: {dof_indices}")
+
+# Debug: Print coordinate values
+print(f"\nCoordinate arrays:")
+print(f"x12 = {x12}")
+print(f"y12 = {y12}")
+print(f"z12 = {z12}")
 
 
 def b_vec(u, v, w):
@@ -169,17 +183,17 @@ def calc_det_J_xi(xi, eta, zeta, B_inv, x12_jac, y12_jac, z12_jac, L, W, H):
 
 m = np.zeros((N_coef, N_coef))
 
-print(f"\nAssembling mass matrix for {n_beam} beams...")
+print(f"\nAssembling mass matrix for {grid_mesh.num_elements} elements...")
 print(f"Mass matrix size: {N_coef} x {N_coef}")
 
-for elem in range(n_beam):
-    start_dof, end_dof = beam_dof_ranges[elem]
-    idx = np.arange(start_dof, end_dof + 1)
-    x_loc = x12[idx]
-    y_loc = y12[idx]
-    z_loc = z12[idx]
+for elem in range(grid_mesh.num_elements):
+    # Get DOF indices for this element
+    dof_indices = grid_mesh.get_element_dof_indices(elem)
+    x_loc = x12[dof_indices]
+    y_loc = y12[dof_indices]
+    z_loc = z12[dof_indices]
 
-    print(f"Beam {elem}: DOFs {start_dof}-{end_dof}, coordinates shape: {x_loc.shape}")
+    print(f"Element {elem}: DOF indices {dof_indices}, coordinates shape: {x_loc.shape}")
 
     for ixi, xi in enumerate(gauss_xi_m):
         weight_u = weight_xi_m[ixi]
@@ -198,11 +212,11 @@ for elem in range(n_beam):
                 J = calc_det_J_xi(xi, eta, zeta, B_inv, x_loc, y_loc, z_loc, L, W, H)
                 detJ = np.linalg.det(J)
 
-                # Assemble local to global (all beams use 8 DOFs)
+                # Assemble local to global (all elements use 8 DOFs)
                 for i in range(8):
-                    global_i = start_dof + i
+                    global_i = dof_indices[i]
                     for j in range(8):
-                        global_j = start_dof + j
+                        global_j = dof_indices[j]
                         m[global_i, global_j] += (
                             rho0 * s[i] * s[j] * weight_u * weight_v * weight_w * detJ
                         )

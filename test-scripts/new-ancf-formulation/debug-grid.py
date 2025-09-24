@@ -4,9 +4,9 @@ from grid_mesh_generator import GridMesh
 
 
 def print_mesh(mesh: GridMesh) -> None:
-    print("Nodes (id, i, j, x, y):")
+    print("Nodes (id, i, j, x, y, dof_x, dof_dx_du, dof_dx_dv, dof_dx_dw):")
     for n in mesh.nodes:
-        print(n.id, n.i, n.j, n.x, n.y)
+        print(n.id, n.i, n.j, n.x, n.y, n.dof_x, n.dof_dx_du, n.dof_dx_dv, n.dof_dx_dw)
 
     print("\nElements (id, n0, n1, orientation, length) and DOF indices:")
     for e in mesh.elements:
@@ -17,6 +17,12 @@ def print_mesh(mesh: GridMesh) -> None:
     print("\nConnectivity (node_id: [element_ids]):")
     for nid, elist in mesh.connectivity.items():
         print(nid, elist)
+    
+    print("\nNodal coordinates (x_coords, y_coords, z_coords):")
+    x_coords, y_coords, z_coords = mesh.generate_nodal_coordinates()
+    print("x_coords:", x_coords)
+    print("y_coords:", y_coords)
+    print("z_coords:", z_coords)
 
 
 def plot_mesh(mesh: GridMesh) -> None:
@@ -54,7 +60,7 @@ def main() -> None:
         print("\n=== Mesh X=", X, "Y=", Y, "L=", L, "===")
         mesh = GridMesh(X, Y, L, include_horizontal=ih, include_vertical=iv)
         print_mesh(mesh)
-        plot_mesh(mesh)
+        # plot_mesh(mesh)
 
 
 if __name__ == "__main__":
