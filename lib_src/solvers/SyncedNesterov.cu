@@ -33,6 +33,31 @@ __device__ double solver_grad_L(int tid, ElementBase *d_data, SyncedNesterovSolv
         res += mass_ij * v_diff / d_solver->solver_time_step();
     }
 
+    // if (tid == 0)
+    // {
+    //     // print f_elem_out
+    //     if (d_data->type == TYPE_3243)
+    //     {
+    //         auto *data = static_cast<GPU_ANCF3243_Data *>(d_data);
+    //         printf("f_elem_out: ");
+    //         for (int i = 0; i < 3 * d_solver->get_n_coef(); i++)
+    //         {
+    //             printf("%f ", -data->f_elem_out()(i));
+    //         }
+    //         printf("\n");
+    //     }
+    //     else if (d_data->type == TYPE_3443)
+    //     {
+    //         auto *data = static_cast<GPU_ANCF3443_Data *>(d_data);
+    //         printf("f_elem_out: ");
+    //         for (int i = 0; i < 3 * d_solver->get_n_coef(); i++)
+    //         {
+    //             printf("%f ", -data->f_elem_out()(i));
+    //         }
+    //         printf("\n");
+    //     }
+    // }
+
     // Internal force
     if (d_data->type == TYPE_3243)
     {
@@ -45,13 +70,36 @@ __device__ double solver_grad_L(int tid, ElementBase *d_data, SyncedNesterovSolv
         res -= (-data->f_elem_out()(tid));
     }
 
-    if (tid == 3 * d_solver->get_n_coef() - 10)
+    if (d_data->type == TYPE_3243)
     {
-        res -= 10000.0;
+        if (tid == 3 * d_solver->get_n_coef() - 10)
+        {
+            // res -= 10000.0;
+            res -= 3100.0;
+        }
+    }
+    else if (d_data->type == TYPE_3443)
+    {
+        if (tid == 3 * d_solver->get_n_coef() - 4)
+        {
+            res -= (-125.0);
+        }
+        else if (tid == 3 * d_solver->get_n_coef() - 10)
+        {
+            res -= (500.0);
+        }
+        else if (tid == 3 * d_solver->get_n_coef() - 16)
+        {
+            res -= (125.0);
+        }
+        else if (tid == 3 * d_solver->get_n_coef() - 22)
+        {
+            res -= (500.0);
+        }
     }
 
     // Constraints
-    for (int i = 0; i < 12; i++)
+    for (int i = 0; i < d_solver->gpu_n_constraints(); i++)
     {
         double constraint_jac_val = 0.0;
         double constraint_val = 0.0;
@@ -68,7 +116,6 @@ __device__ double solver_grad_L(int tid, ElementBase *d_data, SyncedNesterovSolv
             constraint_jac_val = data->constraint_jac()(i, tid);
             constraint_val = data->constraint()[i];
         }
-
         res += constraint_jac_val * (d_solver->lambda_guess()[i] + *d_solver->solver_rho() * d_solver->solver_time_step() * constraint_val);
     }
 
@@ -202,19 +249,19 @@ one_step_nesterov_kernel(ElementBase *d_data, SyncedNesterovSolver *d_nesterov_s
 
                     // Step 3: Compute internal forces at look-ahead positions
 
-                    // if (tid < d_data->get_n_beam() * Quadrature::N_TOTAL_QP)
+                    // if (tid < d_data->get_n_beam() * Quadrature::N_TOTAL_QP_3_2_2)
                     // {
-                    //     int elem_idx = tid / Quadrature::N_TOTAL_QP;
-                    //     int qp_idx = tid % Quadrature::N_TOTAL_QP;
+                    //     int elem_idx = tid / Quadrature::N_TOTAL_QP_3_2_2;
+                    //     int qp_idx = tid % Quadrature::N_TOTAL_QP_3_2_2;
                     //     compute_deformation_gradient(elem_idx, qp_idx, d_data);
                     // }
 
                     // grid.sync();
 
-                    if (tid < d_nesterov_solver->get_n_beam() * Quadrature::N_TOTAL_QP)
+                    if (tid < d_nesterov_solver->get_n_beam() * d_nesterov_solver->gpu_n_total_qp())
                     {
-                        int elem_idx = tid / Quadrature::N_TOTAL_QP;
-                        int qp_idx = tid % Quadrature::N_TOTAL_QP;
+                        int elem_idx = tid / d_nesterov_solver->gpu_n_total_qp();
+                        int qp_idx = tid % d_nesterov_solver->gpu_n_total_qp();
                         if (d_data->type == TYPE_3243)
                         {
                             ancf3243_compute_p(elem_idx, qp_idx, static_cast<GPU_ANCF3243_Data *>(d_data));
@@ -227,10 +274,10 @@ one_step_nesterov_kernel(ElementBase *d_data, SyncedNesterovSolver *d_nesterov_s
 
                     grid.sync();
 
-                    if (tid < d_nesterov_solver->get_n_beam() * Quadrature::N_SHAPE)
+                    if (tid < d_nesterov_solver->get_n_beam() * d_nesterov_solver->gpu_n_shape())
                     {
-                        int elem_idx = tid / Quadrature::N_SHAPE;
-                        int node_idx = tid % Quadrature::N_SHAPE;
+                        int elem_idx = tid / d_nesterov_solver->gpu_n_shape();
+                        int node_idx = tid % d_nesterov_solver->gpu_n_shape();
                         if (d_data->type == TYPE_3243)
                         {
                             ancf3243_compute_internal_force(elem_idx, node_idx, static_cast<GPU_ANCF3243_Data *>(d_data));
@@ -412,7 +459,7 @@ one_step_nesterov_kernel(ElementBase *d_data, SyncedNesterovSolver *d_nesterov_s
                 }
 
                 // Dual variable update: lam += rho * h * c(q_new)
-                for (int i = 0; i < 12; i++)
+                for (int i = 0; i < d_nesterov_solver->gpu_n_constraints(); i++)
                 {
                     double constraint_val = 0.0;
                     if (d_data->type == TYPE_3243)
@@ -430,7 +477,7 @@ one_step_nesterov_kernel(ElementBase *d_data, SyncedNesterovSolver *d_nesterov_s
 
                 // Termination on the norm of constraint < outer_tol
                 double norm_constraint = 0.0;
-                for (int i = 0; i < 12; i++)
+                for (int i = 0; i < d_nesterov_solver->gpu_n_constraints(); i++)
                 {
                     double constraint_val = 0.0;
                     if (d_data->type == TYPE_3243)
@@ -498,7 +545,7 @@ void SyncedNesterovSolver::OneStepNesterov()
     HANDLE_ERROR(cudaOccupancyMaxActiveBlocksPerMultiprocessor(&maxBlocksPerSm, one_step_nesterov_kernel, threads, 0));
     int maxCoopBlocks = maxBlocksPerSm * props.multiProcessorCount;
 
-    int N = max(n_coef_ * 3, n_beam_ * Quadrature::N_TOTAL_QP);
+    int N = max(n_coef_ * 3, n_beam_ * n_total_qp_);
     int blocksNeeded = (N + threads - 1) / threads;
     int blocks = std::min(blocksNeeded, maxCoopBlocks);
 

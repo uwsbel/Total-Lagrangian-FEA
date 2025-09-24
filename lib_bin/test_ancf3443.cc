@@ -14,7 +14,7 @@ const double rho0 = 2700; // Density
 int main()
 {
   // initialize GPU data structure
-  int n_beam = 3; // this is working
+  int n_beam = 2; // this is working
   GPU_ANCF3443_Data gpu_3443_data(n_beam);
   gpu_3443_data.Initialize();
 
@@ -28,18 +28,24 @@ int main()
   std::cout << "Total nodes: " << gpu_3443_data.get_n_coef() << std::endl;
 
   // Compute B_inv on CPU
-  Eigen::MatrixXd h_B_inv(Quadrature::N_SHAPE, Quadrature::N_SHAPE);
-  ANCFCPUUtils::B12_matrix(2.0, 1.0, 1.0, h_B_inv, Quadrature::N_SHAPE);
+  Eigen::MatrixXd h_B_inv(Quadrature::N_SHAPE_3443, Quadrature::N_SHAPE_3443);
+  ANCFCPUUtils::ANCF3443_B12_matrix(2.0, 1.0, 1.0, h_B_inv,
+                                    Quadrature::N_SHAPE_3443);
+
+  std::cout << "B_inv:" << std::endl;
+  std::cout << h_B_inv << std::endl;
 
   // Generate nodal coordinates for multiple beams - using Eigen vectors
   Eigen::VectorXd h_x12(gpu_3443_data.get_n_coef());
   Eigen::VectorXd h_y12(gpu_3443_data.get_n_coef());
   Eigen::VectorXd h_z12(gpu_3443_data.get_n_coef());
+  Eigen::MatrixXi element_connectivity(gpu_3443_data.get_n_beam(), 4);
   Eigen::VectorXd h_x12_jac(gpu_3443_data.get_n_coef());
   Eigen::VectorXd h_y12_jac(gpu_3443_data.get_n_coef());
   Eigen::VectorXd h_z12_jac(gpu_3443_data.get_n_coef());
 
-  ANCFCPUUtils::generate_beam_coordinates(n_beam, h_x12, h_y12, h_z12);
+  ANCFCPUUtils::ANCF3443_generate_beam_coordinates(n_beam, h_x12, h_y12, h_z12,
+                                                   element_connectivity);
 
   // print h_x12
   for (int i = 0; i < gpu_3443_data.get_n_coef(); i++)
@@ -59,29 +65,44 @@ int main()
     printf("h_z12(%d) = %f\n", i, h_z12(i));
   }
 
+  for (int i = 0; i < gpu_3443_data.get_n_beam(); i++)
+  {
+    printf("element_connectivity(%d, :) = %d %d %d %d\n", i,
+           element_connectivity(i, 0), element_connectivity(i, 1),
+           element_connectivity(i, 2), element_connectivity(i, 3));
+  }
+
   h_x12_jac = h_x12;
   h_y12_jac = h_y12;
   h_z12_jac = h_z12;
 
-  // Calculate offsets - using Eigen vectors
-  Eigen::VectorXi h_offset_start(gpu_3443_data.get_n_beam());
-  Eigen::VectorXi h_offset_end(gpu_3443_data.get_n_beam());
-  ANCFCPUUtils::calculate_offsets(gpu_3443_data.get_n_beam(), h_offset_start,
-                                  h_offset_end);
-
-  gpu_3443_data.Setup(L, W, H, rho0, nu, E, h_B_inv, Quadrature::gauss_xi_m,
-                      Quadrature::gauss_xi, Quadrature::gauss_eta,
-                      Quadrature::gauss_zeta, Quadrature::weight_xi_m,
-                      Quadrature::weight_xi, Quadrature::weight_eta,
-                      Quadrature::weight_zeta, h_x12, h_y12, h_z12,
-                      h_offset_start, h_offset_end);
+  gpu_3443_data.Setup(L, W, H, rho0, nu, E, h_B_inv, Quadrature::gauss_xi_m_7,
+                      Quadrature::gauss_eta_m_7, Quadrature::gauss_zeta_m_3,
+                      Quadrature::gauss_xi_4, Quadrature::gauss_eta_4,
+                      Quadrature::gauss_zeta_3, Quadrature::weight_xi_m_7,
+                      Quadrature::weight_eta_m_7, Quadrature::weight_zeta_m_3,
+                      Quadrature::weight_xi_4, Quadrature::weight_eta_4,
+                      Quadrature::weight_zeta_3, h_x12, h_y12, h_z12,
+                      element_connectivity);
 
   gpu_3443_data.CalcDsDuPre();
   gpu_3443_data.PrintDsDuPre();
+
+  std::cout << "done PrintDsDuPre" << std::endl;
+
+  std::cout << "gpu_3443_data.n_beam" << gpu_3443_data.get_n_beam()
+            << std::endl;
+  std::cout << "gpu_3443_data.n_coef" << gpu_3443_data.get_n_coef()
+            << std::endl;
+
   gpu_3443_data.CalcMassMatrix();
+
+  std::cout << "done CalcMassMatrix" << std::endl;
 
   Eigen::MatrixXd mass_matrix;
   gpu_3443_data.RetrieveMassMatrixToCPU(mass_matrix);
+
+  std::cout << "done RetrieveMassMatrixToCPU" << std::endl;
 
   std::cout << "mass matrix:" << std::endl;
   for (int i = 0; i < mass_matrix.rows(); i++)
@@ -116,7 +137,6 @@ int main()
 
   gpu_3443_data.CalcInternalForce();
   std::cout << "done calculating internal force" << std::endl;
-
   Eigen::VectorXd internal_force;
   gpu_3443_data.RetrieveInternalForceToCPU(internal_force);
   std::cout << "internal force:" << std::endl;
@@ -151,13 +171,13 @@ int main()
     std::cout << std::endl;
   }
 
-  // alpha, solver_rho, inner_tol, outer_tol, max_outer, max_inner,
-  // timestep
-  SyncedNesterovParams params = {1.0e-8, 1e14, 1.0e-8, 1.0e-8, 5, 200, 1.0e-3};
-  SyncedNesterovSolver solver(&gpu_3443_data);
+  // // alpha, solver_rho, inner_tol, outer_tol, max_outer, max_inner,
+  // // timestep
+  SyncedNesterovParams params = {1.0e-8, 1e14, 1.0e-6, 1.0e-6, 5, 300, 1.0e-3};
+  SyncedNesterovSolver solver(&gpu_3443_data, 24);
   solver.Setup();
   solver.SetParameters(&params);
-  for (int i = 0; i < 4000; i++)
+  for (int i = 0; i < 20; i++)
   {
     solver.Solve();
   }

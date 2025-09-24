@@ -10,11 +10,11 @@ __device__ __forceinline__ void ancf3243_mat_vec_mul8(Eigen::Map<Eigen::MatrixXd
 {
     // clang-format off
     #pragma unroll
-    for (int i = 0; i < Quadrature::N_SHAPE; ++i)
+    for (int i = 0; i < Quadrature::N_SHAPE_3243; ++i)
     {
         out[i] = 0.0;
         #pragma unroll
-        for (int j = 0; j < Quadrature::N_SHAPE; ++j)
+        for (int j = 0; j < Quadrature::N_SHAPE_3243; ++j)
         {
             out[i] += A(i, j) * x[j];
         }
@@ -61,12 +61,12 @@ __device__ __forceinline__ void ancf3243_calc_det_J_xi(double xi,
                                                        double H,
                                                        double *J_out)
 {
-    double db_dxi[Quadrature::N_SHAPE] = {
+    double db_dxi[Quadrature::N_SHAPE_3243] = {
         0.0, L / 2, 0.0, 0.0, (L * W / 4) * eta, (L * H / 4) * zeta, (L * L / 2) * xi, (3 * L * L * L / 8) * xi * xi};
-    double db_deta[Quadrature::N_SHAPE] = {0.0, 0.0, W / 2, 0.0, (L * W / 4) * xi, 0.0, 0.0, 0.0};
-    double db_dzeta[Quadrature::N_SHAPE] = {0.0, 0.0, 0.0, H / 2, 0.0, (L * H / 4) * xi, 0.0, 0.0};
+    double db_deta[Quadrature::N_SHAPE_3243] = {0.0, 0.0, W / 2, 0.0, (L * W / 4) * xi, 0.0, 0.0, 0.0};
+    double db_dzeta[Quadrature::N_SHAPE_3243] = {0.0, 0.0, 0.0, H / 2, 0.0, (L * H / 4) * xi, 0.0, 0.0};
 
-    double ds_dxi[Quadrature::N_SHAPE], ds_deta[Quadrature::N_SHAPE], ds_dzeta[Quadrature::N_SHAPE];
+    double ds_dxi[Quadrature::N_SHAPE_3243], ds_deta[Quadrature::N_SHAPE_3243], ds_dzeta[Quadrature::N_SHAPE_3243];
     ancf3243_mat_vec_mul8(B_inv, db_dxi, ds_dxi);
     ancf3243_mat_vec_mul8(B_inv, db_deta, ds_deta);
     ancf3243_mat_vec_mul8(B_inv, db_dzeta, ds_dzeta);
@@ -81,7 +81,7 @@ __device__ __forceinline__ void ancf3243_calc_det_J_xi(double xi,
             J_out[i * 3 + j] = 0.0;
 
     #pragma unroll
-    for (int i = 0; i < Quadrature::N_SHAPE; ++i)
+    for (int i = 0; i < Quadrature::N_SHAPE_3243; ++i)
     {
         J_out[0 * 3 + 0] += x12_jac(i) * ds_dxi[i];
         J_out[1 * 3 + 0] += y12_jac(i) * ds_dxi[i];
@@ -127,7 +127,7 @@ __device__ __forceinline__ void ancf3243_compute_p(int elem_idx, int qp_idx, GPU
     // Compute F = sum_i e_i ⊗ ∇s_i
     // F is 3x3 matrix stored in row-major order
     #pragma unroll
-    for (int i = 0; i < Quadrature::N_SHAPE; i++)
+    for (int i = 0; i < Quadrature::N_SHAPE_3243; i++)
     { // Loop over nodes
         // Get gradient of shape function i (∇s_i) - this needs proper indexing
         // Assuming ds_du_pre is laid out as [qp_total][8][3]
@@ -228,7 +228,7 @@ __device__ __forceinline__ void ancf3243_compute_internal_force(int elem_idx, in
 
 
     #pragma unroll
-    for (int qp_idx = 0; qp_idx < Quadrature::N_TOTAL_QP; qp_idx++)
+    for (int qp_idx = 0; qp_idx < Quadrature::N_TOTAL_QP_3_2_2; qp_idx++)
     {
         double grad_s[3];
         grad_s[0] = d_data->ds_du_pre(qp_idx)(node_idx, 0);
