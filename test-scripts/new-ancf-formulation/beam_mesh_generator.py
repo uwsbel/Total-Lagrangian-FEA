@@ -2,20 +2,16 @@ import numpy as np
 
 class BeamConfig:
     """Configuration class for beam properties"""
-    def __init__(self, length, width, height, position=(0, 0, 0), orientation='x'):
+    def __init__(self, length, position, orientation='x'):
         """
         Initialize beam configuration
         
         Args:
             length: Beam length along primary axis
-            width: Beam width
-            height: Beam height
-            position: Center position (x, y, z) of the beam
+            position: Center position (x, y, z) of the first beam
             orientation: Primary axis direction ('x', 'y', or 'z')
         """
         self.length = length
-        self.width = width
-        self.height = height
         self.position = position
         self.orientation = orientation
         
@@ -23,10 +19,6 @@ class BeamConfig:
         """Validate beam configuration parameters"""
         if self.length <= 0:
             raise ValueError("Beam length must be > 0")
-        if self.width <= 0:
-            raise ValueError("Beam width must be > 0")
-        if self.height <= 0:
-            raise ValueError("Beam height must be > 0")
         if self.orientation not in ['x', 'y', 'z']:
             raise ValueError("Orientation must be 'x', 'y', or 'z'")
         return True
@@ -35,80 +27,68 @@ class BeamConfig:
 class BeamMeshGenerator:
     """Generator for automated mesh creation of multiple beams"""
     
-    def __init__(self, n_beams, beam_config, spacing=2.0):
+    def __init__(self, n_beams, beam_config):
         """
         Initialize mesh generator
         
         Args:
             n_beams: Number of beam elements
             beam_config: BeamConfig object defining beam properties
-            spacing: Distance between beam centers
         """
         self.n_beams = n_beams
         self.beam_config = beam_config
-        self.spacing = spacing
         
         # Validate configuration
         self.beam_config.validate()
         if n_beams < 1:
             raise ValueError("Number of beams must be >= 1")
-        if spacing < 0:
-            raise ValueError("Spacing must be >= 0")
     
     def generate_beam_positions(self):
         """Generate center positions for all beams"""
+        L = self.beam_config.length
+        x0 = float(self.beam_config.position[0])
         positions = []
         for i in range(self.n_beams):
             if self.beam_config.orientation == 'x':
-                pos = (i * (self.beam_config.length + self.spacing), 0, 0)
-            elif self.beam_config.orientation == 'y':
-                pos = (0, i * (self.beam_config.length + self.spacing), 0)
-            else:  # 'z'
-                pos = (0, 0, i * (self.beam_config.length + self.spacing))
+                pos = (x0 + i * L, 0, 0)
             positions.append(pos)
         return positions
     
-    def _generate_local_beam_coords(self):
-        """Generate local coordinates for a single beam"""
-        L = self.beam_config.length
-        W = self.beam_config.width
-        H = self.beam_config.height
-        
-        # This replicates the exact coordinate pattern from 3-beam-debug.py
-        # The pattern is: [x1, dx1/du, dx1/dv, dx1/dw, x2, dx2/du, dx2/dv, dx2/dw]
-        # For the first beam: x1=-L/2, x2=L/2, derivatives are 0 or 1
-        x_local = np.array([-L/2, 1.0, 0.0, 0.0, L/2, 1.0, 0.0, 0.0])
-        y_local = np.array([1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0])
-        z_local = np.array([0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0])
-        
-        return {'x': x_local, 'y': y_local, 'z': z_local}
-    
     def generate_nodal_coordinates(self):
         """Generate all nodal coordinates for all beams"""
-        # Start with the first beam coordinates (exactly as in original)
-        x_coords = np.array([-1.0, 1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0])
-        y_coords = np.array([1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0])
-        z_coords = np.array([0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0])
+        L = self.beam_config.length
+        centers = self.generate_beam_positions()
+
+        # for each beam, there are two nodes
+        # Each node has 4 DOFs (x, dx/du, dx/dv, dx/dw)
+        # The nodal coordinates are:
+        # x1, dx1/du, dx1/dv, dx1/dw, x2, dx2/du, dx2/dv, dx2/dw
         
-        # Append additional beams using the same logic as original
-        for i in range(2, self.n_beams + 1):  # MATLAB loop is inclusive
-            x_offset = self.spacing
-            
-            # Only shift the first entry of the last beam by x_offset
-            x_block = x_coords[-4:].copy()
-            x_block[0] += x_offset
-            
-            # Last 4 entries for y and z (unchanged)
-            y_block = y_coords[-4:]
-            z_block = z_coords[-4:]
-            
-            # Append to the nodal arrays
-            x_coords = np.concatenate([x_coords, x_block])
-            y_coords = np.concatenate([y_coords, y_block])
-            z_coords = np.concatenate([z_coords, z_block])
+        node_x = [centers[0][0] - L/2]
+        for cx in centers:
+            node_x.append(cx[0] + L/2)
+
+        # Create arrays for nodal coordinates
+        n_nodes = len(node_x)
+        x_coords = np.zeros(4 * n_nodes, dtype=float)
+        y_coords = np.zeros(4 * n_nodes, dtype=float)
+        z_coords = np.zeros(4 * n_nodes, dtype=float)
         
+        # Define the pattern for each node
+        x_pattern = [1.0, 0.0, 0.0]
+        y_pattern = [1.0, 0.0, 1.0, 0.0]
+        z_pattern = [0.0, 0.0, 0.0, 1.0]
+        
+        # Fill the arrays
+        for i, x in enumerate(node_x):
+            idx = 4 * i
+            x_coords[idx] = x
+            x_coords[idx+1:idx+4] = x_pattern
+            y_coords[idx:idx+4] = y_pattern
+            z_coords[idx:idx+4] = z_pattern
+
         return x_coords, y_coords, z_coords
-    
+            
     def generate_dof_mapping(self):
         """Generate DOF mapping for all beams"""
         # The original code uses overlapping DOF ranges:

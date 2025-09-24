@@ -48,8 +48,8 @@ n_beam = 2  # Number of beam elements
 
 # AUTOMATED MESH GENERATION
 print("Generating mesh using automated system...")
-beam_config = BeamConfig(length=L, width=W, height=H, orientation='x')
-mesh_gen = BeamMeshGenerator(n_beam, beam_config, spacing=2.0)
+beam_config = BeamConfig(length=L, position=(1.0, 0, 0), orientation='x')
+mesh_gen = BeamMeshGenerator(n_beam, beam_config)
 
 # Generate coordinates automatically
 x12, y12, z12 = mesh_gen.generate_nodal_coordinates()
@@ -214,6 +214,8 @@ for i in range(m.shape[0]):
     for j in range(m.shape[1]):
         print(f"{float(m[i,j]):6.1f}", end=" ")
     print()
+
+
 
 # Make mass matrix available for testing
 if __name__ == "__main__":
