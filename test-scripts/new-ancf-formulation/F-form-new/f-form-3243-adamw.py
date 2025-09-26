@@ -545,6 +545,11 @@ for step in range(Nt):
                 f_int[3 * a_global + 2] += f_elem[a_local, 2]
 
         return f_int
+    
+    def scaled_grad_stop(grad, x, tol_base):
+        """Return True if ||grad|| <= tol_base * (1 + ||x||)."""
+        return np.linalg.norm(grad) <= tol_base * (1.0 + np.linalg.norm(x))
+
 
     def alm_adamw_step(v_guess, lam_guess, v_prev, q_prev, M, f_int_func, f_int, f_ext, h, rho):
         v = v_guess.copy()
@@ -552,7 +557,7 @@ for step in range(Nt):
 
         max_outer = 5
         max_inner = 400
-        inner_tol = 1e-1
+        inner_tol_base = 1e-1         # ← base tol (choose your target accuracy here)
         outer_tol = 1e-6
 
         for outer_iter in range(max_outer):
@@ -596,14 +601,15 @@ for step in range(Nt):
                 m_hat = m_adam / (1 - beta1 ** t)
                 v_hat = v_adam / (1 - beta2 ** t)
 
-                v_current = v_current - lr * \
-                    (m_hat / (np.sqrt(v_hat) + eps) + weight_decay * v_current)
+                v_current = v_current - lr * (m_hat / (np.sqrt(v_hat) + eps) + weight_decay * v_current)
 
                 grad_norm = np.linalg.norm(grad)
-                print(f"[inner {inner_iter:2d}] ‖∇L‖ = {grad_norm:.3e}")
-
-                if grad_norm < inner_tol:
+                # ---- scaled gradient stop: ||grad|| <= tol * (1 + ||v||)
+                if scaled_grad_stop(grad, v_current, inner_tol_base):
+                    print(f"[inner {inner_iter:2d}] ||∇L||={grad_norm:.3e}  (scaled stop met: tol={inner_tol_base:.1e})")
                     break
+                else:
+                    print(f"[inner {inner_iter:2d}] ||∇L||={grad_norm:.3e}")
 
             # OUTER loop update
             v = v_current
@@ -611,13 +617,13 @@ for step in range(Nt):
             constr_violation = constraint(qA)
             lam += rho * h * constr_violation
 
-            print(
-                f">>>>> End of OUTER STEP #{outer_iter}; norm(constr_violation) = {np.linalg.norm(constr_violation):.2e}")
+            print(f">>>>> End of OUTER STEP #{outer_iter}; ||c|| = {np.linalg.norm(constr_violation):.2e}")
 
             if np.linalg.norm(constr_violation) < outer_tol:
                 break
 
         return v, lam
+
 
     # Now call the internal force computation
     f_int = compute_internal_force(x12, y12, z12)
