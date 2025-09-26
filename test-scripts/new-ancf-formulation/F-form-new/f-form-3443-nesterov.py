@@ -680,8 +680,8 @@ for step in range(Nt):
                 # Gradient at look-ahead
                 print("outer iter: ", outer_iter, "inner iter: ", inner_iter)
                 g = grad_L(y)
-                print("g: ", g)
-                print("g: ", np.linalg.norm(g))
+                #print("g: ", g)
+                print("g norm: ", np.linalg.norm(g))
 
                 # Fixed stepsize update
                 v_next = y - alpha * g
