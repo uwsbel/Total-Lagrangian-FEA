@@ -81,7 +81,7 @@ H = 1.0  # Height
 W = 1.0  # Width
 L = 2.0  # Length
 
-n_beam = 1  # Number of beam elements
+n_beam = 3  # Number of beam elements
 
 
 # Each vector is 8x1
@@ -389,6 +389,9 @@ r_global = np.zeros((n_beam, n_sample, 3))  # deformed/global positions (if need
 n_sample = uvw.shape[0]
 r_ref = np.zeros((n_beam, n_sample, 3))  # beam × sample × (x,y,z)
 
+        
+
+
 for a in range(n_beam):
     idx = np.arange(offset_start[a], offset_end[a] + 1)
     x12_loc = x12[idx]
@@ -404,7 +407,10 @@ for a in range(n_beam):
         N_mat = np.vstack([x12_loc, y12_loc, z12_loc])
         r_ref[a, i, :] = N_mat @ s_sample
 
-Nt = 40  # Number of time steps
+        
+
+
+Nt = 30  # Number of time steps
 
 end_x = np.zeros((n_beam, Nt))
 end_y = np.zeros((n_beam, Nt))
@@ -414,8 +420,6 @@ end_y_du = np.zeros((n_beam, Nt))
 end_z_du = np.zeros((n_beam, Nt))
 
 
-fig = plt.figure(figsize=(8, 6))
-ax = fig.add_subplot(111, projection='3d')
 
 ds_du_pre = {}  # Precomputed ∂s/∂(u,v,w) at each quadrature point
 
@@ -431,12 +435,9 @@ for ixi, xi in enumerate(gauss_xi):
             w = H * zeta / 2
             ds_du_pre[(ixi, ieta, izeta)] = ds_du_mat(u, v, w, B_inv)
 
+print("Precomputed ds/du at quadrature points:")
+print(ds_du_pre)
 
-psi_A_pre = {}
-
-for key, ds in ds_du_pre.items():
-    s_ij = np.array([[np.dot(ds[i], ds[j]) for j in range(8)] for i in range(8)])
-    psi_A_pre[key] = s_ij + s_ij.T  # symmetric 8×8
 
 detJ_pre = {}
 for ixi, xi in enumerate(gauss_xi):
@@ -447,22 +448,6 @@ for ixi, xi in enumerate(gauss_xi):
             w = H * zeta / 2
             J = calc_det_J(u, v, w, B_inv, x12_ref, y12_ref, z12_ref)
             detJ_pre[(ixi, ieta, izeta)] = np.linalg.det(J)
-
-dot_ds_pre = {}
-dot_ds4_pre = {}
-
-for key, ds in ds_du_pre.items():
-    dot_ds_ij = np.zeros((8, 8))
-    dot_ds4 = np.zeros((8, 8, 8, 8))
-    for i in range(8):
-        for j in range(8):
-            dot_ds_ij[i, j] = np.dot(ds[i], ds[j])
-            for k in range(8):
-                for l in range(8):
-                    dot_ds4[i, j, k, l] = np.dot(ds[i], ds[l]) * np.dot(ds[j], ds[k])
-    dot_ds_pre[key] = dot_ds_ij
-    dot_ds4_pre[key] = dot_ds4
-
 
 
 n_gen_coord = 3 * N_coef   # total degrees of freedom (x, y, z per node)
@@ -476,162 +461,170 @@ rho_bb = 1e14
 
 
 for step in range(Nt):
-    def compute_internal_force(x12, y12, z12):
-            f_a0_global = np.zeros((N_coef, 3))
-            f_a1_global = np.zeros((N_coef, 3))
-            f_a2_global = np.zeros((N_coef, 3))
-            
-
-            for elem in range(n_beam):
-                idx = np.arange(offset_start[elem], offset_end[elem] + 1)
-                x12_loc, y12_loc, z12_loc = x12[idx], y12[idx], z12[idx]
-                N_mat = np.vstack([x12_loc, y12_loc, z12_loc])
-                e = [np.array([x12_loc[i], y12_loc[i], z12_loc[i]]) for i in range(8)]
-
-                f_a0, f_a1, f_a2 = np.zeros((8, 3)), np.zeros((8, 3)), np.zeros((8, 3))
-
-                for ixi, xi in enumerate(gauss_xi):
-                    for ieta, eta in enumerate(gauss_eta):
-                        for izeta, zeta in enumerate(gauss_zeta):
-                            ds = ds_du_pre[(ixi, ieta, izeta)]
-                            detJ = detJ_pre[(ixi, ieta, izeta)]
-                            detJ_dxi = (L / 2) * (W / 2) * (H / 2)
-
-                            dot_ds = dot_ds_pre[(ixi, ieta, izeta)]
-                            dot_ds4 = dot_ds4_pre[(ixi, ieta, izeta)]
-
-
-                            scale = weight_xi[ixi] * weight_eta[ieta] * weight_zeta[izeta] * detJ * detJ_dxi
-                            T1 = sum(dot_ds[i, j] * np.dot(e[i], e[j]) for i in range(8) for j in range(8))
-                            T2 = sum(dot_ds4[i, j, k, l] * np.dot(e[i], e[j]) * np.dot(e[k], e[l]) 
-                                    for i in range(8) for j in range(8) for k in range(8) for l in range(8))
-
-
-                            psi_A = psi_A_pre[(ixi, ieta, izeta)]
-                            dT1_de = np.array([N_mat @ psi_A[a] for a in range(8)])
-                            dot_e = np.array([[np.dot(e[i], e[j]) for j in range(8)] for i in range(8)])
-                            dT2_de = np.zeros((8, 3))
-                            for a in range(8):
-                                phi_a = np.zeros(8)
-                                for k in range(8):
-                                    acc = 0.0
-                                    for i in range(8):
-                                        for j in range(8):
-                                            v1 = dot_ds[a, j] * dot_ds[i, k]
-                                            v2 = dot_ds[k, j] * dot_ds[a, i]
-                                            v3 = dot_ds[i, k] * dot_ds[j, a]
-                                            v4 = dot_ds[i, a] * dot_ds[j, k]
-                                            acc += (v1 + v2 + v3 + v4) * dot_e[i, j]
-                                    phi_a[k] = acc
-                                dT2_de[a] = N_mat @ phi_a
-
-
-                            for a in range(8):
-                                f_a1[a] += (lam_param / 4.0) * T1 * dT1_de[a] * scale
-                                f_a0[a] -= 0.25 * (2.0 * mu + 3.0 * lam_param) * dT1_de[a] * scale
-                                f_a2[a] += (mu / 4.0) * dT2_de[a] * scale
-
-                for a_local, a_global in enumerate(idx):
-                    f_a0_global[a_global] += f_a0[a_local]
-                    f_a1_global[a_global] += f_a1[a_local]
-                    f_a2_global[a_global] += f_a2[a_local]
-
-            f_int = np.zeros((3 * N_coef,))
-            for i in range(N_coef):
-                f_total_i = f_a0_global[i] + f_a1_global[i] + f_a2_global[i]
-                f_int[3*i:3*i+3] = f_total_i
-            return f_int
-    
-
-    def alm_bb_step(v_guess, lam_guess, v_prev, q_prev, M, f_int, f_ext, h, rho):
+    def compute_deformation_gradient(e, grad_s):
         """
-        Performs one ALM-BB step.
+        Compute the deformation gradient F = sum_i e_i ⊗ ∇s_i
+        where:
+        - e: list of 8 node vectors (each shape (3,))
+        - grad_s: numpy array of shape (8, 3), ∇s_i as rows
+        Returns:
+        - F: numpy array of shape (3, 3)
+        """
+        F = np.zeros((3, 3))
+        for i in range(8):
+            F += np.outer(e[i], grad_s[i])  # e_i (3,) ⊗ ∇s_i (3,) → (3×3)
+        return F
+
+    def compute_green_lagrange_strain(F):
+        """
+        Compute Green-Lagrange strain tensor:
+            E = 0.5 * (F^T F - I)
+        """
+        I = np.eye(3)
+        C = F.T @ F
+        E = 0.5 * (C - I)
+        return E
+
+    def compute_internal_force(x12, y12, z12):
+        f_int = np.zeros((3 * N_coef,))  # global internal force vector
+
+        for elem in range(n_beam):
+            idx = np.arange(offset_start[elem], offset_end[elem] + 1)
+            x12_loc = x12[idx]
+            y12_loc = y12[idx]
+            z12_loc = z12[idx]
+            e = [np.array([x12_loc[i], y12_loc[i], z12_loc[i]]) for i in range(8)]
+
+            f_elem = np.zeros((8, 3))  # local internal force for this element
+
+            for ixi, xi in enumerate(gauss_xi):
+                weight_u = weight_xi[ixi]
+                for ieta, eta in enumerate(gauss_eta):
+                    weight_v = weight_eta[ieta]
+                    for izeta, zeta in enumerate(gauss_zeta):
+                        weight_w = weight_zeta[izeta]
+                        scale = weight_u * weight_v * weight_w
+
+                        # Compute local coordinates and shape functions
+                        u = L * xi / 2
+                        v = W * eta / 2
+                        w = H * zeta / 2
+                        b = b_vec(u, v, w)
+                        s = B_inv @ b  # shape function values (not used here but kept if needed)
+
+                        ds = ds_du_pre[(ixi, ieta, izeta)]  # shape (8, 3)
+                        detJ = detJ_pre[(ixi, ieta, izeta)]
+
+                        # Compute deformation gradient
+                        F = compute_deformation_gradient(e, ds)
+                        FtF = F.T @ F
+                        tr_FtF = np.trace(FtF)
+                        FFF = F @ F.T @ F
+
+                        # Stress-like integrand
+                        stress_term = (
+                            lam_param * (0.5 * tr_FtF - 1.5) * F +
+                            mu * (FFF - F)
+                        )
+
+                        # Integrate internal force: f_i += stress_term @ grad_s_i
+                        for i in range(8):
+                            grad_si = ds[i]  # ∇s_i as 3-vector
+                            force_i = stress_term @ grad_si  # shape (3,)
+                            f_elem[i] += force_i * scale * detJ * (L * W * H / 8.0)
+
+            # Assemble local into global internal force vector
+            for a_local, a_global in enumerate(idx):
+                f_int[3 * a_global + 0] += f_elem[a_local, 0]
+                f_int[3 * a_global + 1] += f_elem[a_local, 1]
+                f_int[3 * a_global + 2] += f_elem[a_local, 2]
+
+        return f_int
+    
+    def alm_nesterov_step(v_guess, lam_guess, v_prev, q_prev, M, f_int_func, f_int, f_ext, h, rho):
+        """
+        One ALM step with true Nesterov acceleration (FISTA schedule), no restart.
+        - Uses scaled duals: lam <- lam + rho*h*c(qA), and grad uses J^T(lam + rho*h*c(qA)).
+        - Fixed stepsize alpha (pick conservatively).
         """
         v = v_guess.copy()
         lam = lam_guess.copy()
-        alpha = 1e-4
-        use_bb1 = True
-        max_outer = 30
+
+        max_outer = 5
         max_inner = 200
-        inner_tol = 1e-3
+        inner_tol = 1e-6   # tolerance on iterate change (can relax)
         outer_tol = 1e-6
+
+        # --- choose a fixed stepsize alpha ---
+        # Option A (keep your old small value):
+        alpha = 1.0e-8
+
+        # Option B (one-time crude Lipschitz estimate; uncomment to try):
+        # L_M = np.max(np.sum(np.abs(M), axis=1)) / h          # ||M||_inf / h
+        # J0 = constraint_jacobian(q_prev)
+        # L_J = (np.max(np.sum(np.abs(J0), axis=1)) ** 2)      # ||J||_inf^2
+        # L_est = L_M + rho * h * L_J
+        # alpha = 1.0 / (10.0 * max(L_est, 1e-12))             # safety factor 10
+
         for outer_iter in range(max_outer):
             def grad_L(v_loc):
-                qA = q_prev + h * v_loc  # Predicted position
-
-                # Extract x, y, z from qA
-                x_new = np.zeros(N_coef)
-                y_new = np.zeros(N_coef)
-                z_new = np.zeros(N_coef)
-
-                for i in range(N_coef):
-                    x_new[i] = qA[3 * i + 0]
-                    y_new[i] = qA[3 * i + 1]
-                    z_new[i] = qA[3 * i + 2]
-
-                f_int_dyn = compute_internal_force(x_new, y_new, z_new)
-
-                #g  = (M @ (v_loc - v_prev)) / h - (-f_int + f_ext)
-                g  = (M @ (v_loc - v_prev)) / h - (-f_int_dyn + f_ext)
+                # State at look-ahead
                 qA = q_prev + h * v_loc
-                J  = constraint_jacobian(qA)
-                constr_violation  = constraint(qA)
-                return g + J.T @ (lam + rho * h * constr_violation)
 
-            vk = v.copy()
-            gk = grad_L(vk)
+                # unpack qA -> x,y,z nodal arrays
+                x_new = qA[0::3]
+                y_new = qA[1::3]
+                z_new = qA[2::3]
 
-            inner_count = 0  
+                f_int_dyn = f_int_func(x_new, y_new, z_new)
+                g_mech = (M @ (v_loc - v_prev)) / h - (-f_int_dyn + f_ext)
+
+                J = constraint_jacobian(qA)
+                cA = constraint(qA)
+
+                return g_mech + J.T @ (lam + rho * h * cA)
+
+            # ---- True Nesterov/FISTA inner loop (fixed schedule, no restart) ----
+            v_k   = v.copy()
+            v_km1 = v.copy()   # zero momentum at first step
+            t     = 1.0
 
             for inner_iter in range(max_inner):
-                vk1 = vk - alpha * gk
-                gk1 = grad_L(vk1)
+                t_next = 0.5 * (1.0 + np.sqrt(1.0 + 4.0 * t * t))
+                beta   = (t - 1.0) / t_next
 
-                norm_gk1 = np.linalg.norm(gk1)
-                print(f"inner {inner_iter}, norm(gk1)={norm_gk1:.2e}, alpha={alpha:.2e}")
+                # Nesterov look-ahead
+                y = v_k + beta * (v_k - v_km1)
 
-                inner_count = inner_iter + 1
+                # Gradient at look-ahead
+                print("outer iter: ", outer_iter, "inner iter: ", inner_iter)
+                g = grad_L(y)
+                #print("g: ", g)
+                print("g: ", np.linalg.norm(g))
 
-                if np.linalg.norm(gk1) < inner_tol:
-                    vk = vk1
+                # Fixed stepsize update
+                v_next = y - alpha * g
+
+                # stopping by iterate change (cheap)
+                if abs(np.linalg.norm(v_next) - np.linalg.norm(v_k)) < inner_tol:
+                    v_k = v_next
                     break
 
-                s, y = vk1 - vk, gk1 - gk
-                if use_bb1:
-                    alpha_bb = np.dot(s, s) / (np.dot(s, y) + 1e-12)
-                else:
-                    alpha_bb = np.dot(s, y) / (np.dot(y, y) + 1e-12)
+                v_km1, v_k, t = v_k, v_next, t_next
 
-                use_bb1 = not use_bb1
-                
-                if alpha_bb < 1e-12:
-                    vk = vk1
-                    break 
-                            
-                alpha = np.clip(alpha, 1e-12, 1e-6)
-
-                # 💥 Here: update alpha and decay it
-                alpha = alpha_bb
-                vk, gk = vk1, gk1
-            v = vk
+            # OUTER dual update (scaled multipliers)
+            v = v_k
             qA = q_prev + h * v
-            constr_violation = constraint(qA)
-            
-            lam += rho * h * constr_violation
+            cA = constraint(qA)
+            lam += rho * h * cA
 
-            print(f">>>>> End of OUTER STEP #{outer_iter}; INNER LOOP: {inner_count} iters; norm(constr_violation)={np.linalg.norm(constr_violation):.2e}")
-
-            if np.linalg.norm(constr_violation) < outer_tol:
+            if np.linalg.norm(cA) < outer_tol:
                 break
 
-        print("===================================")
-
         return v, lam
-        
 
     # Now call the internal force computation
     f_int = compute_internal_force(x12, y12, z12)
-
 
     # Location where the external force is applied (in physical coordinates)
     u_P, v_P, w_P = 1.0, 0.0, 0.0
@@ -642,9 +635,11 @@ for step in range(Nt):
 
     # External force at point P
     if step <= 200:
-        f_P = np.array([200.0, 450.0,3100.0])
+        f_P = np.array([200.0, -10.0, 3100.0])
     else:
         f_P = np.array([0.0, 0.0, 0.0])
+
+
 
     # External force distribution to the 8 DOFs
     f_ext = [s_at_P[i] * f_P for i in range(8)]  # List of (3,) vectors
@@ -655,6 +650,8 @@ for step in range(Nt):
     for i_local, global_idx in enumerate(idx):
         row_idx = slice(3 * global_idx, 3 * (global_idx + 1))
         f_ext_vec[row_idx] = f_ext[i_local]
+
+    print(f_ext_vec)
 
     M_full = np.zeros((3 * N_coef, 3 * N_coef))
 
@@ -673,7 +670,9 @@ for step in range(Nt):
         q_prev[3 * i + 1] = y12[i]
         q_prev[3 * i + 2] = z12[i]
 
-    v_res, lam_bb_res = alm_bb_step(v_guess, lam_bb_guess, v_prev, q_prev, M_full, f_int, f_ext_vec, time_step, rho_bb)
+
+    v_res, lam_bb_res = alm_nesterov_step(v_guess, lam_bb_guess, v_prev, q_prev, M_full, compute_internal_force,f_int, f_ext_vec, time_step, rho_bb)
+
 
     v_guess = v_res.copy()
     lam_bb_guess = lam_bb_res.copy()
@@ -688,13 +687,25 @@ for step in range(Nt):
     # Tip index = node 5 of last element (MATLAB: end - 3)
     tip_idx = offset_end[-1] - 3
 
-    end_x[-1, step] = x12[tip_idx] 
+    end_x[-1, step] = x12[tip_idx] - 3.0
     end_y[-1, step] = y12[tip_idx]
     end_z[-1, step] = z12[tip_idx]
 
     end_x_du[-1, step] = x12[tip_idx + 1]
     end_y_du[-1, step] = y12[tip_idx + 1]
     end_z_du[-1, step] = z12[tip_idx + 1]
+
+    print("x12")
+    print(x12)
+
+    print("y12")
+    print(y12)
+
+    print("z12")
+    print(z12)
+
+    
+
 
 plt.figure()
 plt.plot(np.arange(Nt), end_z[-1], '-o', label='end_z')
