@@ -1,4 +1,5 @@
 import numpy as np
+import matplotlib.pyplot as plt  # Importing matplotlib for plotting
 
 # ----------------------------
 # Material
@@ -390,7 +391,7 @@ if __name__ == "__main__":
 
         max_outer = 5
         max_inner = 500
-        alpha = 1e-8  # fixed step size
+        alpha = 1e-6  # fixed step size
 
         for outer_iter in range(max_outer):
             def grad_L(v_loc):
@@ -412,38 +413,47 @@ if __name__ == "__main__":
                 beta   = (t-1)/t_next
                 y = v_k + beta*(v_k - v_km1)
                 g = grad_L(y)
-                print("outer", outer_iter, "inner", inner_iter, "||g|| =", np.linalg.norm(g))
+                gnorm = np.linalg.norm(g)
                 v_next = y - alpha*g
-                
+
+                # Print every 20 steps
+                if inner_iter % 20 == 0:
+                    print(f"[inner {inner_iter}] ||g||={gnorm:.3e}")
+
                 # Check convergence (skip first iteration)
                 if v_k_prev is not None and np.linalg.norm(v_next - v_k_prev) < 1e-6:
+                    print(f"[inner {inner_iter}] ||g||={gnorm:.3e} (stop)")
                     v_k = v_next
-                    print(f"  -> Converged after {inner_iter+1} iterations")
                     break
-                    
+
                 v_k_prev = v_k.copy()
                 v_km1, v_k, t = v_k, v_next, t_next
 
             v = v_k
             qA = q_prev + h*v
-            lam += rho_bb*h*constraint(qA)
-            if np.linalg.norm(constraint(qA)) < 1e-6:
-                break
+            cA = constraint(qA)
+            lam += rho_bb*h*cA
+            print(f">>>>> OUTER {outer_iter}: ||c||={np.linalg.norm(cA):.3e}")
+
         return v, lam
 
     # --- Simulation loop ---
-    Nt = 10
+    Nt = 30
     q_prev = x_nodes.flatten()
     v_prev = np.zeros_like(q_prev)
     v_guess = v_prev.copy()
     lam_guess = np.zeros(constraint(q_prev).shape)
 
-    np.set_printoptions(suppress=True, precision=8)
-    
+    node2_y = []  # List to store y position of node 2
+
     for step in range(Nt):
+        if step > 15 or step == 0:
+            f_ext0[3*2 + 1] = 0.0  # Remove force after step 15
+        else:
+            f_ext0[3*2 + 1] = -1000.0
         v_res, lam_res = alm_nesterov_step(v_guess, lam_guess, v_prev, q_prev, 
-                                        M_full, lambda x: tet10_internal_force(x, pre, lam, mu),
-                                        f_ext0, time_step, rho_bb=1e14)
+                                           M_full, lambda x: tet10_internal_force(x, pre, lam, mu),
+                                           f_ext0, time_step, rho_bb=1e10)
 
         v_guess, lam_guess = v_res.copy(), lam_res.copy()
         q_new = q_prev + time_step * v_guess
@@ -454,7 +464,15 @@ if __name__ == "__main__":
 
         # Print position of node 2
         print(f"Step {step}: Node 2 position = {x_nodes[2]}")
-
+        node2_y.append(x_nodes[2, 1])  # Save y position
 
         q_prev = q_new.copy()
         v_prev = v_guess.copy()
+
+    # Plot after simulation
+    plt.plot(range(Nt), node2_y, marker='o')
+    plt.xlabel("Step")
+    plt.ylabel("Node 2 Y Position")
+    plt.title("Node 2 Y Position vs Step")
+    plt.grid(True)
+    plt.show()
