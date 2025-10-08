@@ -1,13 +1,14 @@
 import numpy as np
 import matplotlib.pyplot as plt
+from tet_mesh_reader import read_node, read_ele
 
 # ----------------------------
 # Material
 # ----------------------------
-E = 7e8
+E_mat = 7e8
 nu = 0.33
-mu = E / (2*(1+nu))
-lam = E*nu/((1+nu)*(1-2*nu))
+mu = E_mat / (2*(1+nu))
+lam = E_mat*nu/((1+nu)*(1-2*nu))
 rho0 = 2700.0
 
 # ----------------------------
@@ -54,14 +55,14 @@ def tet10_shape_function_gradients(xi, eta, zeta):
 # ----------------------------
 # Precompute reference gradients
 # ----------------------------
-def tet10_precompute_reference(X_nodes):
+def tet10_precompute_reference(X_elem_nodes):
     pts_xyz, _, w = tet5pt_quadrature()
     pre = []
     for (xi, eta, zeta), wq in zip(pts_xyz, w):
         dN_dxi = tet10_shape_function_gradients(xi, eta, zeta)
         J = np.zeros((3, 3))
         for a in range(10):
-            J += np.outer(X_nodes[a], dN_dxi[a])
+            J += np.outer(X_elem_nodes[a], dN_dxi[a])  # <-- FIXED HERE
         detJ = np.linalg.det(J)
         grad_N = np.zeros((10, 3))
         JT = J.T
@@ -69,6 +70,27 @@ def tet10_precompute_reference(X_nodes):
             grad_N[a,:] = np.linalg.solve(JT, dN_dxi[a])
         pre.append({"grad_N": grad_N, "detJ": detJ, "w": wq})
     return pre
+
+def tet10_precompute_reference_mesh(X_nodes, X_elem):
+    """
+    Precompute reference gradients for all elements in the mesh.
+
+    Args:
+        X_nodes: (n_nodes, 3) array of node coordinates.
+        X_elem: (n_elements, 10) array of element connectivity (node indices).
+
+    Returns:
+        pre_list: list of precomputed reference data for each element.
+    """
+    pre_list = []
+    for elem_idx in range(X_elem.shape[0]):
+        node_indices = X_elem[elem_idx]           # indices of the 10 nodes for this element
+        X_elem_nodes = X_nodes[node_indices]      # shape: (10, 3)
+        print("=====")
+        print(X_elem_nodes)
+        pre = tet10_precompute_reference(X_elem_nodes)
+        pre_list.append(pre)
+    return pre_list
 
 
 # ----------------------------
@@ -90,6 +112,30 @@ def tet10_internal_force(x_nodes, pre, lam, mu):
         for a in range(10):
             f[a] += (P @ grad_N[a]) * dV
     return f
+
+def tet10_internal_force_mesh(x_nodes, X_elem, pre_mesh, lam, mu):
+    """
+    Assemble the global internal force vector for the mesh.
+
+    Args:
+        x_nodes: (n_nodes, 3) current node positions
+        X_elem: (n_elements, 10) element connectivity
+        pre_mesh: list of precomputed reference data for each element
+        lam, mu: material parameters
+
+    Returns:
+        f_int: (3*n_nodes,) global internal force vector
+    """
+    n_nodes = x_nodes.shape[0]
+    f_int = np.zeros((n_nodes, 3))
+    for elem_idx in range(X_elem.shape[0]):
+        node_indices = X_elem[elem_idx]           # (10,)
+        x_elem_nodes = x_nodes[node_indices]      # (10, 3)
+        pre = pre_mesh[elem_idx]                  # reference gradients for this element
+        f_elem = tet10_internal_force(x_elem_nodes, pre, lam, mu)  # (10, 3)
+        for a_local, a_global in enumerate(node_indices):
+            f_int[a_global] += f_elem[a_local]
+    return f_int.flatten()
 
 
 # ----------------------------
@@ -119,6 +165,39 @@ def tet10_consistent_mass(X_nodes, rho):
             M30[3*i:3*i+3, 3*j:3*j+3] = Msc[i,j]*np.eye(3)
     return M30
 
+def tet10_consistent_mass_mesh(X_nodes, X_elem, rho):
+    """
+    Assemble the global consistent mass matrix for a TET10 mesh.
+
+    Args:
+        X_nodes: (n_nodes, 3) array of node coordinates.
+        X_elem: (n_elements, 10) array of element connectivity (node indices).
+        rho: material density.
+
+    Returns:
+        M_full: (3*n_nodes, 3*n_nodes) global mass matrix.
+    """
+    n_nodes = X_nodes.shape[0]
+    n_elements = X_elem.shape[0]
+    M_full = np.zeros((3*n_nodes, 3*n_nodes))
+
+    for elem_idx in range(n_elements):
+        node_indices = X_elem[elem_idx]  # (10,)
+        X_elem_nodes = X_nodes[node_indices]  # (10, 3)
+        M_elem = tet10_consistent_mass(X_elem_nodes, rho)  # (30, 30)
+
+        # Map local element DOFs to global DOFs
+        global_dof_indices = []
+        for ni in node_indices:
+            global_dof_indices.extend([3*ni, 3*ni+1, 3*ni+2])  # x, y, z for each node
+
+        # Assemble
+        for i_local, i_global in enumerate(global_dof_indices):
+            for j_local, j_global in enumerate(global_dof_indices):
+                M_full[i_global, j_global] += M_elem[i_local, j_local]
+
+    return M_full
+
 
 # ----------------------------
 # Geometry
@@ -136,47 +215,52 @@ def make_unit_tet10():
     Xe = np.vstack([Xv, mids])
     return Xe
 
-
-# ----------------------------
 # Constraints
-# ----------------------------
+def get_fixed_nodes(X_nodes):
+    # Returns indices of nodes with x == 0
+    return np.where(np.isclose(X_nodes[:,0], 0.0))[0]
+
 def constraint(q):
-    c = np.zeros(9)
-    c[0:3] = q[0:3] - np.array([0.0,0.0,0.0])
-    c[3:6] = q[3:6] - np.array([0.1,0.0,0.0])
-    c[6:9] = q[9:12] - np.array([0.0,0.0,0.1])
+    # Use global X_nodes
+    fixed_nodes = get_fixed_nodes(X_nodes)
+    c = np.zeros(3 * len(fixed_nodes))
+    for idx, node in enumerate(fixed_nodes):
+        c[3*idx:3*idx+3] = q[3*node:3*node+3] - X_nodes[node]
     return c
 
 def constraint_jacobian(q):
-    J = np.zeros((9,len(q)))
-    J[0,0]=J[1,1]=J[2,2]=1
-    J[3,3]=J[4,4]=J[5,5]=1
-    J[6,9]=J[7,10]=J[8,11]=1
+    fixed_nodes = get_fixed_nodes(X_nodes)
+    J = np.zeros((3 * len(fixed_nodes), len(q)))
+    for idx, node in enumerate(fixed_nodes):
+        J[3*idx,   3*node]   = 1
+        J[3*idx+1, 3*node+1] = 1
+        J[3*idx+2, 3*node+2] = 1
     return J
 
 
 # ----------------------------
 # ALM + AdamW solver
 # ----------------------------
-def alm_adamw_step(v_guess, lam_guess, v_prev, q_prev, M, f_int_func, f_ext, h, rho_bb, pre, lam, mu):
+def alm_adamw_step(v_guess, lam_guess, v_prev, q_prev, M, f_int_func, f_ext, h, rho_bb, X_elem, pre_mesh, lam, mu):
     v = v_guess.copy()
     lam_mult = lam_guess.copy()
+    n_nodes = M.shape[0] // 3
 
     max_outer = 5
     max_inner = 500
-    lr = 1e-3
+    lr = 2e-4
     beta1, beta2, eps = 0.9, 0.999, 1e-8
     weight_decay = 1e-4
-    inner_tol = 1e-2
+    inner_tol = 1e-1
     outer_tol = 1e-6
 
     for outer_iter in range(max_outer):
 
         def grad_L(v_loc):
             qA = q_prev + h*v_loc
-            x_new = qA.reshape(10,3)
-            f_int_dyn = f_int_func(x_new, pre, lam, mu)
-            g_mech = (M @ (v_loc - v_prev)) / h - (-f_int_dyn.flatten() + f_ext)
+            x_new = qA.reshape(n_nodes, 3)
+            f_int_dyn = f_int_func(x_new, X_elem, pre_mesh, lam, mu)
+            g_mech = (M @ (v_loc - v_prev)) / h - (-f_int_dyn + f_ext)
             J = constraint_jacobian(qA)
             cA = constraint(qA)
             return g_mech + J.T @ (lam_mult + rho_bb*h*cA)
@@ -200,7 +284,7 @@ def alm_adamw_step(v_guess, lam_guess, v_prev, q_prev, M, f_int_func, f_ext, h, 
             if gnorm <= inner_tol*(1+np.linalg.norm(v_curr)):
                 print(f"[inner {inner_iter}] ||g||={gnorm:.3e} (stop)")
                 break
-            if inner_iter % 20 == 0:
+            if inner_iter % 10 == 0:
                 print(f"[inner {inner_iter}] ||g||={gnorm:.3e}")
 
         v = v_curr
@@ -218,44 +302,69 @@ def alm_adamw_step(v_guess, lam_guess, v_prev, q_prev, M, f_int_func, f_ext, h, 
 # Main simulation
 # ----------------------------
 if __name__ == "__main__":
-    X_nodes = make_unit_tet10()
+    X_nodes = read_node("beam_6x2x1.1.node")  # shape: (n_nodes, 3)
     x_nodes = X_nodes.copy()
-    pre = tet10_precompute_reference(X_nodes)
-    M_full = tet10_consistent_mass(X_nodes, rho0)
-    f_ext = np.zeros(30)
-    f_ext[3*2 + 1] = -1000.0  # downward force at node 3 (index 2)
+    X_elem = read_ele("beam_6x2x1.1.ele")
+
+    print(X_nodes)
+    print(X_elem)
+    pre_mesh = tet10_precompute_reference_mesh(X_nodes, X_elem)
+
+    print(pre_mesh)
+
+
+    import numpy as np
+    np.set_printoptions(threshold=np.inf, linewidth=200, suppress=True)
+
+    M_full = tet10_consistent_mass_mesh(X_nodes, X_elem, rho0)
+    print("shape M_full:", M_full.shape)
+    print(M_full)
+
+    f_ext = np.zeros(3 * X_nodes.shape[0])
+    f_ext[3*40 + 0] = 1000.0  # 1000 N force in x direction at node index 40
     time_step = 1e-3
     rho_bb = 1e14
 
     q_prev = x_nodes.flatten()
     v_prev = np.zeros_like(q_prev)
     v_guess = v_prev.copy()
-    lam_guess = np.zeros(9)
+    lam_guess = np.zeros(3 * len(get_fixed_nodes(X_nodes)))
 
-    Nt = 30
-    node2_y = []  # List to store y position of node 2
+    Nt = 100
+    node40_x = []  # List to store x position of node index 40
+    node41_x = []  # List to store x position of node index 41
 
     for step in range(Nt):
-        if step > 15 or step == 0:
-            f_ext[3*2 + 1] = 0.0  # Remove force after step 15
-        else:
-            f_ext[3*2 + 1] = -1000.0
-        v_res, lam_res = alm_adamw_step(v_guess, lam_guess, v_prev, q_prev, M_full,
-                                        tet10_internal_force, f_ext, time_step, rho_bb,
-                                        pre, lam, mu)
+        if step > 20:
+            f_ext[3*40 + 0] = 0.0  # Remove force after step 20
+        v_res, lam_res = alm_adamw_step(
+            v_guess, lam_guess, v_prev, q_prev, M_full,
+            tet10_internal_force_mesh, f_ext, time_step, rho_bb,
+            X_elem, pre_mesh, lam, mu)
 
         v_guess, lam_guess = v_res.copy(), lam_res.copy()
         q_new = q_prev + time_step * v_guess
-        x_nodes = q_new.reshape(10,3)
-        print(f"Step {step}: node 2 position = {x_nodes[2]}")
-        node2_y.append(x_nodes[2, 1])  # Save y position
+        x_nodes = q_new.reshape(X_nodes.shape[0], 3)
+        print(f"Step {step}: node 40 position = {x_nodes[40]}, node 41 position = {x_nodes[41]}")
+        node40_x.append(x_nodes[40, 0])  # Save node 40 x position
+        node41_x.append(x_nodes[41, 0])  # Save node 41 x position
         q_prev = q_new.copy()
         v_prev = v_guess.copy()
 
     # Plot after simulation
-    plt.plot(range(Nt), node2_y, marker='o')
+
+    plt.figure()
+    plt.plot(range(Nt), node40_x, marker='o')
     plt.xlabel("Step")
-    plt.ylabel("Node 2 Y Position")
-    plt.title("Node 2 Y Position vs Step")
+    plt.ylabel("Node 40 X Position")
+    plt.title("Node 40 X Position vs Step")
+    plt.grid(True)
+    plt.show()
+
+    plt.figure()
+    plt.plot(range(Nt), node41_x, marker='x', color='orange')
+    plt.xlabel("Step")
+    plt.ylabel("Node 41 X Position")
+    plt.title("Node 41 X Position vs Step")
     plt.grid(True)
     plt.show()

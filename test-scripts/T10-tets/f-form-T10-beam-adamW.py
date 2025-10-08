@@ -271,6 +271,7 @@ def alm_adamw_step(v_guess, lam_guess, v_prev, q_prev, M, f_int_func, f_ext, h, 
         v_curr = v.copy()
 
         for inner_iter in range(max_inner):
+            lr = lr * 0.998  # Decay learning rate
             t += 1
             g = grad_L(v_curr)
             m_t = beta1*m_t + (1-beta1)*g
