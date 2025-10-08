@@ -301,9 +301,9 @@ def alm_adamw_step(v_guess, lam_guess, v_prev, q_prev, M, f_int_func, f_ext, h, 
 # Main simulation
 # ----------------------------
 if __name__ == "__main__":
-    X_nodes = read_node("cube.1.node")  # shape: (n_nodes, 3)
+    X_nodes = read_node("../../data/meshes/T10/cube.1.node")  # shape: (n_nodes, 3)
     x_nodes = X_nodes.copy()
-    X_elem = read_ele("cube.1.ele")
+    X_elem = read_ele("../../data/meshes/T10/cube.1.ele")
 
     print(X_nodes)
     print(X_elem)
