@@ -14,6 +14,8 @@ rho0 = 2700.0
 # ----------------------------
 # Quadrature (5-point Keast)
 # ----------------------------
+
+
 def tet5pt_quadrature():
     Lc = np.array([0.25, 0.25, 0.25, 0.25])
     a = 0.5
@@ -25,7 +27,8 @@ def tet5pt_quadrature():
         [b, b, a, b],
         [b, b, b, a]
     ])
-    w = np.array([-4.0/5.0, 9.0/20.0, 9.0/20.0, 9.0/20.0, 9.0/20.0]) * (1.0/6.0)
+    w = np.array([-4.0/5.0, 9.0/20.0, 9.0/20.0,
+                 9.0/20.0, 9.0/20.0]) * (1.0/6.0)
     pts_xyz = pts_bary[:, 1:4]
     return pts_xyz, pts_bary, w
 
@@ -46,9 +49,9 @@ def tet10_shape_function_gradients(xi, eta, zeta):
     dN_dxi = np.zeros((10, 3))
     for i in range(4):
         dN_dxi[i, :] = (4*L[i]-1)*dL[i, :]
-    edges = [(0,1),(1,2),(0,2),(0,3),(1,3),(2,3)]
-    for k,(i,j) in enumerate(edges, start=4):
-        dN_dxi[k,:] = 4*(L[i]*dL[j,:] + L[j]*dL[i,:])
+    edges = [(0, 1), (1, 2), (0, 2), (0, 3), (1, 3), (2, 3)]
+    for k, (i, j) in enumerate(edges, start=4):
+        dN_dxi[k, :] = 4*(L[i]*dL[j, :] + L[j]*dL[i, :])
     return dN_dxi
 
 
@@ -67,9 +70,10 @@ def tet10_precompute_reference(X_elem_nodes):
         grad_N = np.zeros((10, 3))
         JT = J.T
         for a in range(10):
-            grad_N[a,:] = np.linalg.solve(JT, dN_dxi[a])
+            grad_N[a, :] = np.linalg.solve(JT, dN_dxi[a])
         pre.append({"grad_N": grad_N, "detJ": detJ, "w": wq})
     return pre
+
 
 def tet10_precompute_reference_mesh(X_nodes, X_elem):
     """
@@ -84,7 +88,8 @@ def tet10_precompute_reference_mesh(X_nodes, X_elem):
     """
     pre_list = []
     for elem_idx in range(X_elem.shape[0]):
-        node_indices = X_elem[elem_idx]           # indices of the 10 nodes for this element
+        # indices of the 10 nodes for this element
+        node_indices = X_elem[elem_idx]
         X_elem_nodes = X_nodes[node_indices]      # shape: (10, 3)
         print("=====")
         print(X_elem_nodes)
@@ -102,7 +107,7 @@ def tet10_internal_force(x_nodes, pre, lam, mu):
         grad_N = q["grad_N"]
         detJ = q["detJ"]
         wq = q["w"]
-        F = np.zeros((3,3))
+        F = np.zeros((3, 3))
         for a in range(10):
             F += np.outer(x_nodes[a], grad_N[a])
         FtF = F.T @ F
@@ -112,6 +117,7 @@ def tet10_internal_force(x_nodes, pre, lam, mu):
         for a in range(10):
             f[a] += (P @ grad_N[a]) * dV
     return f
+
 
 def tet10_internal_force_mesh(x_nodes, X_elem, pre_mesh, lam, mu):
     """
@@ -131,7 +137,8 @@ def tet10_internal_force_mesh(x_nodes, X_elem, pre_mesh, lam, mu):
     for elem_idx in range(X_elem.shape[0]):
         node_indices = X_elem[elem_idx]           # (10,)
         x_elem_nodes = x_nodes[node_indices]      # (10, 3)
-        pre = pre_mesh[elem_idx]                  # reference gradients for this element
+        # reference gradients for this element
+        pre = pre_mesh[elem_idx]
         f_elem = tet10_internal_force(x_elem_nodes, pre, lam, mu)  # (10, 3)
         for a_local, a_global in enumerate(node_indices):
             f_int[a_global] += f_elem[a_local]
@@ -143,27 +150,28 @@ def tet10_internal_force_mesh(x_nodes, X_elem, pre_mesh, lam, mu):
 # ----------------------------
 def tet10_consistent_mass(X_nodes, rho):
     pts_xyz, _, w = tet5pt_quadrature()
-    Msc = np.zeros((10,10))
-    for (xi,eta,zeta), wq in zip(pts_xyz, w):
+    Msc = np.zeros((10, 10))
+    for (xi, eta, zeta), wq in zip(pts_xyz, w):
         dN_dxi = tet10_shape_function_gradients(xi, eta, zeta)
-        J = np.zeros((3,3))
+        J = np.zeros((3, 3))
         for a in range(10):
             J += np.outer(X_nodes[a], dN_dxi[a])
         detJ = abs(np.linalg.det(J))
         N = np.zeros(10)
-        L2,L3,L4 = xi,eta,zeta
+        L2, L3, L4 = xi, eta, zeta
         L1 = 1-xi-eta-zeta
-        L = [L1,L2,L3,L4]
+        L = [L1, L2, L3, L4]
         N[0:4] = [L[i]*(2*L[i]-1) for i in range(4)]
-        edges = [(0,1),(1,2),(0,2),(0,3),(1,3),(2,3)]
-        for k,(i,j) in enumerate(edges, start=4):
+        edges = [(0, 1), (1, 2), (0, 2), (0, 3), (1, 3), (2, 3)]
+        for k, (i, j) in enumerate(edges, start=4):
             N[k] = 4*L[i]*L[j]
-        Msc += rho * np.outer(N,N) * detJ * wq
-    M30 = np.zeros((30,30))
+        Msc += rho * np.outer(N, N) * detJ * wq
+    M30 = np.zeros((30, 30))
     for i in range(10):
         for j in range(10):
-            M30[3*i:3*i+3, 3*j:3*j+3] = Msc[i,j]*np.eye(3)
+            M30[3*i:3*i+3, 3*j:3*j+3] = Msc[i, j]*np.eye(3)
     return M30
+
 
 def tet10_consistent_mass_mesh(X_nodes, X_elem, rho):
     """
@@ -189,7 +197,8 @@ def tet10_consistent_mass_mesh(X_nodes, X_elem, rho):
         # Map local element DOFs to global DOFs
         global_dof_indices = []
         for ni in node_indices:
-            global_dof_indices.extend([3*ni, 3*ni+1, 3*ni+2])  # x, y, z for each node
+            # x, y, z for each node
+            global_dof_indices.extend([3*ni, 3*ni+1, 3*ni+2])
 
         # Assemble
         for i_local, i_global in enumerate(global_dof_indices):
@@ -210,15 +219,18 @@ def make_unit_tet10():
         [0.0, 0.0, 0.1],
     ])
     mids = []
-    for (i,j) in [(0,1),(1,2),(0,2),(0,3),(1,3),(2,3)]:
+    for (i, j) in [(0, 1), (1, 2), (0, 2), (0, 3), (1, 3), (2, 3)]:
         mids.append(0.5*(Xv[i]+Xv[j]))
     Xe = np.vstack([Xv, mids])
     return Xe
 
 # Constraints
+
+
 def get_fixed_nodes(X_nodes):
     # Returns indices of nodes with x == 0
-    return np.where(np.isclose(X_nodes[:,0], 0.0))[0]
+    return np.where(np.isclose(X_nodes[:, 0], 0.0))[0]
+
 
 def constraint(q):
     # Use global X_nodes
@@ -228,11 +240,12 @@ def constraint(q):
         c[3*idx:3*idx+3] = q[3*node:3*node+3] - X_nodes[node]
     return c
 
+
 def constraint_jacobian(q):
     fixed_nodes = get_fixed_nodes(X_nodes)
     J = np.zeros((3 * len(fixed_nodes), len(q)))
     for idx, node in enumerate(fixed_nodes):
-        J[3*idx,   3*node]   = 1
+        J[3*idx,   3*node] = 1
         J[3*idx+1, 3*node+1] = 1
         J[3*idx+2, 3*node+2] = 1
     return J
@@ -254,7 +267,11 @@ def alm_adamw_step(v_guess, lam_guess, v_prev, q_prev, M, f_int_func, f_ext, h, 
     inner_tol = 1e-1
     outer_tol = 1e-6
 
+    actual_outer_iters = 0
+    total_inner_iters = 0
+
     for outer_iter in range(max_outer):
+        actual_outer_iters += 1
 
         def grad_L(v_loc):
             qA = q_prev + h*v_loc
@@ -273,12 +290,14 @@ def alm_adamw_step(v_guess, lam_guess, v_prev, q_prev, M, f_int_func, f_ext, h, 
         for inner_iter in range(max_inner):
             lr = lr * 0.998  # Decay learning rate
             t += 1
+            total_inner_iters += 1
             g = grad_L(v_curr)
             m_t = beta1*m_t + (1-beta1)*g
             v_t = beta2*v_t + (1-beta2)*(g*g)
             m_hat = m_t / (1 - beta1**t)
             v_hat = v_t / (1 - beta2**t)
-            v_curr -= lr * (m_hat / (np.sqrt(v_hat) + eps) + weight_decay*v_curr)
+            v_curr -= lr * (m_hat / (np.sqrt(v_hat) + eps) +
+                            weight_decay*v_curr)
 
             gnorm = np.linalg.norm(g)
             if gnorm <= inner_tol*(1+np.linalg.norm(v_curr)):
@@ -295,14 +314,15 @@ def alm_adamw_step(v_guess, lam_guess, v_prev, q_prev, M, f_int_func, f_ext, h, 
         if np.linalg.norm(cA) < outer_tol:
             break
 
-    return v, lam_mult
+    return v, lam_mult, actual_outer_iters, total_inner_iters
 
 
 # ----------------------------
 # Main simulation
 # ----------------------------
 if __name__ == "__main__":
-    X_nodes = read_node("../../data/meshes/T10/beam_6x2x1.1.node")  # shape: (n_nodes, 3)
+    # shape: (n_nodes, 3)
+    X_nodes = read_node("../../data/meshes/T10/beam_6x2x1.1.node")
     x_nodes = X_nodes.copy()
     X_elem = read_ele("../../data/meshes/T10/beam_6x2x1.1.ele")
 
@@ -311,7 +331,6 @@ if __name__ == "__main__":
     pre_mesh = tet10_precompute_reference_mesh(X_nodes, X_elem)
 
     print(pre_mesh)
-
 
     import numpy as np
     np.set_printoptions(threshold=np.inf, linewidth=200, suppress=True)
@@ -333,11 +352,13 @@ if __name__ == "__main__":
     Nt = 100
     node40_x = []  # List to store x position of node index 40
     node41_x = []  # List to store x position of node index 41
+    outer_iters_per_step = []  # List to store outer iterations for each step
+    inner_iters_per_step = []  # List to store inner iterations for each step
 
     for step in range(Nt):
-        if step > 20:
+        if step > 50:
             f_ext[3*40 + 0] = 0.0  # Remove force after step 20
-        v_res, lam_res = alm_adamw_step(
+        v_res, lam_res, outer_iters, inner_iters = alm_adamw_step(
             v_guess, lam_guess, v_prev, q_prev, M_full,
             tet10_internal_force_mesh, f_ext, time_step, rho_bb,
             X_elem, pre_mesh, lam, mu)
@@ -345,26 +366,83 @@ if __name__ == "__main__":
         v_guess, lam_guess = v_res.copy(), lam_res.copy()
         q_new = q_prev + time_step * v_guess
         x_nodes = q_new.reshape(X_nodes.shape[0], 3)
-        print(f"Step {step}: node 40 position = {x_nodes[40]}, node 41 position = {x_nodes[41]}")
+        print(
+            f"Step {step}: node 40 position = {x_nodes[40]}, node 41 position = {x_nodes[41]}")
+        print(
+            f"Step {step}: outer iters = {outer_iters}, inner iters = {inner_iters}")
         node40_x.append(x_nodes[40, 0])  # Save node 40 x position
         node41_x.append(x_nodes[41, 0])  # Save node 41 x position
+        outer_iters_per_step.append(outer_iters)  # Save outer iterations
+        inner_iters_per_step.append(inner_iters)  # Save inner iterations
         q_prev = q_new.copy()
         v_prev = v_guess.copy()
 
     # Plot after simulation
 
-    plt.figure()
-    plt.plot(range(Nt), node40_x, marker='o')
-    plt.xlabel("Step")
-    plt.ylabel("Node 40 X Position")
-    plt.title("Node 40 X Position vs Step")
-    plt.grid(True)
+    # Create subplots for better visualization
+    fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(12, 10))
+
+    # Node positions plots
+    ax1.plot(range(Nt), node40_x, marker='o', linewidth=2, markersize=4)
+    ax1.set_xlabel("Step")
+    ax1.set_ylabel("Node 40 X Position")
+    ax1.set_title("Node 40 X Position vs Step")
+    ax1.grid(True)
+
+    ax2.plot(range(Nt), node41_x, marker='x',
+             color='orange', linewidth=2, markersize=4)
+    ax2.set_xlabel("Step")
+    ax2.set_ylabel("Node 41 X Position")
+    ax2.set_title("Node 41 X Position vs Step")
+    ax2.grid(True)
+
+    # Iteration count plots
+    ax3.plot(range(Nt), outer_iters_per_step, marker='s',
+             color='red', linewidth=2, markersize=4)
+    ax3.set_xlabel("Step")
+    ax3.set_ylabel("Outer Iterations")
+    ax3.set_title("Outer Loop Iterations per Step")
+    ax3.grid(True)
+    ax3.set_ylim(bottom=0)
+
+    ax4.plot(range(Nt), inner_iters_per_step, marker='^',
+             color='green', linewidth=2, markersize=4)
+    ax4.set_xlabel("Step")
+    ax4.set_ylabel("Inner Iterations")
+    ax4.set_title("Inner Loop Iterations per Step")
+    ax4.grid(True)
+    ax4.set_ylim(bottom=0)
+
+    plt.tight_layout()
     plt.show()
 
-    plt.figure()
-    plt.plot(range(Nt), node41_x, marker='x', color='orange')
+    # Print summary statistics
+    print("\n" + "="*50)
+    print("ITERATION SUMMARY STATISTICS")
+    print("="*50)
+    print(f"Total outer iterations: {sum(outer_iters_per_step)}")
+    print(f"Total inner iterations: {sum(inner_iters_per_step)}")
+    print(
+        f"Average outer iterations per step: {np.mean(outer_iters_per_step):.2f}")
+    print(
+        f"Average inner iterations per step: {np.mean(inner_iters_per_step):.2f}")
+    print(f"Max outer iterations in a step: {max(outer_iters_per_step)}")
+    print(f"Max inner iterations in a step: {max(inner_iters_per_step)}")
+    print(f"Min outer iterations in a step: {min(outer_iters_per_step)}")
+    print(f"Min inner iterations in a step: {min(inner_iters_per_step)}")
+
+    # Additional plot showing cumulative iterations
+    plt.figure(figsize=(10, 6))
+    cumulative_outer = np.cumsum(outer_iters_per_step)
+    cumulative_inner = np.cumsum(inner_iters_per_step)
+
+    plt.plot(range(Nt), cumulative_outer,
+             label='Cumulative Outer Iterations', linewidth=2)
+    plt.plot(range(Nt), cumulative_inner,
+             label='Cumulative Inner Iterations', linewidth=2)
     plt.xlabel("Step")
-    plt.ylabel("Node 41 X Position")
-    plt.title("Node 41 X Position vs Step")
+    plt.ylabel("Cumulative Iterations")
+    plt.title("Cumulative Iteration Count")
+    plt.legend()
     plt.grid(True)
     plt.show()
