@@ -61,7 +61,7 @@ cuda_library(
 # ========================================
 # solver library section
 cuda_library(
-    name = "solvers",
+    name = "solvers_syncednesterov",
     srcs = [
         "lib_src/solvers/SyncedNesterov.cu",
     ],
@@ -78,33 +78,85 @@ cuda_library(
     ],
     visibility = ["//visibility:public"],
 )
+
+cuda_library(
+    name = "solvers_syncedadamw",
+    srcs = [
+        "lib_src/solvers/SyncedAdamW.cu",
+    ],
+    hdrs = [
+        "lib_src/solvers/SolverBase.h",
+        "lib_src/solvers/SyncedAdamW.cuh",
+    ],
+    copts = ["--std=c++17", "-O3"],
+    deps = [
+        ":ANCF3243Data",
+        ":ANCF3443Data",
+        ":cpu_utils",
+        "@eigen//:eigen",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+
+
 # ========================================
 
 # ========================================
 # cc binary section
 cc_binary(
-    name = "test_ancf3243",
-    srcs = ["lib_bin/test_ancf3243.cc"],
+    name = "test_ancf3243_nesterov",
+    srcs = ["lib_bin/test_ancf3243_nesterov.cc"],
     copts = ["--std=c++17"],
     deps = [
         ":ANCF3243Data",
         ":cpu_utils",
-        ":solvers",
+        ":solvers_syncednesterov",
+        ":solvers_syncedadamw",
         "@eigen//:eigen",
     ],
 )
 
 cc_binary(
-    name = "test_ancf3443",
-    srcs = ["lib_bin/test_ancf3443.cc"],
+    name = "test_ancf3443_nesterov",
+    srcs = ["lib_bin/test_ancf3443_nesterov.cc"],
     copts = ["--std=c++17"],
     deps = [
         ":ANCF3443Data",
         ":cpu_utils",
-        ":solvers",
+        ":solvers_syncednesterov",
+        ":solvers_syncedadamw",
         "@eigen//:eigen",
     ],
 )
+
+cc_binary(
+    name = "test_ancf3243_adamw",
+    srcs = ["lib_bin/test_ancf3243_adamw.cc"],
+    copts = ["--std=c++17"],
+    deps = [
+        ":ANCF3243Data",
+        ":cpu_utils",
+        ":solvers_syncednesterov",
+        ":solvers_syncedadamw",
+        "@eigen//:eigen",
+    ],
+)
+
+cc_binary(
+    name = "test_ancf3443_adamw",
+    srcs = ["lib_bin/test_ancf3443_adamw.cc"],
+    copts = ["--std=c++17"],
+    deps = [
+        ":ANCF3443Data",
+        ":cpu_utils",
+        ":solvers_syncednesterov",
+        ":solvers_syncedadamw",
+        "@eigen//:eigen",
+    ],
+)
+
+
 # ========================================
 
 # ========================================
