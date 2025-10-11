@@ -410,7 +410,7 @@ for a in range(n_beam):
         
 
 
-Nt = 30  # Number of time steps
+Nt = 40  # Number of time steps
 
 end_x = np.zeros((n_beam, Nt))
 end_y = np.zeros((n_beam, Nt))
