@@ -235,22 +235,22 @@ struct GPU_ANCF3443_Data : public ElementBase
 
     __device__ Eigen::Map<Eigen::VectorXd> f_elem_out(int global_node_idx)
     {
-        return Eigen::Map<Eigen::VectorXd>(d_f_elem_out + global_node_idx * 3, 3);
+        return Eigen::Map<Eigen::VectorXd>(d_f_int + global_node_idx * 3, 3);
     }
 
     __device__ const Eigen::Map<Eigen::VectorXd> f_elem_out(int global_node_idx) const
     {
-        return Eigen::Map<Eigen::VectorXd>(d_f_elem_out + global_node_idx * 3, 3);
+        return Eigen::Map<Eigen::VectorXd>(d_f_int + global_node_idx * 3, 3);
     }
 
     __device__ Eigen::Map<Eigen::VectorXd> f_elem_out()
     {
-        return Eigen::Map<Eigen::VectorXd>(d_f_elem_out, n_coef * 3);
+        return Eigen::Map<Eigen::VectorXd>(d_f_int, n_coef * 3);
     }
 
     __device__ const Eigen::Map<Eigen::VectorXd> f_elem_out() const
     {
-        return Eigen::Map<Eigen::VectorXd>(d_f_elem_out, n_coef * 3);
+        return Eigen::Map<Eigen::VectorXd>(d_f_int, n_coef * 3);
     }
 
     __device__ Eigen::Map<Eigen::VectorXd> constraint()
@@ -375,7 +375,7 @@ struct GPU_ANCF3443_Data : public ElementBase
 
         HANDLE_ERROR(cudaMalloc(&d_F, n_beam * Quadrature::N_TOTAL_QP_4_4_3 * 3 * 3 * sizeof(double)));
         HANDLE_ERROR(cudaMalloc(&d_P, n_beam * Quadrature::N_TOTAL_QP_4_4_3 * 3 * 3 * sizeof(double)));
-        HANDLE_ERROR(cudaMalloc(&d_f_elem_out, n_coef * 3 * sizeof(double)));
+        HANDLE_ERROR(cudaMalloc(&d_f_int, n_coef * 3 * sizeof(double)));
 
         // copy struct to device
         HANDLE_ERROR(cudaMalloc(&d_data, sizeof(GPU_ANCF3443_Data)));
@@ -453,7 +453,7 @@ struct GPU_ANCF3443_Data : public ElementBase
 
         HANDLE_ERROR(cudaMemset(d_node_values, 0, n_coef * n_coef * sizeof(double)));
 
-        cudaMemset(d_f_elem_out, 0, n_coef * 3 * sizeof(double));
+        cudaMemset(d_f_int, 0, n_coef * 3 * sizeof(double));
         cudaMemset(d_F, 0, n_beam * Quadrature::N_TOTAL_QP_4_4_3 * 3 * 3 * sizeof(double));
         cudaMemset(d_P, 0, n_beam * Quadrature::N_TOTAL_QP_4_4_3 * 3 * 3 * sizeof(double));
 
@@ -510,7 +510,7 @@ struct GPU_ANCF3443_Data : public ElementBase
 
         HANDLE_ERROR(cudaFree(d_F));
         HANDLE_ERROR(cudaFree(d_P));
-        HANDLE_ERROR(cudaFree(d_f_elem_out));
+        HANDLE_ERROR(cudaFree(d_f_int));
 
         HANDLE_ERROR(cudaFree(d_H));
         HANDLE_ERROR(cudaFree(d_W));
@@ -569,13 +569,16 @@ private:
 
     double *d_node_values;
 
-    double *d_F, *d_P, *d_f_elem_out;
+    double *d_F, *d_P;
 
     double *d_H, *d_W, *d_L;
 
     double *d_rho0, *d_nu, *d_E, *d_lambda, *d_mu;
 
     double *d_constraint, *d_constraint_jac;
+
+    // force related parameters
+    double *d_f_int;
 
     bool is_setup = false;
 
