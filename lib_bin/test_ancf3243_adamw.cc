@@ -141,8 +141,6 @@ int main() {
     std::cout << std::endl;
   }
 
-  // alpha, solver_rho, inner_tol, outer_tol, max_outer, max_inner,
-  // timestep
   SyncedAdamWParams params = {2e-4, 0.9,  0.999, 1e-8, 1e-4, 1e-1,
                               1e-6, 1e14, 5,     500,  1e-3};
 
@@ -150,7 +148,7 @@ int main() {
   SyncedAdamWSolver solver(&gpu_3243_data, 12);
   solver.Setup();
   solver.SetParameters(&params);
-  for (int i = 0; i < 30; i++) {
+  for (int i = 0; i < 50; i++) {
     solver.Solve();
   }
 

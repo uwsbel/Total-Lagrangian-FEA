@@ -49,7 +49,6 @@ __device__ double solver_grad_L(int tid, ElementBase *d_data, SyncedAdamWSolver 
     {
         if (tid == 3 * d_solver->get_n_coef() - 10)
         {
-            // res -= 10000.0;
             res -= 3100.0;
         }
     }
