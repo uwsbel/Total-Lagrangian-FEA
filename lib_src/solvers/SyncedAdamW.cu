@@ -387,9 +387,9 @@ one_step_adamw_kernel(ElementBase *d_data, SyncedAdamWSolver *d_adamw_solver)
                 norm_constraint = sqrt(norm_constraint);
                 printf("norm_constraint: %.17f\n", norm_constraint);
 
-                if (abs(norm_constraint) < d_adamw_solver->solver_outer_tol())
+                if (norm_constraint < d_adamw_solver->solver_outer_tol())
                 {
-                    printf("Converged constraint: %.17f\n", abs(norm_constraint));
+                    printf("Converged constraint: %.17f\n", norm_constraint);
                     *d_adamw_solver->outer_flag() = 1;
                 }
             }
