@@ -241,7 +241,7 @@ void GPU_ANCF3443_Data::RetrieveInternalForceToCPU(Eigen::VectorXd &internal_for
   int expected_size = n_coef * 3;
   internal_force.resize(expected_size);
 
-  HANDLE_ERROR(cudaMemcpy(internal_force.data(), d_f_elem_out, expected_size * sizeof(double), cudaMemcpyDeviceToHost));
+  HANDLE_ERROR(cudaMemcpy(internal_force.data(), d_f_int, expected_size * sizeof(double), cudaMemcpyDeviceToHost));
 }
 
 void GPU_ANCF3443_Data::RetrieveDeformationGradientToCPU(std::vector<std::vector<Eigen::MatrixXd>> &deformation_gradient)

@@ -66,6 +66,19 @@ int main() {
   ANCFCPUUtils::ANCF3243_calculate_offsets(gpu_3243_data.get_n_beam(),
                                            h_offset_start, h_offset_end);
 
+  // =========================================================
+  // set fixed nodal unknowns
+  Eigen::VectorXi h_fixed_nodes(4);
+  h_fixed_nodes << 0, 1, 2, 3;
+  gpu_3243_data.SetNodalFixed(h_fixed_nodes);
+
+  // set external force
+  Eigen::VectorXd h_f_ext(gpu_3243_data.get_n_coef() * 3);
+  // set external force applied at the end of the beam to be 0,0,3100
+  h_f_ext.setZero();
+  h_f_ext(3 * gpu_3243_data.get_n_coef() - 10) = 3100.0;
+  gpu_3243_data.SetExternalForce(h_f_ext);
+
   gpu_3243_data.Setup(L, W, H, rho0, nu, E, h_B_inv, Quadrature::gauss_xi_m_6,
                       Quadrature::gauss_xi_3, Quadrature::gauss_eta_2,
                       Quadrature::gauss_zeta_2, Quadrature::weight_xi_m_6,
@@ -73,6 +86,7 @@ int main() {
                       Quadrature::weight_zeta_2, h_x12, h_y12, h_z12,
                       h_offset_start, h_offset_end);
 
+  // ===================================================
   gpu_3243_data.CalcDsDuPre();
   gpu_3243_data.PrintDsDuPre();
   gpu_3243_data.CalcMassMatrix();
@@ -149,7 +163,7 @@ int main() {
   SyncedNesterovSolver solver(&gpu_3243_data, 12);
   solver.Setup();
   solver.SetParameters(&params);
-  for (int i = 0; i < 30; i++) {
+  for (int i = 0; i < 40; i++) {
     solver.Solve();
   }
 

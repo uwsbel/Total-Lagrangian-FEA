@@ -782,12 +782,13 @@ for step in range(Nt):
 
     endz_pos.append(z12[20])
 
-    print("x12: ")
-    print(x12)
-    print("y12: ")
-    print(y12)
-    print("z12: ")
-    print(z12)
 
 
-print(endz_pos)
+print("x12:")
+print(" ".join([f"{v:.17f}" for v in x12]))
+
+print("y12:")
+print(" ".join([f"{v:.17f}" for v in y12]))
+
+print("z12:")
+print(" ".join([f"{v:.17f}" for v in z12]))

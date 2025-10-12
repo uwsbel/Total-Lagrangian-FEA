@@ -71,6 +71,23 @@ int main() {
   h_y12_jac = h_y12;
   h_z12_jac = h_z12;
 
+  // ==========================================================================
+
+  // set fixed nodal unknowns
+  Eigen::VectorXi h_fixed_nodes(8);
+  h_fixed_nodes << 0, 1, 2, 3, 12, 13, 14, 15;
+  gpu_3443_data.SetNodalFixed(h_fixed_nodes);
+
+  // set external force
+  Eigen::VectorXd h_f_ext(gpu_3443_data.get_n_coef() * 3);
+  // set external force applied at the end of the beam to be 0,0,3100
+  h_f_ext.setZero();
+  h_f_ext(3 * gpu_3443_data.get_n_coef() - 4) = -125.0;
+  h_f_ext(3 * gpu_3443_data.get_n_coef() - 10) = 500.0;
+  h_f_ext(3 * gpu_3443_data.get_n_coef() - 16) = 125.0;
+  h_f_ext(3 * gpu_3443_data.get_n_coef() - 22) = 500.0;
+  gpu_3443_data.SetExternalForce(h_f_ext);
+
   gpu_3443_data.Setup(L, W, H, rho0, nu, E, h_B_inv, Quadrature::gauss_xi_m_7,
                       Quadrature::gauss_eta_m_7, Quadrature::gauss_zeta_m_3,
                       Quadrature::gauss_xi_4, Quadrature::gauss_eta_4,
@@ -79,6 +96,8 @@ int main() {
                       Quadrature::weight_xi_4, Quadrature::weight_eta_4,
                       Quadrature::weight_zeta_3, h_x12, h_y12, h_z12,
                       element_connectivity);
+
+  // =========================================================================
 
   gpu_3443_data.CalcDsDuPre();
   gpu_3443_data.PrintDsDuPre();
@@ -161,10 +180,10 @@ int main() {
 
   SyncedAdamWParams params = {2e-4, 0.9,  0.999, 1e-8, 1e-4, 1e-1,
                               1e-6, 1e14, 5,     500,  1e-3};
-  SyncedAdamWSolver solver(&gpu_3443_data, 24);
+  SyncedAdamWSolver solver(&gpu_3443_data, gpu_3443_data.get_n_constraint());
   solver.Setup();
   solver.SetParameters(&params);
-  for (int i = 0; i < 20; i++) {
+  for (int i = 0; i < 50; i++) {
     solver.Solve();
   }
 

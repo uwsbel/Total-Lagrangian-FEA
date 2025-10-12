@@ -37,39 +37,23 @@ __device__ double solver_grad_L(int tid, ElementBase *d_data, SyncedAdamWSolver 
     if (d_data->type == TYPE_3243)
     {
         auto *data = static_cast<GPU_ANCF3243_Data *>(d_data);
-        res -= (-data->f_elem_out()(tid));
+        res -= (-data->f_int()(tid));
     }
     else if (d_data->type == TYPE_3443)
     {
         auto *data = static_cast<GPU_ANCF3443_Data *>(d_data);
-        res -= (-data->f_elem_out()(tid));
+        res -= (-data->f_int()(tid));
     }
 
     if (d_data->type == TYPE_3243)
     {
-        if (tid == 3 * d_solver->get_n_coef() - 10)
-        {
-            res -= 3100.0;
-        }
+        auto *data = static_cast<GPU_ANCF3243_Data *>(d_data);
+        res -= data->f_ext()(tid);
     }
     else if (d_data->type == TYPE_3443)
     {
-        if (tid == 3 * d_solver->get_n_coef() - 4)
-        {
-            res -= (-125.0);
-        }
-        else if (tid == 3 * d_solver->get_n_coef() - 10)
-        {
-            res -= (500.0);
-        }
-        else if (tid == 3 * d_solver->get_n_coef() - 16)
-        {
-            res -= (125.0);
-        }
-        else if (tid == 3 * d_solver->get_n_coef() - 22)
-        {
-            res -= (500.0);
-        }
+        auto *data = static_cast<GPU_ANCF3443_Data *>(d_data);
+        res -= data->f_ext()(tid);
     }
 
     // Constraints
@@ -249,7 +233,7 @@ one_step_adamw_kernel(ElementBase *d_data, SyncedAdamWSolver *d_adamw_solver)
 
                     grid.sync();
 
-                    if (tid == 0)
+                    if (tid < d_adamw_solver->gpu_n_constraints() / 3)
                     {
                         if (d_data->type == TYPE_3243)
                             ancf3243_compute_constraint_data(static_cast<GPU_ANCF3243_Data *>(d_data));
@@ -338,7 +322,8 @@ one_step_adamw_kernel(ElementBase *d_data, SyncedAdamWSolver *d_adamw_solver)
             grid.sync();
 
             // Only thread 0 handles constraint computation and dual variable updates
-            if (tid == 0)
+
+            if (tid < d_adamw_solver->gpu_n_constraints() / 3)
             {
                 // Compute constraints at new position
                 if (d_data->type == TYPE_3243)
@@ -349,7 +334,10 @@ one_step_adamw_kernel(ElementBase *d_data, SyncedAdamWSolver *d_adamw_solver)
                 {
                     ancf3443_compute_constraint_data(static_cast<GPU_ANCF3443_Data *>(d_data));
                 }
+            }
 
+            if (tid == 0)
+            {
                 // Dual variable update: lam += rho * h * c(q_new)
                 for (int i = 0; i < d_adamw_solver->gpu_n_constraints(); i++)
                 {

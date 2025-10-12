@@ -223,7 +223,7 @@ __device__ __forceinline__ void ancf3243_compute_internal_force(int elem_idx, in
     #pragma unroll
     for (int d = 0; d < 3; ++d)
     {
-        d_data->f_elem_out(node_base + node_idx)(d) = 0.0;
+        d_data->f_int(node_base + node_idx)(d) = 0.0;
     }
 
 
@@ -252,7 +252,7 @@ __device__ __forceinline__ void ancf3243_compute_internal_force(int elem_idx, in
     #pragma unroll
     for (int d = 0; d < 3; ++d)
     {
-        atomicAdd(&d_data->f_elem_out(node_base + node_idx)(d), f_i[d]);
+        atomicAdd(&d_data->f_int(node_base + node_idx)(d), f_i[d]);
     }
 
     // clang-format on
@@ -262,27 +262,14 @@ __device__ __forceinline__ void ancf3243_compute_constraint_data(GPU_ANCF3243_Da
 {
     int thread_idx = blockIdx.x * blockDim.x + threadIdx.x;
 
-    if (thread_idx == 0)
+    if (thread_idx < d_data->gpu_n_constraint() / 3)
     {
-        d_data->constraint()[0] = d_data->x12()(0) - (-1.0);
-        d_data->constraint()[1] = d_data->y12()(0) - (1.0);
-        d_data->constraint()[2] = d_data->z12()(0) - (0.0);
+        d_data->constraint()[thread_idx * 3 + 0] = d_data->x12()(d_data->fixed_nodes()[thread_idx]) - d_data->x12_jac()(d_data->fixed_nodes()[thread_idx]);
+        d_data->constraint()[thread_idx * 3 + 1] = d_data->y12()(d_data->fixed_nodes()[thread_idx]) - d_data->y12_jac()(d_data->fixed_nodes()[thread_idx]);
+        d_data->constraint()[thread_idx * 3 + 2] = d_data->z12()(d_data->fixed_nodes()[thread_idx]) - d_data->z12_jac()(d_data->fixed_nodes()[thread_idx]);
 
-        d_data->constraint()[3] = d_data->x12()(1) - (1.0);
-        d_data->constraint()[4] = d_data->y12()(1) - (0.0);
-        d_data->constraint()[5] = d_data->z12()(1) - (0.0);
-
-        d_data->constraint()[6] = d_data->x12()(2) - (0.0);
-        d_data->constraint()[7] = d_data->y12()(2) - (1.0);
-        d_data->constraint()[8] = d_data->z12()(2) - (0.0);
-
-        d_data->constraint()[9] = d_data->x12()(3) - (0.0);
-        d_data->constraint()[10] = d_data->y12()(3) - (0.0);
-        d_data->constraint()[11] = d_data->z12()(3) - (1.0);
-
-        for (int i = 0; i < 12; i++)
-        {
-            d_data->constraint_jac()(i, i) = 1.0;
-        }
+        d_data->constraint_jac()(thread_idx * 3, d_data->fixed_nodes()[thread_idx] * 3) = 1.0;
+        d_data->constraint_jac()(thread_idx * 3 + 1, d_data->fixed_nodes()[thread_idx] * 3 + 1) = 1.0;
+        d_data->constraint_jac()(thread_idx * 3 + 2, d_data->fixed_nodes()[thread_idx] * 3 + 2) = 1.0;
     }
 }
