@@ -635,7 +635,7 @@ for step in range(Nt):
 
     # External force at point P
     if step <= 200:
-        f_P = np.array([200.0, -10.0, 3100.0])
+        f_P = np.array([0.0, 0.0, 3100.0])
     else:
         f_P = np.array([0.0, 0.0, 0.0])
 
@@ -694,16 +694,6 @@ for step in range(Nt):
     end_x_du[-1, step] = x12[tip_idx + 1]
     end_y_du[-1, step] = y12[tip_idx + 1]
     end_z_du[-1, step] = z12[tip_idx + 1]
-
-    print("x12")
-    print(x12)
-
-    print("y12")
-    print(y12)
-
-    print("z12")
-    print(z12)
-
     
 
 
@@ -717,6 +707,18 @@ plt.title('Vertical displacement of nodes 5 and 6')
 plt.grid(True)
 plt.tight_layout()
 plt.show()
+
+
+# Print x12, y12, z12 in requested format at the end
+
+print("x12:")
+print(" ".join([f"{v:.17f}" for v in x12]))
+
+print("y12:")
+print(" ".join([f"{v:.17f}" for v in y12]))
+
+print("z12:")
+print(" ".join([f"{v:.17f}" for v in z12]))
 
 
 

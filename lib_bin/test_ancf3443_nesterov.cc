@@ -71,14 +71,12 @@ int main() {
   h_y12_jac = h_y12;
   h_z12_jac = h_z12;
 
-  gpu_3443_data.Setup(L, W, H, rho0, nu, E, h_B_inv, Quadrature::gauss_xi_m_7,
-                      Quadrature::gauss_eta_m_7, Quadrature::gauss_zeta_m_3,
-                      Quadrature::gauss_xi_4, Quadrature::gauss_eta_4,
-                      Quadrature::gauss_zeta_3, Quadrature::weight_xi_m_7,
-                      Quadrature::weight_eta_m_7, Quadrature::weight_zeta_m_3,
-                      Quadrature::weight_xi_4, Quadrature::weight_eta_4,
-                      Quadrature::weight_zeta_3, h_x12, h_y12, h_z12,
-                      element_connectivity);
+  // =======================================================================
+
+  // set fixed nodal unknowns
+  Eigen::VectorXi h_fixed_nodes(8);
+  h_fixed_nodes << 0, 1, 2, 3, 12, 13, 14, 15;
+  gpu_3443_data.SetNodalFixed(h_fixed_nodes);
 
   // set external force
   Eigen::VectorXd h_f_ext(gpu_3443_data.get_n_coef() * 3);
@@ -89,6 +87,17 @@ int main() {
   h_f_ext(3 * gpu_3443_data.get_n_coef() - 16) = 125.0;
   h_f_ext(3 * gpu_3443_data.get_n_coef() - 22) = 500.0;
   gpu_3443_data.SetExternalForce(h_f_ext);
+
+  gpu_3443_data.Setup(L, W, H, rho0, nu, E, h_B_inv, Quadrature::gauss_xi_m_7,
+                      Quadrature::gauss_eta_m_7, Quadrature::gauss_zeta_m_3,
+                      Quadrature::gauss_xi_4, Quadrature::gauss_eta_4,
+                      Quadrature::gauss_zeta_3, Quadrature::weight_xi_m_7,
+                      Quadrature::weight_eta_m_7, Quadrature::weight_zeta_m_3,
+                      Quadrature::weight_xi_4, Quadrature::weight_eta_4,
+                      Quadrature::weight_zeta_3, h_x12, h_y12, h_z12,
+                      element_connectivity);
+
+  // =======================================================
 
   gpu_3443_data.CalcDsDuPre();
   gpu_3443_data.PrintDsDuPre();

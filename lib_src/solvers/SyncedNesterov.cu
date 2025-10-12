@@ -283,7 +283,7 @@ one_step_nesterov_kernel(ElementBase *d_data, SyncedNesterovSolver *d_nesterov_s
                     //     printf("\n");
                     // }
 
-                    if (tid == 0)
+                    if (tid < d_nesterov_solver->gpu_n_constraints() / 3)
                     {
                         if (d_data->type == TYPE_3243)
                             ancf3243_compute_constraint_data(static_cast<GPU_ANCF3243_Data *>(d_data));
@@ -428,8 +428,7 @@ one_step_nesterov_kernel(ElementBase *d_data, SyncedNesterovSolver *d_nesterov_s
 
             grid.sync();
 
-            // Only thread 0 handles constraint computation and dual variable updates
-            if (tid == 0)
+            if (tid < d_nesterov_solver->gpu_n_constraints() / 3)
             {
                 // Compute constraints at new position
                 if (d_data->type == TYPE_3243)
@@ -440,6 +439,10 @@ one_step_nesterov_kernel(ElementBase *d_data, SyncedNesterovSolver *d_nesterov_s
                 {
                     ancf3443_compute_constraint_data(static_cast<GPU_ANCF3443_Data *>(d_data));
                 }
+            }
+
+            if (tid == 0)
+            {
 
                 // Dual variable update: lam += rho * h * c(q_new)
                 for (int i = 0; i < d_nesterov_solver->gpu_n_constraints(); i++)
