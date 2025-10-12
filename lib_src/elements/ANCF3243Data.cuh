@@ -243,22 +243,27 @@ struct GPU_ANCF3243_Data : public ElementBase
 
     __device__ Eigen::Map<Eigen::VectorXd> constraint()
     {
-        return Eigen::Map<Eigen::VectorXd>(d_constraint, 12);
+        return Eigen::Map<Eigen::VectorXd>(d_constraint, n_constraint);
     }
 
     __device__ const Eigen::Map<Eigen::VectorXd> constraint() const
     {
-        return Eigen::Map<Eigen::VectorXd>(d_constraint, 12);
+        return Eigen::Map<Eigen::VectorXd>(d_constraint, n_constraint);
     }
 
     __device__ Eigen::Map<Eigen::MatrixXd> constraint_jac()
     {
-        return Eigen::Map<Eigen::MatrixXd>(d_constraint_jac, 12, n_coef * 3);
+        return Eigen::Map<Eigen::MatrixXd>(d_constraint_jac, n_constraint, n_coef * 3);
     }
 
     __device__ const Eigen::Map<Eigen::MatrixXd> constraint_jac() const
     {
-        return Eigen::Map<Eigen::MatrixXd>(d_constraint_jac, 12, n_coef * 3);
+        return Eigen::Map<Eigen::MatrixXd>(d_constraint_jac, n_constraint, n_coef * 3);
+    }
+
+    __device__ Eigen::Map<Eigen::VectorXi> fixed_nodes()
+    {
+        return Eigen::Map<Eigen::VectorXi>(d_fixed_nodes, n_constraint / 3);
     }
 
     // ================================
@@ -316,6 +321,7 @@ struct GPU_ANCF3243_Data : public ElementBase
 
     __device__ int gpu_n_coef() const { return n_coef; }
 
+    __device__ int gpu_n_constraint() const { return n_constraint; }
     //===========================================
 
     __device__ Eigen::Map<Eigen::MatrixXd> node_values()
@@ -331,6 +337,8 @@ struct GPU_ANCF3243_Data : public ElementBase
 #endif
     __host__ __device__ int get_n_beam() const { return n_beam; }
     __host__ __device__ int get_n_coef() const { return n_coef; }
+    __host__ __device__ int get_n_constraint() const { return n_constraint; }
+
     // Constructor
     GPU_ANCF3243_Data(int num_beams) : n_beam(num_beams)
     {
@@ -383,10 +391,6 @@ struct GPU_ANCF3243_Data : public ElementBase
         HANDLE_ERROR(cudaMalloc(&d_E, sizeof(double)));
         HANDLE_ERROR(cudaMalloc(&d_lambda, sizeof(double)));
         HANDLE_ERROR(cudaMalloc(&d_mu, sizeof(double)));
-
-        // constraint data
-        HANDLE_ERROR(cudaMalloc(&d_constraint, 12 * sizeof(double)));
-        HANDLE_ERROR(cudaMalloc(&d_constraint_jac, 12 * (n_coef * 3) * sizeof(double)));
     }
 
     void Setup(double length,
@@ -441,7 +445,7 @@ struct GPU_ANCF3243_Data : public ElementBase
         HANDLE_ERROR(cudaMemset(d_node_values, 0, n_coef * n_coef * sizeof(double)));
 
         cudaMemset(d_f_int, 0, n_coef * 3 * sizeof(double));
-        cudaMemset(d_f_ext, 0, n_coef * 3 * sizeof(double));
+
         cudaMemset(d_F, 0, n_beam * Quadrature::N_TOTAL_QP_3_2_2 * 3 * 3 * sizeof(double));
         cudaMemset(d_P, 0, n_beam * Quadrature::N_TOTAL_QP_3_2_2 * 3 * 3 * sizeof(double));
 
@@ -458,9 +462,6 @@ struct GPU_ANCF3243_Data : public ElementBase
         HANDLE_ERROR(cudaMemcpy(d_mu, &mu, sizeof(double), cudaMemcpyHostToDevice));
         HANDLE_ERROR(cudaMemcpy(d_lambda, &lambda, sizeof(double), cudaMemcpyHostToDevice));
 
-        HANDLE_ERROR(cudaMemset(d_constraint, 0, 12 * sizeof(double)));
-        HANDLE_ERROR(cudaMemset(d_constraint_jac, 0, 12 * (n_coef * 3) * sizeof(double)));
-
         HANDLE_ERROR(cudaMemcpy(d_data, this, sizeof(GPU_ANCF3243_Data), cudaMemcpyHostToDevice));
 
         is_setup = true;
@@ -473,7 +474,30 @@ struct GPU_ANCF3243_Data : public ElementBase
             std::cerr << "External force vector size mismatch." << std::endl;
             return;
         }
+        cudaMemset(d_f_ext, 0, n_coef * 3 * sizeof(double));
         HANDLE_ERROR(cudaMemcpy(d_f_ext, f_ext.data(), n_coef * 3 * sizeof(double), cudaMemcpyHostToDevice));
+    }
+
+    void SetNodalFixed(const Eigen::VectorXi &fixed_nodes)
+    {
+
+        if (is_constraints_setup)
+        {
+            std::cerr << "GPU_ANCF3243_Data CONSTRAINT is already set up." << std::endl;
+            return;
+        }
+
+        n_constraint = fixed_nodes.size() * 3;
+
+        HANDLE_ERROR(cudaMalloc(&d_constraint, n_constraint * sizeof(double)));
+        HANDLE_ERROR(cudaMalloc(&d_constraint_jac, n_constraint * (n_coef * 3) * sizeof(double)));
+        HANDLE_ERROR(cudaMalloc(&d_fixed_nodes, fixed_nodes.size() * sizeof(int)));
+
+        HANDLE_ERROR(cudaMemset(d_constraint, 0, n_constraint * sizeof(double)));
+        HANDLE_ERROR(cudaMemset(d_constraint_jac, 0, n_constraint * (n_coef * 3) * sizeof(double)));
+        HANDLE_ERROR(cudaMemcpy(d_fixed_nodes, fixed_nodes.data(), fixed_nodes.size() * sizeof(int), cudaMemcpyHostToDevice));
+
+        is_constraints_setup = true;
     }
 
     // Free memory
@@ -520,6 +544,7 @@ struct GPU_ANCF3243_Data : public ElementBase
 
         HANDLE_ERROR(cudaFree(d_constraint));
         HANDLE_ERROR(cudaFree(d_constraint_jac));
+        HANDLE_ERROR(cudaFree(d_fixed_nodes));
 
         HANDLE_ERROR(cudaFree(d_data));
     }
@@ -554,6 +579,7 @@ struct GPU_ANCF3243_Data : public ElementBase
 
     int n_beam;
     int n_coef;
+    int n_constraint;
 
 private:
     double *d_B_inv;
@@ -575,9 +601,11 @@ private:
     double *d_rho0, *d_nu, *d_E, *d_lambda, *d_mu;
 
     double *d_constraint, *d_constraint_jac;
+    int *d_fixed_nodes;
 
     // force related parameters
     double *d_f_int, *d_f_ext;
 
     bool is_setup = false;
+    bool is_constraints_setup = false;
 };

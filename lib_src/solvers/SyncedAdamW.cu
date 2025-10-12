@@ -233,7 +233,7 @@ one_step_adamw_kernel(ElementBase *d_data, SyncedAdamWSolver *d_adamw_solver)
 
                     grid.sync();
 
-                    if (tid == 0)
+                    if (tid < d_adamw_solver->gpu_n_constraints() / 3)
                     {
                         if (d_data->type == TYPE_3243)
                             ancf3243_compute_constraint_data(static_cast<GPU_ANCF3243_Data *>(d_data));
@@ -322,7 +322,8 @@ one_step_adamw_kernel(ElementBase *d_data, SyncedAdamWSolver *d_adamw_solver)
             grid.sync();
 
             // Only thread 0 handles constraint computation and dual variable updates
-            if (tid == 0)
+
+            if (tid < d_adamw_solver->gpu_n_constraints() / 3)
             {
                 // Compute constraints at new position
                 if (d_data->type == TYPE_3243)
@@ -333,7 +334,10 @@ one_step_adamw_kernel(ElementBase *d_data, SyncedAdamWSolver *d_adamw_solver)
                 {
                     ancf3443_compute_constraint_data(static_cast<GPU_ANCF3443_Data *>(d_data));
                 }
+            }
 
+            if (tid == 0)
+            {
                 // Dual variable update: lam += rho * h * c(q_new)
                 for (int i = 0; i < d_adamw_solver->gpu_n_constraints(); i++)
                 {

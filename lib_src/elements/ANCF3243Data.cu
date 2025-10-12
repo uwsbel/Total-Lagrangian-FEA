@@ -217,7 +217,7 @@ void GPU_ANCF3243_Data::RetrievePFromFToCPU(std::vector<std::vector<Eigen::Matri
 
 void GPU_ANCF3243_Data::RetrieveConstraintDataToCPU(Eigen::VectorXd &constraint)
 {
-  int expected_size = 12;
+  int expected_size = n_constraint;
   constraint.resize(expected_size);
   HANDLE_ERROR(cudaMemcpy(constraint.data(), d_constraint, expected_size * sizeof(double), cudaMemcpyDeviceToHost));
 }
