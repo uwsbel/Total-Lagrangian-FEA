@@ -268,22 +268,6 @@ __device__ __forceinline__ void ancf3243_compute_constraint_data(GPU_ANCF3243_Da
         d_data->constraint()[thread_idx * 3 + 1] = d_data->y12()(d_data->fixed_nodes()[thread_idx]) - d_data->y12_jac()(d_data->fixed_nodes()[thread_idx]);
         d_data->constraint()[thread_idx * 3 + 2] = d_data->z12()(d_data->fixed_nodes()[thread_idx]) - d_data->z12_jac()(d_data->fixed_nodes()[thread_idx]);
 
-        // d_data->constraint()[0] = d_data->x12()(0) - (-1.0);
-        // d_data->constraint()[1] = d_data->y12()(0) - (1.0);
-        // d_data->constraint()[2] = d_data->z12()(0) - (0.0);
-
-        // d_data->constraint()[3] = d_data->x12()(1) - (1.0);
-        // d_data->constraint()[4] = d_data->y12()(1) - (0.0);
-        // d_data->constraint()[5] = d_data->z12()(1) - (0.0);
-
-        // d_data->constraint()[6] = d_data->x12()(2) - (0.0);
-        // d_data->constraint()[7] = d_data->y12()(2) - (1.0);
-        // d_data->constraint()[8] = d_data->z12()(2) - (0.0);
-
-        // d_data->constraint()[9] = d_data->x12()(3) - (0.0);
-        // d_data->constraint()[10] = d_data->y12()(3) - (0.0);
-        // d_data->constraint()[11] = d_data->z12()(3) - (1.0);
-
         d_data->constraint_jac()(thread_idx * 3, d_data->fixed_nodes()[thread_idx] * 3) = 1.0;
         d_data->constraint_jac()(thread_idx * 3 + 1, d_data->fixed_nodes()[thread_idx] * 3 + 1) = 1.0;
         d_data->constraint_jac()(thread_idx * 3 + 2, d_data->fixed_nodes()[thread_idx] * 3 + 2) = 1.0;
