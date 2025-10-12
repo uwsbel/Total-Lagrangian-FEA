@@ -73,6 +73,13 @@ int main() {
                       Quadrature::weight_zeta_2, h_x12, h_y12, h_z12,
                       h_offset_start, h_offset_end);
 
+  // set external force
+  Eigen::VectorXd h_f_ext(gpu_3243_data.get_n_coef() * 3);
+  // set external force applied at the end of the beam to be 0,0,3100
+  h_f_ext.setZero();
+  h_f_ext(3 * gpu_3243_data.get_n_coef() - 10) = 3100.0;
+  gpu_3243_data.SetExternalForce(h_f_ext);
+
   gpu_3243_data.CalcDsDuPre();
   gpu_3243_data.PrintDsDuPre();
   gpu_3243_data.CalcMassMatrix();

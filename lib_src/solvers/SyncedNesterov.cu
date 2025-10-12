@@ -62,40 +62,23 @@ __device__ double solver_grad_L(int tid, ElementBase *d_data, SyncedNesterovSolv
     if (d_data->type == TYPE_3243)
     {
         auto *data = static_cast<GPU_ANCF3243_Data *>(d_data);
-        res -= (-data->f_elem_out()(tid));
+        res -= (-data->f_int()(tid));
     }
     else if (d_data->type == TYPE_3443)
     {
         auto *data = static_cast<GPU_ANCF3443_Data *>(d_data);
-        res -= (-data->f_elem_out()(tid));
+        res -= (-data->f_int()(tid));
     }
 
     if (d_data->type == TYPE_3243)
     {
-        if (tid == 3 * d_solver->get_n_coef() - 10)
-        {
-            // res -= 10000.0;
-            res -= 3100.0;
-        }
+        auto *data = static_cast<GPU_ANCF3243_Data *>(d_data);
+        res -= data->f_ext()(tid);
     }
     else if (d_data->type == TYPE_3443)
     {
-        if (tid == 3 * d_solver->get_n_coef() - 4)
-        {
-            res -= (-125.0);
-        }
-        else if (tid == 3 * d_solver->get_n_coef() - 10)
-        {
-            res -= (500.0);
-        }
-        else if (tid == 3 * d_solver->get_n_coef() - 16)
-        {
-            res -= (125.0);
-        }
-        else if (tid == 3 * d_solver->get_n_coef() - 22)
-        {
-            res -= (500.0);
-        }
+        auto *data = static_cast<GPU_ANCF3443_Data *>(d_data);
+        res -= data->f_ext()(tid);
     }
 
     // Constraints

@@ -329,7 +329,7 @@ __device__ __forceinline__ void ancf3443_compute_internal_force(int elem_idx, in
     #pragma unroll
     for (int d = 0; d < 3; ++d)
     {
-        d_data->f_elem_out(global_node_idx)(d) = 0.0;
+        d_data->f_int(global_node_idx)(d) = 0.0;
     }
 
 
@@ -358,7 +358,7 @@ __device__ __forceinline__ void ancf3443_compute_internal_force(int elem_idx, in
     #pragma unroll
     for (int d = 0; d < 3; ++d)
     {
-        atomicAdd(&d_data->f_elem_out(global_node_idx)(d), f_i[d]);
+        atomicAdd(&d_data->f_int(global_node_idx)(d), f_i[d]);
     }
 
     // clang-format on

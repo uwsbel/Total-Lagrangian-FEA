@@ -403,7 +403,7 @@ for elem in range(n_shell):
 print("Mass matrix shape:", m.shape)
 print(pd.DataFrame(m).to_string(float_format="%.3f"))
 
-Nt = 20  # Number of time steps
+Nt = 50  # Number of time steps
 
 # Precompute ds/du at force quadrature points
 ds_du_pre = {}
@@ -514,7 +514,7 @@ def alm_adamw_step(v_guess, lam_guess, v_prev, q_prev, M, f_int_func, f_int, f_e
     outer_tol = 1e-6
 
     # AdamW hyperparams
-    lr = 1e-4
+    lr = 2e-4
     beta1 = 0.9
     beta2 = 0.999
     eps = 1e-8
@@ -604,6 +604,9 @@ for step in range(Nt):
         row_idx = slice(3 * global_idx, 3 * (global_idx + 1))
         f_ext_vec[row_idx] = f_ext[i_local]
 
+    print("external force:")
+    print(f_ext_vec)
+
     # Expand mass matrix to xyz blocks
     M_full = np.zeros((3 * N_coef, 3 * N_coef))
     for i in range(N_coef):
@@ -638,11 +641,13 @@ for step in range(Nt):
     # track some tip dof (example uses coefficient index 20)
     endz_pos.append(z12[20])
 
-    print("x12: ")
-    print(x12)
-    print("y12: ")
-    print(y12)
-    print("z12: ")
-    print(z12)
+    # Final formatted print for x12, y12, z12
+    print("x12:")
+    print(" ".join([f"{v:.17f}" for v in x12]))
 
-print(endz_pos)
+    print("y12:")
+    print(" ".join([f"{v:.17f}" for v in y12]))
+
+    print("z12:")
+    print(" ".join([f"{v:.17f}" for v in z12]))
+

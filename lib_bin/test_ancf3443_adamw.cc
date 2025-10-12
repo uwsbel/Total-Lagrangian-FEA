@@ -80,6 +80,16 @@ int main() {
                       Quadrature::weight_zeta_3, h_x12, h_y12, h_z12,
                       element_connectivity);
 
+  // set external force
+  Eigen::VectorXd h_f_ext(gpu_3443_data.get_n_coef() * 3);
+  // set external force applied at the end of the beam to be 0,0,3100
+  h_f_ext.setZero();
+  h_f_ext(3 * gpu_3443_data.get_n_coef() - 4) = -125.0;
+  h_f_ext(3 * gpu_3443_data.get_n_coef() - 10) = 500.0;
+  h_f_ext(3 * gpu_3443_data.get_n_coef() - 16) = 125.0;
+  h_f_ext(3 * gpu_3443_data.get_n_coef() - 22) = 500.0;
+  gpu_3443_data.SetExternalForce(h_f_ext);
+
   gpu_3443_data.CalcDsDuPre();
   gpu_3443_data.PrintDsDuPre();
 
@@ -164,7 +174,7 @@ int main() {
   SyncedAdamWSolver solver(&gpu_3443_data, 24);
   solver.Setup();
   solver.SetParameters(&params);
-  for (int i = 0; i < 20; i++) {
+  for (int i = 0; i < 50; i++) {
     solver.Solve();
   }
 
