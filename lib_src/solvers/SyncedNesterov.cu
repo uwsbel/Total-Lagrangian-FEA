@@ -243,15 +243,18 @@ one_step_nesterov_kernel(ElementBase *d_data, SyncedNesterovSolver *d_nesterov_s
 
                     if (tid < d_nesterov_solver->get_n_beam() * d_nesterov_solver->gpu_n_total_qp())
                     {
-                        int elem_idx = tid / d_nesterov_solver->gpu_n_total_qp();
-                        int qp_idx = tid % d_nesterov_solver->gpu_n_total_qp();
-                        if (d_data->type == TYPE_3243)
+                        for (int idx = tid; idx < d_nesterov_solver->get_n_beam() * d_nesterov_solver->gpu_n_total_qp(); idx += grid.size())
                         {
-                            ancf3243_compute_p(elem_idx, qp_idx, static_cast<GPU_ANCF3243_Data *>(d_data));
-                        }
-                        else if (d_data->type == TYPE_3443)
-                        {
-                            ancf3443_compute_p(elem_idx, qp_idx, static_cast<GPU_ANCF3443_Data *>(d_data));
+                            int elem_idx = idx / d_nesterov_solver->gpu_n_total_qp();
+                            int qp_idx = idx % d_nesterov_solver->gpu_n_total_qp();
+                            if (d_data->type == TYPE_3243)
+                            {
+                                ancf3243_compute_p(elem_idx, qp_idx, static_cast<GPU_ANCF3243_Data *>(d_data));
+                            }
+                            else if (d_data->type == TYPE_3443)
+                            {
+                                ancf3443_compute_p(elem_idx, qp_idx, static_cast<GPU_ANCF3443_Data *>(d_data));
+                            }
                         }
                     }
 
@@ -259,15 +262,18 @@ one_step_nesterov_kernel(ElementBase *d_data, SyncedNesterovSolver *d_nesterov_s
 
                     if (tid < d_nesterov_solver->get_n_beam() * d_nesterov_solver->gpu_n_shape())
                     {
-                        int elem_idx = tid / d_nesterov_solver->gpu_n_shape();
-                        int node_idx = tid % d_nesterov_solver->gpu_n_shape();
-                        if (d_data->type == TYPE_3243)
+                        for (int idx = tid; idx < d_nesterov_solver->get_n_beam() * d_nesterov_solver->gpu_n_shape(); idx += grid.size())
                         {
-                            ancf3243_compute_internal_force(elem_idx, node_idx, static_cast<GPU_ANCF3243_Data *>(d_data));
-                        }
-                        else if (d_data->type == TYPE_3443)
-                        {
-                            ancf3443_compute_internal_force(elem_idx, node_idx, static_cast<GPU_ANCF3443_Data *>(d_data));
+                            int elem_idx = idx / d_nesterov_solver->gpu_n_shape();
+                            int node_idx = idx % d_nesterov_solver->gpu_n_shape();
+                            if (d_data->type == TYPE_3243)
+                            {
+                                ancf3243_compute_internal_force(elem_idx, node_idx, static_cast<GPU_ANCF3243_Data *>(d_data));
+                            }
+                            else if (d_data->type == TYPE_3443)
+                            {
+                                ancf3443_compute_internal_force(elem_idx, node_idx, static_cast<GPU_ANCF3443_Data *>(d_data));
+                            }
                         }
                     }
 
@@ -531,7 +537,7 @@ void SyncedNesterovSolver::OneStepNesterov()
     HANDLE_ERROR(cudaOccupancyMaxActiveBlocksPerMultiprocessor(&maxBlocksPerSm, one_step_nesterov_kernel, threads, 0));
     int maxCoopBlocks = maxBlocksPerSm * props.multiProcessorCount;
 
-    int N = max(n_coef_ * 3, n_beam_ * n_total_qp_);
+    int N = 3 * n_coef_;
     int blocksNeeded = (N + threads - 1) / threads;
     int blocks = std::min(blocksNeeded, maxCoopBlocks);
 
