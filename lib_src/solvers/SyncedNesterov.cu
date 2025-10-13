@@ -537,7 +537,7 @@ void SyncedNesterovSolver::OneStepNesterov()
     HANDLE_ERROR(cudaOccupancyMaxActiveBlocksPerMultiprocessor(&maxBlocksPerSm, one_step_nesterov_kernel, threads, 0));
     int maxCoopBlocks = maxBlocksPerSm * props.multiProcessorCount;
 
-    int N = n_coef_ * 3;
+    int N = 3 * n_coef_;
     int blocksNeeded = (N + threads - 1) / threads;
     int blocks = std::min(blocksNeeded, maxCoopBlocks);
 
