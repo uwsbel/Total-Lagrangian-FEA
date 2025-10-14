@@ -1,27 +1,29 @@
+#include <cuda_runtime.h>
+
+#include <Eigen/Dense>
+#include <iomanip>
+#include <iostream>
+
 #include "../../lib_utils/quadrature_utils.h"
 #include "../lib_src/elements/ANCF3243Data.cuh"
 #include "../lib_src/solvers/SyncedNesterov.cuh"
 #include "../lib_utils/cpu_utils.h"
-#include <Eigen/Dense>
-#include <cuda_runtime.h>
-#include <iomanip>
-#include <iostream>
 
-const double E = 7e8;     // Young's modulus
-const double nu = 0.33;   // Poisson's ratio
-const double rho0 = 2700; // Density
+const double E    = 7e8;   // Young's modulus
+const double nu   = 0.33;  // Poisson's ratio
+const double rho0 = 2700;  // Density
 
 int main() {
   // initialize GPU data structure
-  int n_beam = 3; // this is working
+  int n_beam = 3;  // this is working
   GPU_ANCF3243_Data gpu_3243_data(n_beam);
   gpu_3243_data.Initialize();
 
   double L = 2.0, W = 1.0, H = 1.0;
 
-  const double E = 7e8;     // Young's modulus
-  const double nu = 0.33;   // Poisson's ratio
-  const double rho0 = 2700; // Density
+  const double E    = 7e8;   // Young's modulus
+  const double nu   = 0.33;  // Poisson's ratio
+  const double rho0 = 2700;  // Density
 
   std::cout << "Number of beams: " << gpu_3243_data.get_n_beam() << std::endl;
   std::cout << "Total nodes: " << gpu_3243_data.get_n_coef() << std::endl;
@@ -114,11 +116,11 @@ int main() {
 
   for (int i = 0; i < p_from_F.size(); i++) {
     std::cout << "Element " << i << ":" << std::endl;
-    for (int j = 0; j < p_from_F[i].size(); j++) // quadrature points
+    for (int j = 0; j < p_from_F[i].size(); j++)  // quadrature points
     {
       std::cout << "  QP " << j << ":" << std::endl;
-      std::cout << p_from_F[i][j] << std::endl; // 3x3 matrix
-      std::cout << std::endl;                   // Extra space between matrices
+      std::cout << p_from_F[i][j] << std::endl;  // 3x3 matrix
+      std::cout << std::endl;                    // Extra space between matrices
     }
   }
 

@@ -1,13 +1,16 @@
 #pragma once
 #include "ANCF3443Data.cuh"
 
-__device__ __forceinline__ void ancf3443_compute_p(int, int, GPU_ANCF3443_Data *);
-__device__ __forceinline__ void ancf3443_compute_internal_force(int, int, GPU_ANCF3443_Data *);
-__device__ __forceinline__ void ancf3443_compute_constraint_data(GPU_ANCF3443_Data *);
+__device__ __forceinline__ void ancf3443_compute_p(int, int,
+                                                   GPU_ANCF3443_Data *);
+__device__ __forceinline__ void ancf3443_compute_internal_force(
+    int, int, GPU_ANCF3443_Data *);
+__device__ __forceinline__ void ancf3443_compute_constraint_data(
+    GPU_ANCF3443_Data *);
 
-__device__ __forceinline__ void ancf3443_mat_vec_mul(Eigen::Map<Eigen::MatrixXd> A, const double *x, double *out)
-{
-    // clang-format off
+__device__ __forceinline__ void ancf3443_mat_vec_mul(
+    Eigen::Map<Eigen::MatrixXd> A, const double *x, double *out) {
+// clang-format off
     #pragma unroll
     for (int i = 0; i < Quadrature::N_SHAPE_3443; ++i)
     {
@@ -18,158 +21,161 @@ __device__ __forceinline__ void ancf3443_mat_vec_mul(Eigen::Map<Eigen::MatrixXd>
             out[i] += A(i, j) * x[j];
         }
     }
-    // clang-format on
+  // clang-format on
 }
 
 // Device function to compute determinant of 3x3 matrix
-__device__ __forceinline__ double ancf3443_det3x3(const double *J)
-{
-    return J[0] * (J[4] * J[8] - J[5] * J[7]) - J[1] * (J[3] * J[8] - J[5] * J[6]) + J[2] * (J[3] * J[7] - J[4] * J[6]);
+__device__ __forceinline__ double ancf3443_det3x3(const double *J) {
+  return J[0] * (J[4] * J[8] - J[5] * J[7]) -
+         J[1] * (J[3] * J[8] - J[5] * J[6]) +
+         J[2] * (J[3] * J[7] - J[4] * J[6]);
 }
 
-__device__ __forceinline__ void ancf3443_b_vec(double u, double v, double w, double *out)
-{
-    out[0] = 1.0;
-    out[1] = u;
-    out[2] = v;
-    out[3] = w;
-    out[4] = u * v;
-    out[5] = u * w;
-    out[6] = v * w;
-    out[7] = u * v * w;
-    out[8] = u * u;
-    out[9] = v * v;
-    out[10] = (u * u) * v;
-    out[11] = u * (v * v);
-    out[12] = u * u * u;
-    out[13] = v * v * v;
-    out[14] = (u * u * u) * v;
-    out[15] = u * (v * v * v);
+__device__ __forceinline__ void ancf3443_b_vec(double u, double v, double w,
+                                               double *out) {
+  out[0]  = 1.0;
+  out[1]  = u;
+  out[2]  = v;
+  out[3]  = w;
+  out[4]  = u * v;
+  out[5]  = u * w;
+  out[6]  = v * w;
+  out[7]  = u * v * w;
+  out[8]  = u * u;
+  out[9]  = v * v;
+  out[10] = (u * u) * v;
+  out[11] = u * (v * v);
+  out[12] = u * u * u;
+  out[13] = v * v * v;
+  out[14] = (u * u * u) * v;
+  out[15] = u * (v * v * v);
 }
 
-__device__ __forceinline__ void ancf3443_b_vec_xi(double xi, double eta, double zeta, double L, double W, double H, double *out)
-{
-    double u = L * xi / 2.0;
-    double v = W * eta / 2.0;
-    double w = H * zeta / 2.0;
-    ancf3443_b_vec(u, v, w, out);
+__device__ __forceinline__ void ancf3443_b_vec_xi(double xi, double eta,
+                                                  double zeta, double L,
+                                                  double W, double H,
+                                                  double *out) {
+  double u = L * xi / 2.0;
+  double v = W * eta / 2.0;
+  double w = H * zeta / 2.0;
+  ancf3443_b_vec(u, v, w, out);
 }
 
-__device__ __forceinline__ void ancf3443_db_dxi(double xi, double eta, double zeta, double L, double W, double H, double *out)
-{
-    // Map to physical coordinates
-    double u = 0.5 * L * xi;
-    double v = 0.5 * W * eta;
-    double w = 0.5 * H * zeta;
+__device__ __forceinline__ void ancf3443_db_dxi(double xi, double eta,
+                                                double zeta, double L, double W,
+                                                double H, double *out) {
+  // Map to physical coordinates
+  double u = 0.5 * L * xi;
+  double v = 0.5 * W * eta;
+  double w = 0.5 * H * zeta;
 
-    // db_du as in your Python code
-    out[0] = 0.0;
-    out[1] = 1.0;
-    out[2] = 0.0;
-    out[3] = 0.0;
-    out[4] = v;
-    out[5] = w;
-    out[6] = 0.0;
-    out[7] = v * w;
-    out[8] = 2.0 * u;
-    out[9] = 0.0;
-    out[10] = 2.0 * u * v;
-    out[11] = v * v;
-    out[12] = 3.0 * u * u;
-    out[13] = 0.0;
-    out[14] = 3.0 * u * u * v;
-    out[15] = v * v * v;
+  // db_du as in your Python code
+  out[0]  = 0.0;
+  out[1]  = 1.0;
+  out[2]  = 0.0;
+  out[3]  = 0.0;
+  out[4]  = v;
+  out[5]  = w;
+  out[6]  = 0.0;
+  out[7]  = v * w;
+  out[8]  = 2.0 * u;
+  out[9]  = 0.0;
+  out[10] = 2.0 * u * v;
+  out[11] = v * v;
+  out[12] = 3.0 * u * u;
+  out[13] = 0.0;
+  out[14] = 3.0 * u * u * v;
+  out[15] = v * v * v;
 
 // Chain rule: db/dxi = 0.5 * L * db/du
 #pragma unroll
-    for (int i = 0; i < Quadrature::N_SHAPE_3443; ++i)
-        out[i] *= 0.5 * L;
+  for (int i = 0; i < Quadrature::N_SHAPE_3443; ++i)
+    out[i] *= 0.5 * L;
 }
 
-__device__ __forceinline__ void ancf3443_db_deta(double xi, double eta, double zeta, double L, double W, double H, double *out)
-{
-    double u = 0.5 * L * xi;
-    double v = 0.5 * W * eta;
-    double w = 0.5 * H * zeta;
+__device__ __forceinline__ void ancf3443_db_deta(double xi, double eta,
+                                                 double zeta, double L,
+                                                 double W, double H,
+                                                 double *out) {
+  double u = 0.5 * L * xi;
+  double v = 0.5 * W * eta;
+  double w = 0.5 * H * zeta;
 
-    // db_dv as in your Python code
-    out[0] = 0.0;
-    out[1] = 0.0;
-    out[2] = 1.0;
-    out[3] = 0.0;
-    out[4] = u;
-    out[5] = 0.0;
-    out[6] = w;
-    out[7] = u * w;
-    out[8] = 0.0;
-    out[9] = 2.0 * v;
-    out[10] = u * u;
-    out[11] = 2.0 * u * v;
-    out[12] = 0.0;
-    out[13] = 3.0 * v * v;
-    out[14] = u * u * u;
-    out[15] = 3.0 * u * v * v;
+  // db_dv as in your Python code
+  out[0]  = 0.0;
+  out[1]  = 0.0;
+  out[2]  = 1.0;
+  out[3]  = 0.0;
+  out[4]  = u;
+  out[5]  = 0.0;
+  out[6]  = w;
+  out[7]  = u * w;
+  out[8]  = 0.0;
+  out[9]  = 2.0 * v;
+  out[10] = u * u;
+  out[11] = 2.0 * u * v;
+  out[12] = 0.0;
+  out[13] = 3.0 * v * v;
+  out[14] = u * u * u;
+  out[15] = 3.0 * u * v * v;
 
 // Chain rule: db/deta = 0.5 * W * db/dv
 #pragma unroll
-    for (int i = 0; i < Quadrature::N_SHAPE_3443; ++i)
-        out[i] *= 0.5 * W;
+  for (int i = 0; i < Quadrature::N_SHAPE_3443; ++i)
+    out[i] *= 0.5 * W;
 }
 
-__device__ __forceinline__ void ancf3443_db_dzeta(double xi, double eta, double zeta, double L, double W, double H, double *out)
-{
-    double u = 0.5 * L * xi;
-    double v = 0.5 * W * eta;
-    double w = 0.5 * H * zeta;
+__device__ __forceinline__ void ancf3443_db_dzeta(double xi, double eta,
+                                                  double zeta, double L,
+                                                  double W, double H,
+                                                  double *out) {
+  double u = 0.5 * L * xi;
+  double v = 0.5 * W * eta;
+  double w = 0.5 * H * zeta;
 
-    // db_dw as in your Python code
-    out[0] = 0.0;
-    out[1] = 0.0;
-    out[2] = 0.0;
-    out[3] = 1.0;
-    out[4] = 0.0;
-    out[5] = u;
-    out[6] = v;
-    out[7] = u * v;
-    out[8] = 0.0;
-    out[9] = 0.0;
-    out[10] = 0.0;
-    out[11] = 0.0;
-    out[12] = 0.0;
-    out[13] = 0.0;
-    out[14] = 0.0;
-    out[15] = 0.0;
+  // db_dw as in your Python code
+  out[0]  = 0.0;
+  out[1]  = 0.0;
+  out[2]  = 0.0;
+  out[3]  = 1.0;
+  out[4]  = 0.0;
+  out[5]  = u;
+  out[6]  = v;
+  out[7]  = u * v;
+  out[8]  = 0.0;
+  out[9]  = 0.0;
+  out[10] = 0.0;
+  out[11] = 0.0;
+  out[12] = 0.0;
+  out[13] = 0.0;
+  out[14] = 0.0;
+  out[15] = 0.0;
 
 // Chain rule: db/dzeta = 0.5 * H * db/dw
 #pragma unroll
-    for (int i = 0; i < Quadrature::N_SHAPE_3443; ++i)
-        out[i] *= 0.5 * H;
+  for (int i = 0; i < Quadrature::N_SHAPE_3443; ++i)
+    out[i] *= 0.5 * H;
 }
 
 // Device function for Jacobian determinant in normalized coordinates
-__device__ __forceinline__ void ancf3443_calc_det_J_xi(double xi,
-                                                       double eta,
-                                                       double zeta,
-                                                       Eigen::Map<Eigen::MatrixXd> B_inv,
-                                                       Eigen::Map<Eigen::VectorXd> x12_jac,
-                                                       Eigen::Map<Eigen::VectorXd> y12_jac,
-                                                       Eigen::Map<Eigen::VectorXd> z12_jac,
-                                                       double L,
-                                                       double W,
-                                                       double H,
-                                                       double *J_out)
-{
-    double db_dxi[Quadrature::N_SHAPE_3443], db_deta[Quadrature::N_SHAPE_3443], db_dzeta[Quadrature::N_SHAPE_3443];
-    ancf3443_db_dxi(xi, eta, zeta, L, W, H, db_dxi);
-    ancf3443_db_deta(xi, eta, zeta, L, W, H, db_deta);
-    ancf3443_db_dzeta(xi, eta, zeta, L, W, H, db_dzeta);
+__device__ __forceinline__ void ancf3443_calc_det_J_xi(
+    double xi, double eta, double zeta, Eigen::Map<Eigen::MatrixXd> B_inv,
+    Eigen::Map<Eigen::VectorXd> x12_jac, Eigen::Map<Eigen::VectorXd> y12_jac,
+    Eigen::Map<Eigen::VectorXd> z12_jac, double L, double W, double H,
+    double *J_out) {
+  double db_dxi[Quadrature::N_SHAPE_3443], db_deta[Quadrature::N_SHAPE_3443],
+      db_dzeta[Quadrature::N_SHAPE_3443];
+  ancf3443_db_dxi(xi, eta, zeta, L, W, H, db_dxi);
+  ancf3443_db_deta(xi, eta, zeta, L, W, H, db_deta);
+  ancf3443_db_dzeta(xi, eta, zeta, L, W, H, db_dzeta);
 
-    double ds_dxi[Quadrature::N_SHAPE_3443], ds_deta[Quadrature::N_SHAPE_3443], ds_dzeta[Quadrature::N_SHAPE_3443];
-    ancf3443_mat_vec_mul(B_inv, db_dxi, ds_dxi);
-    ancf3443_mat_vec_mul(B_inv, db_deta, ds_deta);
-    ancf3443_mat_vec_mul(B_inv, db_dzeta, ds_dzeta);
+  double ds_dxi[Quadrature::N_SHAPE_3443], ds_deta[Quadrature::N_SHAPE_3443],
+      ds_dzeta[Quadrature::N_SHAPE_3443];
+  ancf3443_mat_vec_mul(B_inv, db_dxi, ds_dxi);
+  ancf3443_mat_vec_mul(B_inv, db_deta, ds_deta);
+  ancf3443_mat_vec_mul(B_inv, db_dzeta, ds_dzeta);
 
-    // clang-format off
+// clang-format off
     #pragma unroll
     for (int i = 0; i < 3; ++i)
         for (int j = 0; j < 3; ++j)
@@ -190,12 +196,12 @@ __device__ __forceinline__ void ancf3443_calc_det_J_xi(double xi,
         J_out[1 * 3 + 2] += y12_jac(i) * ds_dzeta[i];
         J_out[2 * 3 + 2] += z12_jac(i) * ds_dzeta[i];
     }
-    // clang-format on
+  // clang-format on
 }
 
-__device__ __forceinline__ void ancf3443_compute_p(int elem_idx, int qp_idx, GPU_ANCF3443_Data *d_data)
-{
-    // clang-format off
+__device__ __forceinline__ void ancf3443_compute_p(int elem_idx, int qp_idx,
+                                                   GPU_ANCF3443_Data *d_data) {
+// clang-format off
     // --- Compute C = F^T * F ---
 
     // Initialize F to zero
@@ -312,18 +318,19 @@ __device__ __forceinline__ void ancf3443_compute_p(int elem_idx, int qp_idx, GPU
             d_data->P(elem_idx, qp_idx)(i, j) = factor * d_data->F(elem_idx, qp_idx)(i, j) + d_data->mu() * (FFF[i][j] - d_data->F(elem_idx, qp_idx)(i, j));
         }
 
-    // clang-format on
+  // clang-format on
 }
 
-__device__ __forceinline__ void ancf3443_compute_internal_force(int elem_idx, int node_idx, GPU_ANCF3443_Data *d_data)
-{
+__device__ __forceinline__ void ancf3443_compute_internal_force(
+    int elem_idx, int node_idx, GPU_ANCF3443_Data *d_data) {
+  double f_i[3] = {0};
+  // int node_base = d_data->offset_start()(elem_idx);
+  int global_node_idx =
+      d_data->element_connectivity()(elem_idx, node_idx / 4) * 4 +
+      (node_idx % 4);
+  double geom = (d_data->L() * d_data->W() * d_data->H()) / 8.0;
 
-    double f_i[3] = {0};
-    // int node_base = d_data->offset_start()(elem_idx);
-    int global_node_idx = d_data->element_connectivity()(elem_idx, node_idx / 4) * 4 + (node_idx % 4);
-    double geom = (d_data->L() * d_data->W() * d_data->H()) / 8.0;
-
-    // clang-format off
+// clang-format off
 
     // set 0
     #pragma unroll
@@ -361,21 +368,29 @@ __device__ __forceinline__ void ancf3443_compute_internal_force(int elem_idx, in
         atomicAdd(&d_data->f_int(global_node_idx)(d), f_i[d]);
     }
 
-    // clang-format on
+  // clang-format on
 }
 
-__device__ __forceinline__ void ancf3443_compute_constraint_data(GPU_ANCF3443_Data *d_data)
-{
-    int thread_idx = blockIdx.x * blockDim.x + threadIdx.x;
+__device__ __forceinline__ void ancf3443_compute_constraint_data(
+    GPU_ANCF3443_Data *d_data) {
+  int thread_idx = blockIdx.x * blockDim.x + threadIdx.x;
 
-    if (thread_idx < d_data->gpu_n_constraint() / 3)
-    {
-        d_data->constraint()[thread_idx * 3 + 0] = d_data->x12()(d_data->fixed_nodes()[thread_idx]) - d_data->x12_jac()(d_data->fixed_nodes()[thread_idx]);
-        d_data->constraint()[thread_idx * 3 + 1] = d_data->y12()(d_data->fixed_nodes()[thread_idx]) - d_data->y12_jac()(d_data->fixed_nodes()[thread_idx]);
-        d_data->constraint()[thread_idx * 3 + 2] = d_data->z12()(d_data->fixed_nodes()[thread_idx]) - d_data->z12_jac()(d_data->fixed_nodes()[thread_idx]);
+  if (thread_idx < d_data->gpu_n_constraint() / 3) {
+    d_data->constraint()[thread_idx * 3 + 0] =
+        d_data->x12()(d_data->fixed_nodes()[thread_idx]) -
+        d_data->x12_jac()(d_data->fixed_nodes()[thread_idx]);
+    d_data->constraint()[thread_idx * 3 + 1] =
+        d_data->y12()(d_data->fixed_nodes()[thread_idx]) -
+        d_data->y12_jac()(d_data->fixed_nodes()[thread_idx]);
+    d_data->constraint()[thread_idx * 3 + 2] =
+        d_data->z12()(d_data->fixed_nodes()[thread_idx]) -
+        d_data->z12_jac()(d_data->fixed_nodes()[thread_idx]);
 
-        d_data->constraint_jac()(thread_idx * 3, d_data->fixed_nodes()[thread_idx] * 3) = 1.0;
-        d_data->constraint_jac()(thread_idx * 3 + 1, d_data->fixed_nodes()[thread_idx] * 3 + 1) = 1.0;
-        d_data->constraint_jac()(thread_idx * 3 + 2, d_data->fixed_nodes()[thread_idx] * 3 + 2) = 1.0;
-    }
+    d_data->constraint_jac()(thread_idx * 3,
+                             d_data->fixed_nodes()[thread_idx] * 3)     = 1.0;
+    d_data->constraint_jac()(thread_idx * 3 + 1,
+                             d_data->fixed_nodes()[thread_idx] * 3 + 1) = 1.0;
+    d_data->constraint_jac()(thread_idx * 3 + 2,
+                             d_data->fixed_nodes()[thread_idx] * 3 + 2) = 1.0;
+  }
 }

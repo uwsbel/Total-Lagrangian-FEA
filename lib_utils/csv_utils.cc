@@ -1,4 +1,5 @@
 #include "csv_utils.h"
+
 #include <fstream>
 #include <iomanip>
 #include <iostream>
@@ -20,7 +21,7 @@ bool loadMatrixCSV(Eigen::MatrixXd &matrix, const std::string &filepath) {
 
   while (std::getline(file, line)) {
     if (line.empty())
-      continue; // Skip empty lines
+      continue;  // Skip empty lines
 
     std::vector<double> row;
     std::stringstream ss(line);
@@ -90,4 +91,4 @@ bool saveMatrixCSV(const Eigen::MatrixXd &matrix, const std::string &filepath) {
   return true;
 }
 
-} // namespace CSVUtils
+}  // namespace CSVUtils

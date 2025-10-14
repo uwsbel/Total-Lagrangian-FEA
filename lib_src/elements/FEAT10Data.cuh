@@ -1,9 +1,10 @@
 #include <cuda_runtime.h>
+
+#include <Eigen/Dense>
 #include <iostream>
 #include <vector>
 
 #include "ElementBase.h"
-#include <Eigen/Dense>
 
 // Add this include at the top:
 #include "../../lib_utils/quadrature_utils.h"
@@ -13,10 +14,8 @@
 
 #ifndef HANDLE_ERROR_MACRO
 #define HANDLE_ERROR_MACRO
-static void HandleError(cudaError_t err, const char *file, int line)
-{
-  if (err != cudaSuccess)
-  {
+static void HandleError(cudaError_t err, const char *file, int line) {
+  if (err != cudaSuccess) {
     printf("%s in %s at line %d\n", cudaGetErrorString(err), file, line);
     exit(EXIT_FAILURE);
   }
@@ -27,196 +26,201 @@ static void HandleError(cudaError_t err, const char *file, int line)
 
 //
 // define a SAP data strucutre
-struct GPU_FEAT10_Data : public ElementBase
-{
+struct GPU_FEAT10_Data : public ElementBase {
 #if defined(__CUDACC__)
 
   // Helper: gather 16 DOFs for an element using connectivity
   __device__ void gather_element_dofs(const double *global,
                                       Eigen::Map<Eigen::MatrixXi> connectivity,
-                                      int elem, double *local) const
-  {
+                                      int elem, double *local) const {
     // Each element has 4 nodes, each node has 4 DOFs
-    for (int n = 0; n < 4; ++n)
-    {
+    for (int n = 0; n < 4; ++n) {
       int node = connectivity(elem, n);
 #pragma unroll
-      for (int d = 0; d < 4; ++d)
-      {
+      for (int d = 0; d < 4; ++d) {
         local[n * 4 + d] = global[node * 4 + d];
       }
     }
   }
 
-  __device__ Eigen::Map<Eigen::MatrixXi> element_connectivity() const
-  {
+  __device__ Eigen::Map<Eigen::MatrixXi> element_connectivity() const {
     return Eigen::Map<Eigen::MatrixXi>(d_element_connectivity, n_elem, 4);
   }
 
-  __device__ Eigen::Map<Eigen::MatrixXd> F(int elem_idx, int qp_idx)
-  {
+  __device__ Eigen::Map<Eigen::MatrixXd> F(int elem_idx, int qp_idx) {
     return Eigen::Map<Eigen::MatrixXd>(
         d_F + (elem_idx * Quadrature::N_TOTAL_QP_4_4_3 + qp_idx) * 9, 3, 3);
   }
 
   __device__ const Eigen::Map<Eigen::MatrixXd> F(int elem_idx,
-                                                 int qp_idx) const
-  {
+                                                 int qp_idx) const {
     return Eigen::Map<Eigen::MatrixXd>(
         d_F + (elem_idx * Quadrature::N_TOTAL_QP_4_4_3 + qp_idx) * 9, 3, 3);
   }
 
-  __device__ Eigen::Map<Eigen::MatrixXd> P(int elem_idx, int qp_idx)
-  {
+  __device__ Eigen::Map<Eigen::MatrixXd> P(int elem_idx, int qp_idx) {
     return Eigen::Map<Eigen::MatrixXd>(
         d_P + (elem_idx * Quadrature::N_TOTAL_QP_4_4_3 + qp_idx) * 9, 3, 3);
   }
 
   __device__ const Eigen::Map<Eigen::MatrixXd> P(int elem_idx,
-                                                 int qp_idx) const
-  {
+                                                 int qp_idx) const {
     return Eigen::Map<Eigen::MatrixXd>(
         d_P + (elem_idx * Quadrature::N_TOTAL_QP_4_4_3 + qp_idx) * 9, 3, 3);
   }
 
-  __device__ Eigen::Map<Eigen::VectorXd> f_int(int global_node_idx)
-  {
+  __device__ Eigen::Map<Eigen::VectorXd> f_int(int global_node_idx) {
     return Eigen::Map<Eigen::VectorXd>(d_f_int + global_node_idx * 3, 3);
   }
 
-  __device__ const Eigen::Map<Eigen::VectorXd>
-  f_int(int global_node_idx) const
-  {
+  __device__ const Eigen::Map<Eigen::VectorXd> f_int(
+      int global_node_idx) const {
     return Eigen::Map<Eigen::VectorXd>(d_f_int + global_node_idx * 3, 3);
   }
 
-  __device__ Eigen::Map<Eigen::VectorXd> f_int()
-  {
+  __device__ Eigen::Map<Eigen::VectorXd> f_int() {
     return Eigen::Map<Eigen::VectorXd>(d_f_int, n_coef * 3);
   }
 
-  __device__ const Eigen::Map<Eigen::VectorXd> f_int() const
-  {
+  __device__ const Eigen::Map<Eigen::VectorXd> f_int() const {
     return Eigen::Map<Eigen::VectorXd>(d_f_int, n_coef * 3);
   }
 
-  __device__ Eigen::Map<Eigen::VectorXd> f_ext(int global_node_idx)
-  {
+  __device__ Eigen::Map<Eigen::VectorXd> f_ext(int global_node_idx) {
     return Eigen::Map<Eigen::VectorXd>(d_f_ext + global_node_idx * 3, 3);
   }
 
-  __device__ const Eigen::Map<Eigen::VectorXd>
-  f_ext(int global_node_idx) const
-  {
+  __device__ const Eigen::Map<Eigen::VectorXd> f_ext(
+      int global_node_idx) const {
     return Eigen::Map<Eigen::VectorXd>(d_f_ext + global_node_idx * 3, 3);
   }
 
-  __device__ Eigen::Map<Eigen::VectorXd> f_ext()
-  {
+  __device__ Eigen::Map<Eigen::VectorXd> f_ext() {
     return Eigen::Map<Eigen::VectorXd>(d_f_ext, n_coef * 3);
   }
 
-  __device__ const Eigen::Map<Eigen::VectorXd> f_ext() const
-  {
+  __device__ const Eigen::Map<Eigen::VectorXd> f_ext() const {
     return Eigen::Map<Eigen::VectorXd>(d_f_ext, n_coef * 3);
   }
 
-  __device__ Eigen::Map<Eigen::VectorXd> constraint()
-  {
+  __device__ Eigen::Map<Eigen::VectorXd> constraint() {
     return Eigen::Map<Eigen::VectorXd>(d_constraint, n_constraint);
   }
 
-  __device__ const Eigen::Map<Eigen::VectorXd> constraint() const
-  {
+  __device__ const Eigen::Map<Eigen::VectorXd> constraint() const {
     return Eigen::Map<Eigen::VectorXd>(d_constraint, n_constraint);
   }
 
-  __device__ Eigen::Map<Eigen::MatrixXd> constraint_jac()
-  {
+  __device__ Eigen::Map<Eigen::MatrixXd> constraint_jac() {
     return Eigen::Map<Eigen::MatrixXd>(d_constraint_jac, n_constraint,
                                        n_coef * 3);
   }
 
-  __device__ const Eigen::Map<Eigen::MatrixXd> constraint_jac() const
-  {
+  __device__ const Eigen::Map<Eigen::MatrixXd> constraint_jac() const {
     return Eigen::Map<Eigen::MatrixXd>(d_constraint_jac, n_constraint,
                                        n_coef * 3);
   }
 
-  __device__ Eigen::Map<Eigen::VectorXi> fixed_nodes()
-  {
+  __device__ Eigen::Map<Eigen::VectorXi> fixed_nodes() {
     return Eigen::Map<Eigen::VectorXi>(d_fixed_nodes, n_constraint / 3);
   }
 
   // ================================
-  __device__ double rho0() const { return *d_rho0; }
+  __device__ double rho0() const {
+    return *d_rho0;
+  }
 
-  __device__ double nu() const { return *d_nu; }
+  __device__ double nu() const {
+    return *d_nu;
+  }
 
-  __device__ double E() const { return *d_E; }
+  __device__ double E() const {
+    return *d_E;
+  }
 
-  __device__ double lambda() const { return *d_lambda; }
+  __device__ double lambda() const {
+    return *d_lambda;
+  }
 
-  __device__ double mu() const { return *d_mu; }
+  __device__ double mu() const {
+    return *d_mu;
+  }
 
-  __device__ int gpu_n_elem() const { return n_elem; }
+  __device__ int gpu_n_elem() const {
+    return n_elem;
+  }
 
-  __device__ int gpu_n_coef() const { return n_coef; }
+  __device__ int gpu_n_coef() const {
+    return n_coef;
+  }
 
-  __device__ int gpu_n_constraint() const { return n_constraint; }
+  __device__ int gpu_n_constraint() const {
+    return n_constraint;
+  }
 
 #endif
 
-  __host__ __device__ int get_n_elem() const { return n_elem; }
-  __host__ __device__ int get_n_coef() const { return n_coef; }
-  __host__ __device__ int get_n_constraint() const { return n_constraint; }
+  __host__ __device__ int get_n_elem() const {
+    return n_elem;
+  }
+  __host__ __device__ int get_n_coef() const {
+    return n_coef;
+  }
+  __host__ __device__ int get_n_constraint() const {
+    return n_constraint;
+  }
 
   // Add this missing virtual function from ElementBase:
-  __host__ __device__ int get_n_beam() const override { return n_elem; }
+  __host__ __device__ int get_n_beam() const override {
+    return n_elem;
+  }
 
   // Core computation functions (empty implementations for now)
   void CalcMassMatrix() override {}
-  
+
   void CalcInternalForce() override {}
-  
+
   void CalcConstraintData() override {}
-  
+
   void CalcP() override {}
 
   // Data retrieval functions (empty implementations for now)
   void RetrieveMassMatrixToCPU(Eigen::MatrixXd &mass_matrix) override {}
-  
+
   void RetrieveInternalForceToCPU(Eigen::VectorXd &internal_force) override {}
-  
+
   void RetrieveConstraintDataToCPU(Eigen::VectorXd &constraint) override {}
-  
-  void RetrieveConstraintJacobianToCPU(Eigen::MatrixXd &constraint_jac) override {}
-  
-  void RetrievePositionToCPU(Eigen::VectorXd &x12, Eigen::VectorXd &y12, Eigen::VectorXd &z12) override {}
-  
-  void RetrieveDeformationGradientToCPU(std::vector<std::vector<Eigen::MatrixXd>> &deformation_gradient) override {}
-  
-  void RetrievePFromFToCPU(std::vector<std::vector<Eigen::MatrixXd>> &p_from_F) override {}
+
+  void RetrieveConstraintJacobianToCPU(
+      Eigen::MatrixXd &constraint_jac) override {}
+
+  void RetrievePositionToCPU(Eigen::VectorXd &x12, Eigen::VectorXd &y12,
+                             Eigen::VectorXd &z12) override {}
+
+  void RetrieveDeformationGradientToCPU(
+      std::vector<std::vector<Eigen::MatrixXd>> &deformation_gradient)
+      override {}
+
+  void RetrievePFromFToCPU(
+      std::vector<std::vector<Eigen::MatrixXd>> &p_from_F) override {}
 
   // Constructor
   GPU_FEAT10_Data(int num_elements, int num_nodes)
       : n_elem(num_elements), n_coef(num_nodes) {}
 
-  void Initialize()
-  {
+  void Initialize() {
     HANDLE_ERROR(cudaMalloc(&d_nodes, n_coef * 3 * sizeof(double)));
     HANDLE_ERROR(cudaMalloc(&d_element_connectivity, n_elem * 4 * sizeof(int)));
 
     HANDLE_ERROR(cudaMalloc(&d_tet5pt_xyz, 5 * 3 * sizeof(double)));
     HANDLE_ERROR(cudaMalloc(&d_tet5pt_weights, 5 * sizeof(double)));
 
-    HANDLE_ERROR(cudaMalloc(&d_F, n_elem * Quadrature::N_TOTAL_QP_4_4_3 * 3 *
-                                      3 * sizeof(double)));
-    HANDLE_ERROR(cudaMalloc(&d_P, n_elem * Quadrature::N_TOTAL_QP_4_4_3 * 3 *
-                                      3 * sizeof(double)));
+    HANDLE_ERROR(cudaMalloc(
+        &d_F, n_elem * Quadrature::N_TOTAL_QP_4_4_3 * 3 * 3 * sizeof(double)));
+    HANDLE_ERROR(cudaMalloc(
+        &d_P, n_elem * Quadrature::N_TOTAL_QP_4_4_3 * 3 * 3 * sizeof(double)));
     HANDLE_ERROR(cudaMalloc(&d_f_int, n_coef * 3 * sizeof(double)));
     HANDLE_ERROR(cudaMalloc(&d_f_ext, n_coef * 3 * sizeof(double)));
-
 
     HANDLE_ERROR(cudaMalloc(&d_rho0, sizeof(double)));
     HANDLE_ERROR(cudaMalloc(&d_nu, sizeof(double)));
@@ -226,7 +230,6 @@ struct GPU_FEAT10_Data : public ElementBase
 
     //     // copy struct to device
     // HANDLE_ERROR(cudaMalloc(&d_data, sizeof(GPU_FEAT10_Data)));
-
   }
 
   void Setup(double length, double width, double height, double rho0, double nu,
@@ -234,10 +237,8 @@ struct GPU_FEAT10_Data : public ElementBase
              const Eigen::VectorXd &tet5pt_weights_host,
              const Eigen::VectorXd &h_x12, const Eigen::VectorXd &h_y12,
              const Eigen::VectorXd &h_z12,
-             const Eigen::MatrixXi &element_connectivity)
-  {
-    if (is_setup)
-    {
+             const Eigen::MatrixXi &element_connectivity) {
+    if (is_setup) {
       std::cerr << "GPU_FEAT10_Data is already set up." << std::endl;
       return;
     }
@@ -261,9 +262,9 @@ struct GPU_FEAT10_Data : public ElementBase
         cudaMemcpy(d_rho0, &rho0, sizeof(double), cudaMemcpyHostToDevice));
     HANDLE_ERROR(cudaMemcpy(d_nu, &nu, sizeof(double), cudaMemcpyHostToDevice));
     HANDLE_ERROR(cudaMemcpy(d_E, &E, sizeof(double), cudaMemcpyHostToDevice));
-    double mu = E / (2 * (1 + nu)); // Shear modulus μ
+    double mu = E / (2 * (1 + nu));  // Shear modulus μ
     double lambda =
-        (E * nu) / ((1 + nu) * (1 - 2 * nu)); // Lamé’s first parameter λ
+        (E * nu) / ((1 + nu) * (1 - 2 * nu));  // Lamé’s first parameter λ
     HANDLE_ERROR(cudaMemcpy(d_mu, &mu, sizeof(double), cudaMemcpyHostToDevice));
     HANDLE_ERROR(
         cudaMemcpy(d_lambda, &lambda, sizeof(double), cudaMemcpyHostToDevice));
@@ -274,10 +275,8 @@ struct GPU_FEAT10_Data : public ElementBase
     is_setup = true;
   }
 
-  void SetExternalForce(const Eigen::VectorXd &f_ext)
-  {
-    if (f_ext.size() != n_coef * 3)
-    {
+  void SetExternalForce(const Eigen::VectorXd &f_ext) {
+    if (f_ext.size() != n_coef * 3) {
       std::cerr << "External force vector size mismatch." << std::endl;
       return;
     }
@@ -286,11 +285,8 @@ struct GPU_FEAT10_Data : public ElementBase
                             cudaMemcpyHostToDevice));
   }
 
-  void SetNodalFixed(const Eigen::VectorXi &fixed_nodes)
-  {
-
-    if (is_constraints_setup)
-    {
+  void SetNodalFixed(const Eigen::VectorXi &fixed_nodes) {
+    if (is_constraints_setup) {
       std::cerr << "GPU_FEAT10_Data CONSTRAINT is already set up." << std::endl;
       return;
     }
@@ -313,8 +309,7 @@ struct GPU_FEAT10_Data : public ElementBase
   }
 
   // Free memory
-  void Destroy()
-  {
+  void Destroy() {
     HANDLE_ERROR(cudaFree(d_nodes));
     HANDLE_ERROR(cudaFree(d_element_connectivity));
 
@@ -333,7 +328,7 @@ struct GPU_FEAT10_Data : public ElementBase
     HANDLE_ERROR(cudaFree(d_mu));
 
     // HANDLE_ERROR(cudaFree(d_data));
-    
+
     // // Around line 335-337 in Destroy():
     // if (d_constraint != nullptr) {
     //   HANDLE_ERROR(cudaFree(d_constraint));
@@ -346,43 +341,43 @@ struct GPU_FEAT10_Data : public ElementBase
     // }
   }
 
-  GPU_FEAT10_Data *d_data; // Storing GPU copy of SAPGPUData
+  GPU_FEAT10_Data *d_data;  // Storing GPU copy of SAPGPUData
 
   int n_elem;
   int n_coef;
   int n_constraint;
 
-private:
+ private:
   // Node positions (global, or per element)
-  double *d_nodes; // (n_coef, 3)
+  double *d_nodes;  // (n_coef, 3)
 
   // Element connectivity
-  int *d_element_connectivity; // (n_elem, 10)
+  int *d_element_connectivity;  // (n_elem, 10)
 
   // Quadrature points and weights
-  double *d_tet5pt_xyz;     // (5, 3)
-  double *d_tet5pt_weights; // (5,)
+  double *d_tet5pt_xyz;      // (5, 3)
+  double *d_tet5pt_weights;  // (5,)
 
   // Precomputed reference gradients
-  double *d_grad_N_ref; // (5, 10, 3)
+  double *d_grad_N_ref;  // (5, 10, 3)
 
   // Deformation gradient and Piola stress
-  double *d_F; // (n_elem, n_qp, 3, 3)
-  double *d_P; // (n_elem, n_qp, 3, 3)
+  double *d_F;  // (n_elem, n_qp, 3, 3)
+  double *d_P;  // (n_elem, n_qp, 3, 3)
 
   // Material properties
   double *d_E, *d_nu, *d_rho0, *d_lambda, *d_mu;
 
   // Mass matrix
-  double *d_M; // (n_coef*3, n_coef*3)
+  double *d_M;  // (n_coef*3, n_coef*3)
 
   // Constraint data
   double *d_constraint, *d_constraint_jac;
   int *d_fixed_nodes;
 
   // Force vectors
-  double *d_f_int, *d_f_ext; // (n_nodes*3)
+  double *d_f_int, *d_f_ext;  // (n_nodes*3)
 
-  bool is_setup = false;
+  bool is_setup             = false;
   bool is_constraints_setup = false;
 };

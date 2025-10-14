@@ -1,38 +1,37 @@
+#include <gtest/gtest.h>
+
+#include <Eigen/Dense>
+
 #include "../lib_src/elements/ANCF3243Data.cuh"
 #include "../lib_utils/cpu_utils.h"
 #include "../lib_utils/csv_utils.h"
-#include <Eigen/Dense>
-#include <gtest/gtest.h>
 
 // Test fixture class for ANCF tests
-class Test3243 : public ::testing::Test
-{
-protected:
-  void SetUp() override
-  {
+class Test3243 : public ::testing::Test {
+ protected:
+  void SetUp() override {
     // Setup code that runs before each test
   }
 
-  void TearDown() override
-  {
+  void TearDown() override {
     // Cleanup code that runs after each test
   }
 };
 
-TEST(Test3243, MassMatrix2Beams)
-{
+TEST(Test3243, MassMatrix2Beams) {
   int n_beam = 2;
   GPU_ANCF3243_Data gpu_3243_data(n_beam);
   gpu_3243_data.Initialize();
 
   double L = 2.0, W = 1.0, H = 1.0;
 
-  const double E = 7e8;     // Young's modulus
-  const double nu = 0.33;   // Poisson's ratio
-  const double rho0 = 2700; // Density
+  const double E    = 7e8;   // Young's modulus
+  const double nu   = 0.33;  // Poisson's ratio
+  const double rho0 = 2700;  // Density
 
   Eigen::MatrixXd h_B_inv(Quadrature::N_SHAPE_3243, Quadrature::N_SHAPE_3243);
-  ANCFCPUUtils::ANCF3243_B12_matrix(2.0, 1.0, 1.0, h_B_inv, Quadrature::N_SHAPE_3243);
+  ANCFCPUUtils::ANCF3243_B12_matrix(2.0, 1.0, 1.0, h_B_inv,
+                                    Quadrature::N_SHAPE_3243);
 
   Eigen::VectorXd h_x12(gpu_3243_data.get_n_coef());
   Eigen::VectorXd h_y12(gpu_3243_data.get_n_coef());
@@ -42,8 +41,8 @@ TEST(Test3243, MassMatrix2Beams)
 
   Eigen::VectorXi h_offset_start(gpu_3243_data.get_n_beam());
   Eigen::VectorXi h_offset_end(gpu_3243_data.get_n_beam());
-  ANCFCPUUtils::ANCF3243_calculate_offsets(gpu_3243_data.get_n_beam(), h_offset_start,
-                                           h_offset_end);
+  ANCFCPUUtils::ANCF3243_calculate_offsets(gpu_3243_data.get_n_beam(),
+                                           h_offset_start, h_offset_end);
 
   gpu_3243_data.Setup(L, W, H, rho0, nu, E, h_B_inv, Quadrature::gauss_xi_m_6,
                       Quadrature::gauss_xi_3, Quadrature::gauss_eta_2,
@@ -67,10 +66,8 @@ TEST(Test3243, MassMatrix2Beams)
 
   double tolerance = 1e-4;
 
-  for (int i = 0; i < computed_mass_matrix.rows(); ++i)
-  {
-    for (int j = 0; j < computed_mass_matrix.cols(); ++j)
-    {
+  for (int i = 0; i < computed_mass_matrix.rows(); ++i) {
+    for (int j = 0; j < computed_mass_matrix.cols(); ++j) {
       EXPECT_NEAR(computed_mass_matrix(i, j), expected_mass_matrix(i, j),
                   tolerance);
     }
@@ -85,20 +82,20 @@ TEST(Test3243, MassMatrix2Beams)
   gpu_3243_data.Destroy();
 }
 
-TEST(Test3243, MassMatrix3Beams)
-{
+TEST(Test3243, MassMatrix3Beams) {
   int n_beam = 3;
   GPU_ANCF3243_Data gpu_3243_data(n_beam);
   gpu_3243_data.Initialize();
 
   double L = 2.0, W = 1.0, H = 1.0;
 
-  const double E = 7e8;     // Young's modulus
-  const double nu = 0.33;   // Poisson's ratio
-  const double rho0 = 2700; // Density
+  const double E    = 7e8;   // Young's modulus
+  const double nu   = 0.33;  // Poisson's ratio
+  const double rho0 = 2700;  // Density
 
   Eigen::MatrixXd h_B_inv(Quadrature::N_SHAPE_3243, Quadrature::N_SHAPE_3243);
-  ANCFCPUUtils::ANCF3243_B12_matrix(2.0, 1.0, 1.0, h_B_inv, Quadrature::N_SHAPE_3243);
+  ANCFCPUUtils::ANCF3243_B12_matrix(2.0, 1.0, 1.0, h_B_inv,
+                                    Quadrature::N_SHAPE_3243);
 
   Eigen::VectorXd h_x12(gpu_3243_data.get_n_coef());
   Eigen::VectorXd h_y12(gpu_3243_data.get_n_coef());
@@ -108,8 +105,8 @@ TEST(Test3243, MassMatrix3Beams)
 
   Eigen::VectorXi h_offset_start(gpu_3243_data.get_n_beam());
   Eigen::VectorXi h_offset_end(gpu_3243_data.get_n_beam());
-  ANCFCPUUtils::ANCF3243_calculate_offsets(gpu_3243_data.get_n_beam(), h_offset_start,
-                                           h_offset_end);
+  ANCFCPUUtils::ANCF3243_calculate_offsets(gpu_3243_data.get_n_beam(),
+                                           h_offset_start, h_offset_end);
 
   gpu_3243_data.Setup(L, W, H, rho0, nu, E, h_B_inv, Quadrature::gauss_xi_m_6,
                       Quadrature::gauss_xi_3, Quadrature::gauss_eta_2,
@@ -133,10 +130,8 @@ TEST(Test3243, MassMatrix3Beams)
 
   double tolerance = 1e-4;
 
-  for (int i = 0; i < computed_mass_matrix.rows(); ++i)
-  {
-    for (int j = 0; j < computed_mass_matrix.cols(); ++j)
-    {
+  for (int i = 0; i < computed_mass_matrix.rows(); ++i) {
+    for (int j = 0; j < computed_mass_matrix.cols(); ++j) {
       EXPECT_NEAR(computed_mass_matrix(i, j), expected_mass_matrix(i, j),
                   tolerance);
     }
