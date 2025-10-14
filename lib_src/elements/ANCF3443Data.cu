@@ -3,7 +3,7 @@
 #include <iomanip>
 
 #include "ANCF3443Data.cuh"
-#include "ANCF3443DataKernels.cuh"
+#include "ANCF3443DataFunc.cuh"
 namespace cg = cooperative_groups;
 
 __global__ void ds_du_pre_kernel(double L, double W, double H,

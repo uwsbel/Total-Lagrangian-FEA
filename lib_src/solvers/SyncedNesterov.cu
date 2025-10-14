@@ -1,9 +1,9 @@
 #include <cooperative_groups.h>
 
 #include "../elements/ANCF3243Data.cuh"
-#include "../elements/ANCF3243DataKernels.cuh"
+#include "../elements/ANCF3243DataFunc.cuh"
 #include "../elements/ANCF3443Data.cuh"
-#include "../elements/ANCF3443DataKernels.cuh"
+#include "../elements/ANCF3443DataFunc.cuh"
 #include "SyncedNesterov.cuh"
 namespace cg = cooperative_groups;
 

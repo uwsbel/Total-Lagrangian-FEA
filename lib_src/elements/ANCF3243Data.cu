@@ -3,7 +3,7 @@
 #include <iomanip>
 
 #include "ANCF3243Data.cuh"
-#include "ANCF3243DataKernels.cuh"
+#include "ANCF3243DataFunc.cuh"
 namespace cg = cooperative_groups;
 
 // Kernel: one thread per quadrature point, computes 8x3 ds_du_pre
