@@ -49,17 +49,37 @@ int main() {
   }
 
   // Get quadrature data from quadrature_utils.h
-  const Eigen::MatrixXd& tet5pt_xyz_host     = Quadrature::tet5pt_xyz;
+  const Eigen::VectorXd& tet5pt_x_host       = Quadrature::tet5pt_x;
+  const Eigen::VectorXd& tet5pt_y_host       = Quadrature::tet5pt_y;
+  const Eigen::VectorXd& tet5pt_z_host       = Quadrature::tet5pt_z;
   const Eigen::VectorXd& tet5pt_weights_host = Quadrature::tet5pt_weights;
 
   // Call Setup with all required parameters
   gpu_t10_data.Setup(rho0, nu, E,          // Material properties
-                     tet5pt_xyz_host,      // Quadrature points
+                     tet5pt_x_host,        // Quadrature points
+                     tet5pt_y_host,        // Quadrature points
+                     tet5pt_z_host,        // Quadrature points
                      tet5pt_weights_host,  // Quadrature weights
                      h_x12, h_y12, h_z12,  // Node coordinates
                      elements);            // Element connectivity
 
   std::cout << "gpu_t10_data setup complete" << std::endl;
+
+  gpu_t10_data.CalcDnDuPre();
+
+  std::cout << "gpu_t10_data dndu pre complete" << std::endl;
+
+  // 2. Retrieve results
+  std::vector<std::vector<Eigen::MatrixXd>> ref_grads;
+  gpu_t10_data.RetrieveDnDuPreToCPU(ref_grads);
+
+  std::cout << "ref_grads:" << std::endl;
+  for (size_t i = 0; i < ref_grads.size(); i++) {
+    for (size_t j = 0; j < ref_grads[i].size(); j++) {
+      std::cout << ref_grads[i][j] << std::endl;
+    }
+  }
+  std::cout << "done retrieving ref_grads" << std::endl;
 
   gpu_t10_data.Destroy();
 

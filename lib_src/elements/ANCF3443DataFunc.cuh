@@ -10,7 +10,7 @@ __device__ __forceinline__ void ancf3443_compute_constraint_data(
 
 __device__ __forceinline__ void ancf3443_mat_vec_mul(
     Eigen::Map<Eigen::MatrixXd> A, const double *x, double *out) {
-// clang-format off
+  // clang-format off
     #pragma unroll
     for (int i = 0; i < Quadrature::N_SHAPE_3443; ++i)
     {
@@ -175,7 +175,7 @@ __device__ __forceinline__ void ancf3443_calc_det_J_xi(
   ancf3443_mat_vec_mul(B_inv, db_deta, ds_deta);
   ancf3443_mat_vec_mul(B_inv, db_dzeta, ds_dzeta);
 
-// clang-format off
+  // clang-format off
     #pragma unroll
     for (int i = 0; i < 3; ++i)
         for (int j = 0; j < 3; ++j)
@@ -201,7 +201,7 @@ __device__ __forceinline__ void ancf3443_calc_det_J_xi(
 
 __device__ __forceinline__ void ancf3443_compute_p(int elem_idx, int qp_idx,
                                                    GPU_ANCF3443_Data *d_data) {
-// clang-format off
+  // clang-format off
     // --- Compute C = F^T * F ---
 
     // Initialize F to zero
@@ -330,7 +330,7 @@ __device__ __forceinline__ void ancf3443_compute_internal_force(
       (node_idx % 4);
   double geom = (d_data->L() * d_data->W() * d_data->H()) / 8.0;
 
-// clang-format off
+  // clang-format off
 
     // set 0
     #pragma unroll

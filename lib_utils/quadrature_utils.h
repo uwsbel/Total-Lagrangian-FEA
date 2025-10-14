@@ -153,6 +153,9 @@ const Eigen::VectorXd tet5pt_weights =
 // Cartesian coordinates (extract columns 1:3 from barycentric)
 const Eigen::Matrix<double, N_QP_T10_5, 3> tet5pt_xyz =
     tet5pt_bary.block(0, 1, N_QP_T10_5, 3);
+const Eigen::VectorXd tet5pt_x = tet5pt_bary.col(1);
+const Eigen::VectorXd tet5pt_y = tet5pt_bary.col(2);
+const Eigen::VectorXd tet5pt_z = tet5pt_bary.col(3);
 
 // Optionally, you can wrap these in a struct for clarity:
 struct Tet5ptQuadrature {

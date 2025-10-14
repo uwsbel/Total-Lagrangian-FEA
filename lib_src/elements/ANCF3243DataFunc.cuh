@@ -11,7 +11,7 @@ __device__ __forceinline__ void ancf3243_compute_constraint_data(
 // Device function: matrix-vector multiply (8x8 * 8x1)
 __device__ __forceinline__ void ancf3243_mat_vec_mul8(
     Eigen::Map<Eigen::MatrixXd> A, const double *x, double *out) {
-// clang-format off
+  // clang-format off
     #pragma unroll
     for (int i = 0; i < Quadrature::N_SHAPE_3243; ++i)
     {
@@ -79,10 +79,10 @@ __device__ __forceinline__ void ancf3243_calc_det_J_xi(
   ancf3243_mat_vec_mul8(B_inv, db_deta, ds_deta);
   ancf3243_mat_vec_mul8(B_inv, db_dzeta, ds_dzeta);
 
-// Nodal matrix: 3 × 8
-// J = N_mat_jac @ np.column_stack([ds_dxi, ds_deta, ds_dzeta])
+  // Nodal matrix: 3 × 8
+  // J = N_mat_jac @ np.column_stack([ds_dxi, ds_deta, ds_dzeta])
 
-// clang-format off
+  // clang-format off
     #pragma unroll
     for (int i = 0; i < 3; ++i)
         for (int j = 0; j < 3; ++j)
@@ -108,7 +108,7 @@ __device__ __forceinline__ void ancf3243_calc_det_J_xi(
 
 __device__ __forceinline__ void ancf3243_compute_p(int elem_idx, int qp_idx,
                                                    GPU_ANCF3243_Data *d_data) {
-// clang-format off
+  // clang-format off
     // --- Compute C = F^T * F ---
 
     // Initialize F to zero
@@ -224,7 +224,7 @@ __device__ __forceinline__ void ancf3243_compute_internal_force(
   int node_base = d_data->offset_start()(elem_idx);
   double geom   = (d_data->L() * d_data->W() * d_data->H()) / 8.0;
 
-// clang-format off
+  // clang-format off
 
     // set 0
     #pragma unroll

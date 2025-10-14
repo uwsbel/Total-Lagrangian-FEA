@@ -329,6 +329,10 @@ if __name__ == "__main__":
     print(X_elem)
     pre_mesh = tet10_precompute_reference_mesh(X_nodes, X_elem)
 
+    # print the shape of pre_mesh
+    print("shape pre_mesh:", len(pre_mesh))
+    print("shape pre_mesh[0]:", len(pre_mesh[0]))
+
     print(pre_mesh)
 
     import numpy as np

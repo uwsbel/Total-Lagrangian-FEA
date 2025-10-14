@@ -61,6 +61,7 @@ cuda_library(
     name = "FEAT10Data",
     srcs = ["lib_src/elements/FEAT10Data.cu"],
     hdrs = ["lib_src/elements/FEAT10Data.cuh",
+            "lib_src/elements/FEAT10DataFunc.cuh",
             "lib_src/elements/ElementBase.h"],
     copts = ["--std=c++17", "-O3"],
     linkopts = ["-lcusolver","-lcublas"],
