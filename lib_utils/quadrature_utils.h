@@ -10,7 +10,8 @@ namespace Quadrature {
 // Quadrature sizes as constexpr constants
 constexpr int N_QP_7 = 7;  // 7-point quadrature
 constexpr int N_QP_6 = 6;  // 6-point quadrature
-constexpr int N_QP_4 = 4;
+constexpr int N_QP_5 = 5;  // 5-point quadrature
+constexpr int N_QP_4 = 4;  // 4-point quadrature
 constexpr int N_QP_3 = 3;  // 3-point quadrature
 constexpr int N_QP_2 = 2;  // 2-point quadrature
 
@@ -131,34 +132,35 @@ const Eigen::VectorXd weight_zeta_3 =
         .finished();
 
 // 5-point Keast quadrature for tetrahedral elements
-constexpr int N_QP_TET_5 = 5;
+constexpr int N_QP_T10_5    = 5;   // 5-point quadrature
+constexpr int N_NODE_T10_10 = 10;  // 10-node tetrahedral element
 
 // Barycentric coordinates for 5-point Keast quadrature (each row: [L1, L2, L3,
 // L4])
-const Eigen::Matrix<double, N_QP_TET_5, 4> tet5pt_bary =
-    (Eigen::Matrix<double, N_QP_TET_5, 4>() << 0.25, 0.25, 0.25, 0.25, 0.5,
+const Eigen::Matrix<double, N_QP_T10_5, 4> tet5pt_bary =
+    (Eigen::Matrix<double, N_QP_T10_5, 4>() << 0.25, 0.25, 0.25, 0.25, 0.5,
      1.0 / 6.0, 1.0 / 6.0, 1.0 / 6.0, 1.0 / 6.0, 0.5, 1.0 / 6.0, 1.0 / 6.0,
      1.0 / 6.0, 1.0 / 6.0, 0.5, 1.0 / 6.0, 1.0 / 6.0, 1.0 / 6.0, 1.0 / 6.0, 0.5)
         .finished();
 
 // Weights for 5-point Keast quadrature
 const Eigen::VectorXd tet5pt_weights =
-    (Eigen::VectorXd(N_QP_TET_5) << -4.0 / 5.0, 9.0 / 20.0, 9.0 / 20.0,
+    (Eigen::VectorXd(N_QP_T10_5) << -4.0 / 5.0, 9.0 / 20.0, 9.0 / 20.0,
      9.0 / 20.0, 9.0 / 20.0)
         .finished() *
     (1.0 / 6.0);
 
 // Cartesian coordinates (extract columns 1:3 from barycentric)
-const Eigen::Matrix<double, N_QP_TET_5, 3> tet5pt_xyz =
-    tet5pt_bary.block(0, 1, N_QP_TET_5, 3);
+const Eigen::Matrix<double, N_QP_T10_5, 3> tet5pt_xyz =
+    tet5pt_bary.block(0, 1, N_QP_T10_5, 3);
 
 // Optionally, you can wrap these in a struct for clarity:
 struct Tet5ptQuadrature {
-  static constexpr int n_points = N_QP_TET_5;
-  static const Eigen::Matrix<double, N_QP_TET_5, 4> &barycentric() {
+  static constexpr int n_points = N_QP_T10_5;
+  static const Eigen::Matrix<double, N_QP_T10_5, 4> &barycentric() {
     return tet5pt_bary;
   }
-  static const Eigen::Matrix<double, N_QP_TET_5, 3> &xyz() {
+  static const Eigen::Matrix<double, N_QP_T10_5, 3> &xyz() {
     return tet5pt_xyz;
   }
   static const Eigen::VectorXd &weights() {

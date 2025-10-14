@@ -176,6 +176,8 @@ struct GPU_FEAT10_Data : public ElementBase {
   }
 
   // Core computation functions (empty implementations for now)
+  void CalcDnDuPre();
+
   void CalcMassMatrix() override {}
 
   void CalcInternalForce() override {}
@@ -209,16 +211,21 @@ struct GPU_FEAT10_Data : public ElementBase {
       : n_elem(num_elements), n_coef(num_nodes) {}
 
   void Initialize() {
-    HANDLE_ERROR(cudaMalloc(&d_nodes, n_coef * 3 * sizeof(double)));
-    HANDLE_ERROR(cudaMalloc(&d_element_connectivity, n_elem * 4 * sizeof(int)));
+    HANDLE_ERROR(cudaMalloc(&d_h_x12, n_coef * sizeof(double)));
+    HANDLE_ERROR(cudaMalloc(&d_h_y12, n_coef * sizeof(double)));
+    HANDLE_ERROR(cudaMalloc(&d_h_z12, n_coef * sizeof(double)));
+    HANDLE_ERROR(cudaMalloc(&d_element_connectivity,
+                            n_elem * Quadrature::N_NODE_T10_10 * sizeof(int)));
 
-    HANDLE_ERROR(cudaMalloc(&d_tet5pt_xyz, 5 * 3 * sizeof(double)));
-    HANDLE_ERROR(cudaMalloc(&d_tet5pt_weights, 5 * sizeof(double)));
+    HANDLE_ERROR(
+        cudaMalloc(&d_tet5pt_xyz, Quadrature::N_QP_T10_5 * 3 * sizeof(double)));
+    HANDLE_ERROR(
+        cudaMalloc(&d_tet5pt_weights, Quadrature::N_QP_T10_5 * sizeof(double)));
 
     HANDLE_ERROR(cudaMalloc(
-        &d_F, n_elem * Quadrature::N_TOTAL_QP_4_4_3 * 3 * 3 * sizeof(double)));
+        &d_F, n_elem * Quadrature::N_QP_T10_5 * 3 * 3 * sizeof(double)));
     HANDLE_ERROR(cudaMalloc(
-        &d_P, n_elem * Quadrature::N_TOTAL_QP_4_4_3 * 3 * 3 * sizeof(double)));
+        &d_P, n_elem * Quadrature::N_QP_T10_5 * 3 * 3 * sizeof(double)));
     HANDLE_ERROR(cudaMalloc(&d_f_int, n_coef * 3 * sizeof(double)));
     HANDLE_ERROR(cudaMalloc(&d_f_ext, n_coef * 3 * sizeof(double)));
 
@@ -232,8 +239,8 @@ struct GPU_FEAT10_Data : public ElementBase {
     // HANDLE_ERROR(cudaMalloc(&d_data, sizeof(GPU_FEAT10_Data)));
   }
 
-  void Setup(double length, double width, double height, double rho0, double nu,
-             double E, const Eigen::MatrixXd &tet5pt_xyz_host,
+  void Setup(double rho0, double nu, double E,
+             const Eigen::MatrixXd &tet5pt_xyz_host,
              const Eigen::VectorXd &tet5pt_weights_host,
              const Eigen::VectorXd &h_x12, const Eigen::VectorXd &h_y12,
              const Eigen::VectorXd &h_z12,
@@ -243,34 +250,47 @@ struct GPU_FEAT10_Data : public ElementBase {
       return;
     }
 
+    HANDLE_ERROR(cudaMemcpy(d_h_x12, h_x12.data(), n_coef * sizeof(double),
+                            cudaMemcpyHostToDevice));
+    HANDLE_ERROR(cudaMemcpy(d_h_y12, h_y12.data(), n_coef * sizeof(double),
+                            cudaMemcpyHostToDevice));
+    HANDLE_ERROR(cudaMemcpy(d_h_z12, h_z12.data(), n_coef * sizeof(double),
+                            cudaMemcpyHostToDevice));
+
     HANDLE_ERROR(cudaMemcpy(d_element_connectivity, element_connectivity.data(),
-                            n_elem * 4 * sizeof(int), cudaMemcpyHostToDevice));
+                            n_elem * Quadrature::N_NODE_T10_10 * sizeof(int),
+                            cudaMemcpyHostToDevice));
 
     HANDLE_ERROR(cudaMemcpy(d_tet5pt_xyz, tet5pt_xyz_host.data(),
-                            5 * 3 * sizeof(double), cudaMemcpyHostToDevice));
-    HANDLE_ERROR(cudaMemcpy(d_tet5pt_weights, tet5pt_weights_host.data(),
-                            5 * sizeof(double), cudaMemcpyHostToDevice));
-
-    cudaMemset(d_f_int, 0, n_coef * 3 * sizeof(double));
-
-    cudaMemset(d_F, 0,
-               n_elem * Quadrature::N_TOTAL_QP_4_4_3 * 3 * 3 * sizeof(double));
-    cudaMemset(d_P, 0,
-               n_elem * Quadrature::N_TOTAL_QP_4_4_3 * 3 * 3 * sizeof(double));
-
-    HANDLE_ERROR(
-        cudaMemcpy(d_rho0, &rho0, sizeof(double), cudaMemcpyHostToDevice));
-    HANDLE_ERROR(cudaMemcpy(d_nu, &nu, sizeof(double), cudaMemcpyHostToDevice));
-    HANDLE_ERROR(cudaMemcpy(d_E, &E, sizeof(double), cudaMemcpyHostToDevice));
-    double mu = E / (2 * (1 + nu));  // Shear modulus μ
-    double lambda =
-        (E * nu) / ((1 + nu) * (1 - 2 * nu));  // Lamé’s first parameter λ
-    HANDLE_ERROR(cudaMemcpy(d_mu, &mu, sizeof(double), cudaMemcpyHostToDevice));
-    HANDLE_ERROR(
-        cudaMemcpy(d_lambda, &lambda, sizeof(double), cudaMemcpyHostToDevice));
-
-    HANDLE_ERROR(cudaMemcpy(d_data, this, sizeof(GPU_FEAT10_Data),
+                            Quadrature::N_QP_T10_5 * 3 * sizeof(double),
                             cudaMemcpyHostToDevice));
+    HANDLE_ERROR(cudaMemcpy(d_tet5pt_weights, tet5pt_weights_host.data(),
+                            Quadrature::N_QP_T10_5 * sizeof(double),
+                            cudaMemcpyHostToDevice));
+
+    // cudaMemset(d_f_int, 0, n_coef * 3 * sizeof(double));
+
+    // cudaMemset(d_F, 0,
+    //            n_elem * Quadrature::N_TOTAL_QP_4_4_3 * 3 * 3 *
+    //            sizeof(double));
+    // cudaMemset(d_P, 0,
+    //            n_elem * Quadrature::N_TOTAL_QP_4_4_3 * 3 * 3 *
+    //            sizeof(double));
+
+    // HANDLE_ERROR(
+    //     cudaMemcpy(d_rho0, &rho0, sizeof(double), cudaMemcpyHostToDevice));
+    // HANDLE_ERROR(cudaMemcpy(d_nu, &nu, sizeof(double),
+    // cudaMemcpyHostToDevice)); HANDLE_ERROR(cudaMemcpy(d_E, &E,
+    // sizeof(double), cudaMemcpyHostToDevice)); double mu = E / (2 * (1 + nu));
+    // // Shear modulus μ double lambda =
+    //     (E * nu) / ((1 + nu) * (1 - 2 * nu));  // Lamé’s first parameter λ
+    // HANDLE_ERROR(cudaMemcpy(d_mu, &mu, sizeof(double),
+    // cudaMemcpyHostToDevice)); HANDLE_ERROR(
+    //     cudaMemcpy(d_lambda, &lambda, sizeof(double),
+    //     cudaMemcpyHostToDevice));
+
+    // HANDLE_ERROR(cudaMemcpy(d_data, this, sizeof(GPU_FEAT10_Data),
+    //                         cudaMemcpyHostToDevice));
 
     is_setup = true;
   }
@@ -310,7 +330,9 @@ struct GPU_FEAT10_Data : public ElementBase {
 
   // Free memory
   void Destroy() {
-    HANDLE_ERROR(cudaFree(d_nodes));
+    HANDLE_ERROR(cudaFree(d_h_x12));
+    HANDLE_ERROR(cudaFree(d_h_y12));
+    HANDLE_ERROR(cudaFree(d_h_z12));
     HANDLE_ERROR(cudaFree(d_element_connectivity));
 
     HANDLE_ERROR(cudaFree(d_tet5pt_xyz));
@@ -349,7 +371,7 @@ struct GPU_FEAT10_Data : public ElementBase {
 
  private:
   // Node positions (global, or per element)
-  double *d_nodes;  // (n_coef, 3)
+  double *d_h_x12, *d_h_y12, *d_h_z12;  // (n_coef, 1)
 
   // Element connectivity
   int *d_element_connectivity;  // (n_elem, 10)
