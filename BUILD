@@ -36,7 +36,7 @@ cuda_library(
     copts = ["--std=c++17", "-O3"],
     linkopts = ["-lcusolver","-lcublas"],
     deps = [
-        ":cpu_utils",  # Add dependency on cpu_utils for quadrature.h
+        ":cpu_utils",
         "@eigen//:eigen"
     ],
     visibility = ["//visibility:public"],
@@ -51,7 +51,20 @@ cuda_library(
     copts = ["--std=c++17", "-O3"],
     linkopts = ["-lcusolver","-lcublas"],
     deps = [
-        ":cpu_utils",  # Add dependency on cpu_utils for quadrature.h
+        ":cpu_utils",
+        "@eigen//:eigen"
+    ],
+    visibility = ["//visibility:public"],
+)
+
+cuda_library(
+    name = "FEAT10Data",
+    hdrs = ["lib_src/elements/FEAT10Data.cuh",
+            "lib_src/elements/ElementBase.h"],
+    copts = ["--std=c++17", "-O3"],
+    linkopts = ["-lcusolver","-lcublas"],
+    deps = [
+        ":cpu_utils",
         "@eigen//:eigen"
     ],
     visibility = ["//visibility:public"],
@@ -156,6 +169,18 @@ cc_binary(
     ],
 )
 
+cc_binary(
+    name = "test_feat10_adamw",
+    srcs = ["lib_bin/test_feat10_adamw.cc"],
+    copts = ["--std=c++17"],
+    deps = [
+        ":FEAT10Data",
+        ":cpu_utils",
+        ":solvers_syncednesterov",
+        ":solvers_syncedadamw",
+        "@eigen//:eigen",
+    ],
+)
 
 # ========================================
 
