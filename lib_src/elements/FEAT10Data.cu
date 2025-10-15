@@ -67,10 +67,10 @@ __global__ void dn_du_pre_kernel(GPU_FEAT10_Data *d_data) {
   // Get element node coordinates for this element
   double X_elem[10][3];  // 10 nodes × 3 coordinates
   for (int node = 0; node < 10; node++) {
-int global_node_idx = d_data->element_connectivity()(elem_idx, node);
-X_elem[node][0] = d_data->x12()(global_node_idx);  // x coordinate
-X_elem[node][1] = d_data->y12()(global_node_idx);  // y coordinate
-X_elem[node][2] = d_data->z12()(global_node_idx);  // z coordinate
+    int global_node_idx = d_data->element_connectivity()(elem_idx, node);
+    X_elem[node][0]     = d_data->x12()(global_node_idx);  // x coordinate
+    X_elem[node][1]     = d_data->y12()(global_node_idx);  // y coordinate
+    X_elem[node][2]     = d_data->z12()(global_node_idx);  // z coordinate
   }
 
   // Compute Jacobian matrix J = Σ(X_node ⊗ dN_dxi)
@@ -95,7 +95,8 @@ X_elem[node][2] = d_data->z12()(global_node_idx);  // z coordinate
   double grad_N[10][3];
   for (int a = 0; a < 10; a++) {
     // Solve 3×3 system: JT * grad_N[a] = dN_dxi[a]
-    // You'll need a 3×3 linear solver here (LU decomposition, Gaussian elimination, etc.)
+    // You'll need a 3×3 linear solver here (LU decomposition, Gaussian
+    // elimination, etc.)
     solve_3x3_system(JT, dN_dxi[a], grad_N[a]);
   }
 
@@ -105,7 +106,6 @@ X_elem[node][2] = d_data->z12()(global_node_idx);  // z coordinate
     d_data->grad_N_ref(elem_idx, qp_idx)(i, 1) = grad_N[i][1];  // ∂N_i/∂y
     d_data->grad_N_ref(elem_idx, qp_idx)(i, 2) = grad_N[i][2];  // ∂N_i/∂z
   }
-
 }
 
 void GPU_FEAT10_Data::CalcDnDuPre() {

@@ -1,10 +1,9 @@
 #pragma once
-#include "FEAT10Data.cuh"
-
-
 #include <cuda_runtime.h>
+
 #include <cmath>
 
+#include "FEAT10Data.cuh"
 
 // Solve 3x3 linear system: A * x = b
 // A: 3x3 coefficient matrix (row-major)
@@ -23,11 +22,11 @@ __device__ void solve_3x3_system(double A[3][3], double b[3], double x[3]) {
   // Forward elimination with partial pivoting
   for (int k = 0; k < 3; k++) {
     // Find pivot (largest element in column k)
-    int pivot_row = k;
+    int pivot_row  = k;
     double max_val = fabs(aug[k][k]);
     for (int i = k + 1; i < 3; i++) {
       if (fabs(aug[i][k]) > max_val) {
-        max_val = fabs(aug[i][k]);
+        max_val   = fabs(aug[i][k]);
         pivot_row = i;
       }
     }
@@ -35,8 +34,8 @@ __device__ void solve_3x3_system(double A[3][3], double b[3], double x[3]) {
     // Swap rows if needed
     if (pivot_row != k) {
       for (int j = 0; j < 4; j++) {
-        double temp = aug[k][j];
-        aug[k][j] = aug[pivot_row][j];
+        double temp       = aug[k][j];
+        aug[k][j]         = aug[pivot_row][j];
         aug[pivot_row][j] = temp;
       }
     }
