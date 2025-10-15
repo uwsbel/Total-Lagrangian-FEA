@@ -114,24 +114,24 @@ struct GPU_FEAT10_Data : public ElementBase {
 
   __device__ Eigen::Map<Eigen::MatrixXd> F(int elem_idx, int qp_idx) {
     return Eigen::Map<Eigen::MatrixXd>(
-        d_F + (elem_idx * Quadrature::N_TOTAL_QP_4_4_3 + qp_idx) * 9, 3, 3);
+        d_F + (elem_idx * Quadrature::N_NODE_T10_10 + qp_idx) * 9, 3, 3);
   }
 
   __device__ const Eigen::Map<Eigen::MatrixXd> F(int elem_idx,
                                                  int qp_idx) const {
     return Eigen::Map<Eigen::MatrixXd>(
-        d_F + (elem_idx * Quadrature::N_TOTAL_QP_4_4_3 + qp_idx) * 9, 3, 3);
+        d_F + (elem_idx * Quadrature::N_NODE_T10_10 + qp_idx) * 9, 3, 3);
   }
 
   __device__ Eigen::Map<Eigen::MatrixXd> P(int elem_idx, int qp_idx) {
     return Eigen::Map<Eigen::MatrixXd>(
-        d_P + (elem_idx * Quadrature::N_TOTAL_QP_4_4_3 + qp_idx) * 9, 3, 3);
+        d_P + (elem_idx * Quadrature::N_NODE_T10_10 + qp_idx) * 9, 3, 3);
   }
 
   __device__ const Eigen::Map<Eigen::MatrixXd> P(int elem_idx,
                                                  int qp_idx) const {
     return Eigen::Map<Eigen::MatrixXd>(
-        d_P + (elem_idx * Quadrature::N_TOTAL_QP_4_4_3 + qp_idx) * 9, 3, 3);
+        d_P + (elem_idx * Quadrature::N_NODE_T10_10 + qp_idx) * 9, 3, 3);
   }
 
   __device__ Eigen::Map<Eigen::VectorXd> f_int(int global_node_idx) {
@@ -278,7 +278,7 @@ struct GPU_FEAT10_Data : public ElementBase {
       override {}
 
   void RetrievePFromFToCPU(
-      std::vector<std::vector<Eigen::MatrixXd>> &p_from_F) override {}
+      std::vector<std::vector<Eigen::MatrixXd>> &p_from_F) override;
 
   void RetrieveDnDuPreToCPU(
       std::vector<std::vector<Eigen::MatrixXd>> &dn_du_pre);
@@ -376,12 +376,10 @@ struct GPU_FEAT10_Data : public ElementBase {
 
     // cudaMemset(d_f_int, 0, n_coef * 3 * sizeof(double));
 
-    // cudaMemset(d_F, 0,
-    //            n_elem * Quadrature::N_TOTAL_QP_4_4_3 * 3 * 3 *
-    //            sizeof(double));
-    // cudaMemset(d_P, 0,
-    //            n_elem * Quadrature::N_TOTAL_QP_4_4_3 * 3 * 3 *
-    //            sizeof(double));
+    cudaMemset(d_F, 0,
+               n_elem * Quadrature::N_NODE_T10_10 * 3 * 3 * sizeof(double));
+    cudaMemset(d_P, 0,
+               n_elem * Quadrature::N_NODE_T10_10 * 3 * 3 * sizeof(double));
 
     HANDLE_ERROR(
         cudaMemcpy(d_rho0, &rho0, sizeof(double), cudaMemcpyHostToDevice));

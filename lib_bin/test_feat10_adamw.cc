@@ -108,6 +108,26 @@ int main() {
 
   std::cout << "\ndone retrieving mass_matrix" << std::endl;
 
+  // calculate p
+  gpu_t10_data.CalcP();
+
+  std::cout << "done CalcP" << std::endl;
+
+  // retrieve p
+  // retrieve p
+  std::vector<std::vector<Eigen::MatrixXd>> p_from_F;
+  gpu_t10_data.RetrievePFromFToCPU(p_from_F);
+
+  std::cout << "P matrices (First Piola-Kirchhoff stress):" << std::endl;
+  for (size_t elem = 0; elem < p_from_F.size(); elem++) {
+    std::cout << "Element " << elem << ":" << std::endl;
+    for (size_t qp = 0; qp < p_from_F[elem].size(); qp++) {
+      std::cout << "  Quadrature Point " << qp << ":" << std::endl;
+      std::cout << p_from_F[elem][qp] << std::endl;
+    }
+  }
+  std::cout << "done retrieving P matrices" << std::endl;
+
   gpu_t10_data.Destroy();
 
   std::cout << "gpu_t10_data destroyed" << std::endl;

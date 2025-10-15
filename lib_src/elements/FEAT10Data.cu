@@ -200,6 +200,8 @@ __global__ void calc_p_kernel(GPU_FEAT10_Data *d_data) {
 
   if (elem_idx >= d_data->gpu_n_elem() || qp_idx >= Quadrature::N_QP_T10_5)
     return;
+
+  feat10_compute_p(elem_idx, qp_idx, d_data);
 }
 
 void GPU_FEAT10_Data::CalcP() {
@@ -274,4 +276,27 @@ void GPU_FEAT10_Data::RetrieveMassMatrixToCPU(Eigen::MatrixXd &mass_matrix) {
   mass_matrix.resize(n_coef, n_coef);
   HANDLE_ERROR(cudaMemcpy(mass_matrix.data(), d_node_values,
                           total_size * sizeof(double), cudaMemcpyDeviceToHost));
+}
+
+void GPU_FEAT10_Data::RetrievePFromFToCPU(
+    std::vector<std::vector<Eigen::MatrixXd>> &p_from_F) {
+  // Resize to [n_elem][N_QP_T10_5]
+  p_from_F.resize(n_elem);
+
+  for (int elem_idx = 0; elem_idx < n_elem; elem_idx++) {
+    p_from_F[elem_idx].resize(Quadrature::N_QP_T10_5);
+
+    for (int qp_idx = 0; qp_idx < Quadrature::N_QP_T10_5; qp_idx++) {
+      // Each P matrix: 3 × 3 (first Piola-Kirchhoff stress tensor)
+      p_from_F[elem_idx][qp_idx].resize(3, 3);
+
+      // Calculate offset for this specific element + QP
+      // P is stored as [elem][qp](i,j) where i,j are 0,1,2
+      int offset = (elem_idx * Quadrature::N_QP_T10_5 + qp_idx) * 3 * 3;
+      int size   = 3 * 3 * sizeof(double);
+
+      HANDLE_ERROR(cudaMemcpy(p_from_F[elem_idx][qp_idx].data(), d_P + offset,
+                              size, cudaMemcpyDeviceToHost));
+    }
+  }
 }
