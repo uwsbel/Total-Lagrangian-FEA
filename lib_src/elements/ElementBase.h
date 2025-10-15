@@ -24,7 +24,6 @@ class ElementBase {
   virtual void CalcConstraintData() = 0;
   virtual void CalcP()              = 0;
 
-  // Data retrieval functions (actually implemented)
   virtual void RetrieveMassMatrixToCPU(Eigen::MatrixXd &mass_matrix)       = 0;
   virtual void RetrieveInternalForceToCPU(Eigen::VectorXd &internal_force) = 0;
   virtual void RetrieveConstraintDataToCPU(Eigen::VectorXd &constraint)    = 0;

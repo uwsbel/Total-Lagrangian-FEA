@@ -83,6 +83,14 @@ __global__ void dn_du_pre_kernel(GPU_FEAT10_Data *d_data) {
     }
   }
 
+  // Compute determinant of J (3x3 matrix)
+  double detJ = J[0][0] * (J[1][1] * J[2][2] - J[1][2] * J[2][1]) -
+                J[0][1] * (J[1][0] * J[2][2] - J[1][2] * J[2][0]) +
+                J[0][2] * (J[1][0] * J[2][1] - J[1][1] * J[2][0]);
+
+  // Store the determinant in d_detJ_ref
+  d_data->detJ_ref(elem_idx, qp_idx) = detJ;
+
   // Compute J^T (transpose)
   double JT[3][3];
   for (int i = 0; i < 3; i++) {
@@ -108,6 +116,73 @@ __global__ void dn_du_pre_kernel(GPU_FEAT10_Data *d_data) {
   }
 }
 
+__global__ void mass_matrix_qp_kernel(GPU_FEAT10_Data *d_data) {
+  int n_qp_per_elem = Quadrature::N_QP_T10_5;  // 5 quadrature points
+  int thread_global = blockIdx.x * blockDim.x + threadIdx.x;
+
+  // Decode: which element and which (i, j) node pair?
+  int elem       = thread_global / (10 * 10);  // 10 nodes per element
+  int item_local = thread_global % (10 * 10);
+
+  if (elem >= d_data->gpu_n_elem())
+    return;
+
+  // Decode item_local into (i_local, j_local) node indices
+  int i_local = item_local / 10;  // Local node i (0-9)
+  int j_local = item_local % 10;  // Local node j (0-9)
+
+  // Get global node indices
+  int i_global = d_data->element_connectivity()(elem, i_local);
+  int j_global = d_data->element_connectivity()(elem, j_local);
+
+  // Get material density
+  double rho = d_data->rho0();
+
+  // Accumulator for this (i, j) pair across all QPs
+  double mass_contribution = 0.0;
+
+  // Loop over all quadrature points
+  for (int qp = 0; qp < n_qp_per_elem; qp++) {
+    // Get quadrature point coordinates
+    double xi   = d_data->tet5pt_x(qp);
+    double eta  = d_data->tet5pt_y(qp);
+    double zeta = d_data->tet5pt_z(qp);
+    double wq   = d_data->tet5pt_weights(qp);
+    // printf("xi: %f, eta: %f, zeta: %f, wq: %f\n", xi, eta, zeta, wq);
+
+    // Compute barycentric coordinates
+    double L1   = 1.0 - xi - eta - zeta;
+    double L2   = xi;
+    double L3   = eta;
+    double L4   = zeta;
+    double L[4] = {L1, L2, L3, L4};
+
+    // Compute shape functions
+    double N[10];
+
+    // Corner nodes (0-3)
+    for (int k = 0; k < 4; k++) {
+      N[k] = L[k] * (2.0 * L[k] - 1.0);
+    }
+
+    // Edge nodes (4-9)
+    int edges[6][2] = {{0, 1}, {1, 2}, {0, 2}, {0, 3}, {1, 3}, {2, 3}};
+    for (int k = 0; k < 6; k++) {
+      int ii   = edges[k][0];
+      int jj   = edges[k][1];
+      N[k + 4] = 4.0 * L[ii] * L[jj];
+    }
+
+    // Get determinant (pre-computed)
+    double detJ = d_data->detJ_ref(elem, qp);
+
+    // Accumulate: rho * N[i] * N[j] * detJ * wq
+    mass_contribution += rho * N[i_local] * N[j_local] * detJ * wq;
+  }
+
+  atomicAdd(d_data->node_values(i_global, j_global), mass_contribution);
+}
+
 void GPU_FEAT10_Data::CalcDnDuPre() {
   int total_threads = n_elem * Quadrature::N_QP_T10_5;
 
@@ -116,4 +191,55 @@ void GPU_FEAT10_Data::CalcDnDuPre() {
 
   dn_du_pre_kernel<<<blocks, threads_per_block>>>(d_data);
   cudaDeviceSynchronize();
+}
+
+void GPU_FEAT10_Data::CalcMassMatrix() {
+  // Launch: n_elem × 10 × 10 threads
+  int total_threads     = n_elem * 10 * 10;
+  int threads_per_block = 128;
+  int blocks = (total_threads + threads_per_block - 1) / threads_per_block;
+
+  mass_matrix_qp_kernel<<<blocks, threads_per_block>>>(d_data);
+  HANDLE_ERROR(cudaDeviceSynchronize());
+}
+
+void GPU_FEAT10_Data::RetrieveDetJToCPU(
+    std::vector<std::vector<double>> &detJ) {
+  detJ.resize(n_elem);
+  for (int elem_idx = 0; elem_idx < n_elem; elem_idx++) {
+    detJ[elem_idx].resize(Quadrature::N_QP_T10_5);
+    HANDLE_ERROR(cudaMemcpy(
+        detJ[elem_idx].data(), d_detJ_ref + elem_idx * Quadrature::N_QP_T10_5,
+        Quadrature::N_QP_T10_5 * sizeof(double), cudaMemcpyDeviceToHost));
+  }
+}
+
+void GPU_FEAT10_Data::RetrieveDnDuPreToCPU(
+    std::vector<std::vector<Eigen::MatrixXd>> &dn_du_pre) {
+  // Resize to [n_elem][N_QP_T10_5]
+  dn_du_pre.resize(n_elem);
+
+  for (int elem_idx = 0; elem_idx < n_elem; elem_idx++) {
+    dn_du_pre[elem_idx].resize(Quadrature::N_QP_T10_5);
+
+    for (int qp_idx = 0; qp_idx < Quadrature::N_QP_T10_5; qp_idx++) {
+      // Each QP matrix: 10 × 3 (10 shape functions × 3 derivatives)
+      dn_du_pre[elem_idx][qp_idx].resize(10, 3);
+
+      // Calculate offset for this specific element + QP
+      int offset = (elem_idx * Quadrature::N_QP_T10_5 + qp_idx) * 10 * 3;
+      int size   = 10 * 3 * sizeof(double);
+
+      HANDLE_ERROR(cudaMemcpy(dn_du_pre[elem_idx][qp_idx].data(),
+                              d_grad_N_ref + offset, size,
+                              cudaMemcpyDeviceToHost));
+    }
+  }
+}
+
+void GPU_FEAT10_Data::RetrieveMassMatrixToCPU(Eigen::MatrixXd &mass_matrix) {
+  int total_size = n_coef * n_coef;
+  mass_matrix.resize(n_coef, n_coef);
+  HANDLE_ERROR(cudaMemcpy(mass_matrix.data(), d_node_values,
+                          total_size * sizeof(double), cudaMemcpyDeviceToHost));
 }

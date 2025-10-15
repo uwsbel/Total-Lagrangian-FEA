@@ -60,6 +60,14 @@ struct GPU_FEAT10_Data : public ElementBase {
         10, 3);
   }
 
+  __device__ double &detJ_ref(int elem_idx, int qp_idx) {
+    return d_detJ_ref[elem_idx * Quadrature::N_QP_T10_5 + qp_idx];
+  }
+
+  __device__ double detJ_ref(int elem_idx, int qp_idx) const {
+    return d_detJ_ref[elem_idx * Quadrature::N_QP_T10_5 + qp_idx];
+  }
+
   __device__ double tet5pt_x(int qp_idx) {
     return d_tet5pt_x[qp_idx];
   }
@@ -215,6 +223,16 @@ struct GPU_FEAT10_Data : public ElementBase {
     return n_constraint;
   }
 
+  // ======================================================
+
+  __device__ Eigen::Map<Eigen::MatrixXd> node_values() {
+    return Eigen::Map<Eigen::MatrixXd>(d_node_values, n_coef, n_coef);
+  }
+
+  __device__ double *node_values(int i, int j) {
+    return d_node_values + j + i * n_coef;
+  }
+
 #endif
 
   __host__ __device__ int get_n_elem() const {
@@ -235,7 +253,7 @@ struct GPU_FEAT10_Data : public ElementBase {
   // Core computation functions (empty implementations for now)
   void CalcDnDuPre();
 
-  void CalcMassMatrix() override {}
+  void CalcMassMatrix() override;
 
   void CalcInternalForce() override {}
 
@@ -243,8 +261,7 @@ struct GPU_FEAT10_Data : public ElementBase {
 
   void CalcP() override {}
 
-  // Data retrieval functions (empty implementations for now)
-  void RetrieveMassMatrixToCPU(Eigen::MatrixXd &mass_matrix) override {}
+  void RetrieveMassMatrixToCPU(Eigen::MatrixXd &mass_matrix) override;
 
   void RetrieveInternalForceToCPU(Eigen::VectorXd &internal_force) override {}
 
@@ -264,31 +281,9 @@ struct GPU_FEAT10_Data : public ElementBase {
       std::vector<std::vector<Eigen::MatrixXd>> &p_from_F) override {}
 
   void RetrieveDnDuPreToCPU(
-      std::vector<std::vector<Eigen::MatrixXd>> &dn_du_pre) {
-    // Resize to [n_elem][N_QP_T10_5]
-    dn_du_pre.resize(n_elem);
+      std::vector<std::vector<Eigen::MatrixXd>> &dn_du_pre);
 
-    for (int elem_idx = 0; elem_idx < n_elem; elem_idx++) {
-      dn_du_pre[elem_idx].resize(Quadrature::N_QP_T10_5);
-
-      for (int qp_idx = 0; qp_idx < Quadrature::N_QP_T10_5; qp_idx++) {
-        // Each QP matrix: 10 × 3 (10 shape functions × 3 derivatives)
-        dn_du_pre[elem_idx][qp_idx].resize(10, 3);
-
-        // Calculate offset for this specific element + QP
-        int offset = (elem_idx * Quadrature::N_QP_T10_5 + qp_idx) * 10 * 3;
-        int size   = 10 * 3 * sizeof(double);
-
-        HANDLE_ERROR(cudaMemcpy(dn_du_pre[elem_idx][qp_idx].data(),
-                                d_grad_N_ref + offset, size,
-                                cudaMemcpyDeviceToHost));
-      }
-    }
-
-    std::cout << "Retrieved reference gradients for " << n_elem
-              << " elements × " << Quadrature::N_QP_T10_5 << " QPs"
-              << std::endl;
-  }
+  void RetrieveDetJToCPU(std::vector<std::vector<double>> &detJ);
 
   // Constructor
   GPU_FEAT10_Data(int num_elements, int num_nodes)
@@ -301,6 +296,8 @@ struct GPU_FEAT10_Data : public ElementBase {
     HANDLE_ERROR(cudaMalloc(&d_element_connectivity,
                             n_elem * Quadrature::N_NODE_T10_10 * sizeof(int)));
 
+    HANDLE_ERROR(cudaMalloc(&d_node_values, n_coef * n_coef * sizeof(double)));
+
     HANDLE_ERROR(
         cudaMalloc(&d_tet5pt_x, Quadrature::N_QP_T10_5 * sizeof(double)));
     HANDLE_ERROR(
@@ -312,6 +309,8 @@ struct GPU_FEAT10_Data : public ElementBase {
 
     HANDLE_ERROR(cudaMalloc(&d_grad_N_ref, n_elem * Quadrature::N_QP_T10_5 *
                                                10 * 3 * sizeof(double)));
+    HANDLE_ERROR(cudaMalloc(&d_detJ_ref,
+                            n_elem * Quadrature::N_QP_T10_5 * sizeof(double)));
 
     HANDLE_ERROR(cudaMalloc(
         &d_F, n_elem * Quadrature::N_QP_T10_5 * 3 * 3 * sizeof(double)));
@@ -369,6 +368,11 @@ struct GPU_FEAT10_Data : public ElementBase {
     HANDLE_ERROR(
         cudaMemset(d_grad_N_ref, 0,
                    n_elem * Quadrature::N_QP_T10_5 * 10 * 3 * sizeof(double)));
+    HANDLE_ERROR(cudaMemset(d_detJ_ref, 0,
+                            n_elem * Quadrature::N_QP_T10_5 * sizeof(double)));
+
+    HANDLE_ERROR(
+        cudaMemset(d_node_values, 0, n_coef * n_coef * sizeof(double)));
 
     // cudaMemset(d_f_int, 0, n_coef * 3 * sizeof(double));
 
@@ -379,17 +383,19 @@ struct GPU_FEAT10_Data : public ElementBase {
     //            n_elem * Quadrature::N_TOTAL_QP_4_4_3 * 3 * 3 *
     //            sizeof(double));
 
-    // HANDLE_ERROR(
-    //     cudaMemcpy(d_rho0, &rho0, sizeof(double), cudaMemcpyHostToDevice));
-    // HANDLE_ERROR(cudaMemcpy(d_nu, &nu, sizeof(double),
-    // cudaMemcpyHostToDevice)); HANDLE_ERROR(cudaMemcpy(d_E, &E,
-    // sizeof(double), cudaMemcpyHostToDevice)); double mu = E / (2 * (1 + nu));
-    // // Shear modulus μ double lambda =
-    //     (E * nu) / ((1 + nu) * (1 - 2 * nu));  // Lamé’s first parameter λ
-    // HANDLE_ERROR(cudaMemcpy(d_mu, &mu, sizeof(double),
-    // cudaMemcpyHostToDevice)); HANDLE_ERROR(
-    //     cudaMemcpy(d_lambda, &lambda, sizeof(double),
-    //     cudaMemcpyHostToDevice));
+    HANDLE_ERROR(
+        cudaMemcpy(d_rho0, &rho0, sizeof(double), cudaMemcpyHostToDevice));
+    HANDLE_ERROR(cudaMemcpy(d_nu, &nu, sizeof(double), cudaMemcpyHostToDevice));
+    HANDLE_ERROR(cudaMemcpy(d_E, &E, sizeof(double), cudaMemcpyHostToDevice));
+
+    // Compute material constants
+    double mu = E / (2 * (1 + nu));  // Shear modulus μ
+    double lambda =
+        (E * nu) / ((1 + nu) * (1 - 2 * nu));  // Lamé's first parameter λ
+
+    HANDLE_ERROR(cudaMemcpy(d_mu, &mu, sizeof(double), cudaMemcpyHostToDevice));
+    HANDLE_ERROR(
+        cudaMemcpy(d_lambda, &lambda, sizeof(double), cudaMemcpyHostToDevice));
 
     HANDLE_ERROR(cudaMemcpy(d_data, this, sizeof(GPU_FEAT10_Data),
                             cudaMemcpyHostToDevice));
@@ -436,6 +442,7 @@ struct GPU_FEAT10_Data : public ElementBase {
     HANDLE_ERROR(cudaFree(d_h_y12));
     HANDLE_ERROR(cudaFree(d_h_z12));
     HANDLE_ERROR(cudaFree(d_element_connectivity));
+    HANDLE_ERROR(cudaFree(d_node_values));
 
     HANDLE_ERROR(cudaFree(d_tet5pt_x));
     HANDLE_ERROR(cudaFree(d_tet5pt_y));
@@ -443,6 +450,7 @@ struct GPU_FEAT10_Data : public ElementBase {
     HANDLE_ERROR(cudaFree(d_tet5pt_weights));
 
     HANDLE_ERROR(cudaFree(d_grad_N_ref));
+    HANDLE_ERROR(cudaFree(d_detJ_ref));
 
     HANDLE_ERROR(cudaFree(d_F));
     HANDLE_ERROR(cudaFree(d_P));
@@ -482,12 +490,16 @@ struct GPU_FEAT10_Data : public ElementBase {
   // Element connectivity
   int *d_element_connectivity;  // (n_elem, 10)
 
+  // Mass Matrix
+  double *d_node_values;
+
   // Quadrature points and weights
   double *d_tet5pt_x, *d_tet5pt_y, *d_tet5pt_z;
   double *d_tet5pt_weights;  // (5,)
 
   // Precomputed reference gradients
-  double *d_grad_N_ref;  // (5, 10, 3)
+  double *d_grad_N_ref;  // (n_elem, 5, 10, 3)
+  double *d_detJ_ref;    // (n_elem, 5)
 
   // Deformation gradient and Piola stress
   double *d_F;  // (n_elem, n_qp, 3, 3)
@@ -495,9 +507,6 @@ struct GPU_FEAT10_Data : public ElementBase {
 
   // Material properties
   double *d_E, *d_nu, *d_rho0, *d_lambda, *d_mu;
-
-  // Mass matrix
-  double *d_M;  // (n_coef*3, n_coef*3)
 
   // Constraint data
   double *d_constraint, *d_constraint_jac;

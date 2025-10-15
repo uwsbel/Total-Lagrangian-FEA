@@ -81,6 +81,33 @@ int main() {
   }
   std::cout << "done retrieving ref_grads" << std::endl;
 
+  std::vector<std::vector<double>> detJ;
+  gpu_t10_data.RetrieveDetJToCPU(detJ);
+
+  std::cout << "detJ:" << std::endl;
+  for (size_t i = 0; i < detJ.size(); i++) {
+    for (size_t j = 0; j < detJ[i].size(); j++) {
+      std::cout << detJ[i][j] << std::endl;
+    }
+  }
+  std::cout << "done retrieving detJ" << std::endl;
+
+  gpu_t10_data.CalcMassMatrix();
+
+  std::cout << "done CalcMassMatrix" << std::endl;
+
+  Eigen::MatrixXd mass_matrix;
+  gpu_t10_data.RetrieveMassMatrixToCPU(mass_matrix);
+
+  std::cout << "mass_matrix (size: " << mass_matrix.rows() << " x "
+            << mass_matrix.cols() << "):" << std::endl;
+
+  // Use Eigen's IOFormat for cleaner output
+  Eigen::IOFormat CleanFmt(4, 0, ", ", "\n", "[", "]");
+  std::cout << mass_matrix.format(CleanFmt) << std::endl;
+
+  std::cout << "\ndone retrieving mass_matrix" << std::endl;
+
   gpu_t10_data.Destroy();
 
   std::cout << "gpu_t10_data destroyed" << std::endl;
