@@ -114,7 +114,6 @@ int main() {
   std::cout << "done CalcP" << std::endl;
 
   // retrieve p
-  // retrieve p
   std::vector<std::vector<Eigen::MatrixXd>> p_from_F;
   gpu_t10_data.RetrievePFromFToCPU(p_from_F);
 
@@ -127,6 +126,18 @@ int main() {
     }
   }
   std::cout << "done retrieving P matrices" << std::endl;
+
+  // calculate internal force
+  gpu_t10_data.CalcInternalForce();
+  std::cout << "done CalcInternalForce" << std::endl;
+
+  // retrieve internal force
+  Eigen::VectorXd f_int;
+  gpu_t10_data.RetrieveInternalForceToCPU(f_int);
+  std::cout << "Internal force vector (size: " << f_int.size()
+            << "):" << std::endl;
+  std::cout << f_int.transpose() << std::endl;
+  std::cout << "done retrieving internal force vector" << std::endl;
 
   gpu_t10_data.Destroy();
 

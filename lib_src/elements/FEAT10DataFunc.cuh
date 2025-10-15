@@ -142,3 +142,64 @@ __device__ void feat10_compute_p(int elem_idx, int qp_idx,
     }
   }
 }
+
+__device__ void feat10_compute_internal_force(int elem_idx, int node_local,
+                                              GPU_FEAT10_Data* d_data) {
+  // Get global node index for this local node
+  int global_node_idx = d_data->element_connectivity()(elem_idx, node_local);
+
+  // Initialize force accumulator for this node (3 components)
+  double f_node[3] = {0.0, 0.0, 0.0};
+
+  // This is fine for small arrays
+  // TODO: race condition here?
+  for (int d = 0; d < 3; ++d) {
+    d_data->f_int(global_node_idx)(d) = 0.0;
+  }
+
+  // Loop over all quadrature points for this element
+  for (int qp_idx = 0; qp_idx < Quadrature::N_QP_T10_5; qp_idx++) {
+    // Get precomputed P matrix for this element and quadrature point
+    // P is the 3x3 first Piola-Kirchhoff stress tensor
+    double P[3][3];
+    for (int i = 0; i < 3; i++) {
+      for (int j = 0; j < 3; j++) {
+        P[i][j] = d_data->P(elem_idx, qp_idx)(i, j);
+      }
+    }
+
+    // Get precomputed shape function gradients for this node at this QP
+    // grad_N[node_local] = [∂N/∂x, ∂N/∂y, ∂N/∂z] (physical coordinates)
+    double grad_N[3];
+    grad_N[0] = d_data->grad_N_ref(elem_idx, qp_idx)(node_local, 0);  // ∂N/∂x
+    grad_N[1] = d_data->grad_N_ref(elem_idx, qp_idx)(node_local, 1);  // ∂N/∂y
+    grad_N[2] = d_data->grad_N_ref(elem_idx, qp_idx)(node_local, 2);  // ∂N/∂z
+
+    // Get determinant and quadrature weight
+    double detJ = d_data->detJ_ref(elem_idx, qp_idx);
+    double wq   = d_data->tet5pt_weights(qp_idx);
+    double dV   = detJ * wq;
+
+    // Compute P @ grad_N (matrix-vector multiply)
+    // f_contribution[i] = sum_j(P[i][j] * grad_N[j])
+    double f_contribution[3];
+    for (int i = 0; i < 3; i++) {
+      f_contribution[i] = 0.0;
+      for (int j = 0; j < 3; j++) {
+        f_contribution[i] += P[i][j] * grad_N[j];
+      }
+    }
+
+    // Accumulate: f[node_local] += (P @ grad_N[node_local]) * dV
+    for (int i = 0; i < 3; i++) {
+      f_node[i] += f_contribution[i] * dV;
+    }
+  }
+
+  // Assemble into global internal force vector using atomic operations
+  // Each thread handles one node, so we need atomicAdd for thread safety
+  for (int i = 0; i < 3; i++) {
+    int global_dof_idx = 3 * global_node_idx + i;
+    atomicAdd(&(d_data->f_int()(global_dof_idx)), f_node[i]);
+  }
+}

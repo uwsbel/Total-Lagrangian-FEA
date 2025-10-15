@@ -213,11 +213,16 @@ void GPU_FEAT10_Data::CalcP() {
 
 __global__ void compute_internal_force_kernel(GPU_FEAT10_Data *d_data) {
   int thread_idx = blockIdx.x * blockDim.x + threadIdx.x;
-  int elem_idx   = thread_idx / Quadrature::N_NODE_T10_10;
-  int qp_idx     = thread_idx % Quadrature::N_NODE_T10_10;
+  int elem_idx =
+      thread_idx / Quadrature::N_NODE_T10_10;  // 10 nodes per element
+  int node_local =
+      thread_idx % Quadrature::N_NODE_T10_10;  // Local node index (0-9)
 
-  if (elem_idx >= d_data->gpu_n_elem() || qp_idx >= Quadrature::N_NODE_T10_10)
+  if (elem_idx >= d_data->gpu_n_elem() ||
+      node_local >= Quadrature::N_NODE_T10_10)
     return;
+
+  feat10_compute_internal_force(elem_idx, node_local, d_data);
 }
 
 void GPU_FEAT10_Data::CalcInternalForce() {
@@ -299,4 +304,15 @@ void GPU_FEAT10_Data::RetrievePFromFToCPU(
                               size, cudaMemcpyDeviceToHost));
     }
   }
+}
+
+void GPU_FEAT10_Data::RetrieveInternalForceToCPU(
+    Eigen::VectorXd &internal_force) {
+  // Resize to total DOFs (3 * number of nodes)
+  int total_dofs = 3 * n_coef;
+  internal_force.resize(total_dofs);
+
+  // Copy from device to host
+  HANDLE_ERROR(cudaMemcpy(internal_force.data(), d_f_int,
+                          total_dofs * sizeof(double), cudaMemcpyDeviceToHost));
 }

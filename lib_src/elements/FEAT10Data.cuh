@@ -263,7 +263,7 @@ struct GPU_FEAT10_Data : public ElementBase {
 
   void RetrieveMassMatrixToCPU(Eigen::MatrixXd &mass_matrix) override;
 
-  void RetrieveInternalForceToCPU(Eigen::VectorXd &internal_force) override {}
+  void RetrieveInternalForceToCPU(Eigen::VectorXd &internal_force) override;
 
   void RetrieveConstraintDataToCPU(Eigen::VectorXd &constraint) override {}
 
@@ -374,7 +374,7 @@ struct GPU_FEAT10_Data : public ElementBase {
     HANDLE_ERROR(
         cudaMemset(d_node_values, 0, n_coef * n_coef * sizeof(double)));
 
-    // cudaMemset(d_f_int, 0, n_coef * 3 * sizeof(double));
+    cudaMemset(d_f_int, 0, n_coef * 3 * sizeof(double));
 
     cudaMemset(d_F, 0,
                n_elem * Quadrature::N_NODE_T10_10 * 3 * 3 * sizeof(double));
