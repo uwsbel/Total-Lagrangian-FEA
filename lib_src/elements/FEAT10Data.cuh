@@ -255,11 +255,11 @@ struct GPU_FEAT10_Data : public ElementBase {
 
   void CalcMassMatrix() override;
 
-  void CalcInternalForce() override {}
+  void CalcInternalForce() override;
 
   void CalcConstraintData() override {}
 
-  void CalcP() override {}
+  void CalcP() override;
 
   void RetrieveMassMatrixToCPU(Eigen::MatrixXd &mass_matrix) override;
 

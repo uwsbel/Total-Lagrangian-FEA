@@ -193,6 +193,38 @@ void GPU_FEAT10_Data::CalcDnDuPre() {
   cudaDeviceSynchronize();
 }
 
+__global__ void calc_p_kernel(GPU_FEAT10_Data *d_data) {
+  int thread_idx = blockIdx.x * blockDim.x + threadIdx.x;
+  int elem_idx   = thread_idx / Quadrature::N_QP_T10_5;
+  int qp_idx     = thread_idx % Quadrature::N_QP_T10_5;
+
+  if (elem_idx >= d_data->gpu_n_elem() || qp_idx >= Quadrature::N_QP_T10_5)
+    return;
+}
+
+void GPU_FEAT10_Data::CalcP() {
+  int threads = 128;
+  int blocks  = (n_elem * Quadrature::N_QP_T10_5 + threads - 1) / threads;
+  calc_p_kernel<<<blocks, threads>>>(d_data);
+  cudaDeviceSynchronize();
+}
+
+__global__ void compute_internal_force_kernel(GPU_FEAT10_Data *d_data) {
+  int thread_idx = blockIdx.x * blockDim.x + threadIdx.x;
+  int elem_idx   = thread_idx / Quadrature::N_NODE_T10_10;
+  int qp_idx     = thread_idx % Quadrature::N_NODE_T10_10;
+
+  if (elem_idx >= d_data->gpu_n_elem() || qp_idx >= Quadrature::N_NODE_T10_10)
+    return;
+}
+
+void GPU_FEAT10_Data::CalcInternalForce() {
+  int threads = 128;
+  int blocks  = (n_elem * Quadrature::N_NODE_T10_10 + threads - 1) / threads;
+  compute_internal_force_kernel<<<blocks, threads>>>(d_data);
+  cudaDeviceSynchronize();
+}
+
 void GPU_FEAT10_Data::CalcMassMatrix() {
   // Launch: n_elem × 10 × 10 threads
   int total_threads     = n_elem * 10 * 10;
