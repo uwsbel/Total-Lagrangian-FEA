@@ -116,16 +116,6 @@ __global__ void one_step_adamw_kernel(ElementBase *d_data,
   grid.sync();
 
   if (tid == 0) {
-    // print f_ext
-    if (d_data->type == TYPE_T10) {
-      auto *data = static_cast<GPU_FEAT10_Data *>(d_data);
-      for (int i = 0; i < d_adamw_solver->get_n_coef() * 3; i++) {
-        printf("f_ext[%d] = %f\n", i, data->f_ext()(i));
-      }
-    }
-  }
-
-  if (tid == 0) {
     *d_adamw_solver->inner_flag() = 0;
     *d_adamw_solver->outer_flag() = 0;
   }
