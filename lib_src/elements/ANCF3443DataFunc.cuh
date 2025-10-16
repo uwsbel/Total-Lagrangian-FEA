@@ -331,15 +331,6 @@ __device__ __forceinline__ void ancf3443_compute_internal_force(
   double geom = (d_data->L() * d_data->W() * d_data->H()) / 8.0;
 
   // clang-format off
-
-    // set 0
-    #pragma unroll
-    for (int d = 0; d < 3; ++d)
-    {
-        d_data->f_int(global_node_idx)(d) = 0.0;
-    }
-
-
     #pragma unroll
     for (int qp_idx = 0; qp_idx < Quadrature::N_TOTAL_QP_4_4_3; qp_idx++)
     {

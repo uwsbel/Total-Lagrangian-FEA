@@ -88,6 +88,7 @@ cuda_library(
     deps = [
         ":ANCF3243Data",
         ":ANCF3443Data",
+        ":FEAT10Data",
         ":cpu_utils",
         "@eigen//:eigen",
     ],
@@ -107,6 +108,7 @@ cuda_library(
     deps = [
         ":ANCF3243Data",
         ":ANCF3443Data",
+        ":FEAT10Data",
         ":cpu_utils",
         "@eigen//:eigen",
     ],

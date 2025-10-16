@@ -3,6 +3,7 @@
 #include "../elements/ANCF3243Data.cuh"
 #include "../elements/ANCF3443Data.cuh"
 #include "../elements/ElementBase.h"
+#include "../elements/FEAT10Data.cuh"
 #include "SolverBase.h"
 
 // this is a first order AdamW method

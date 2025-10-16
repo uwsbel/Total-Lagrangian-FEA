@@ -226,14 +226,6 @@ __device__ __forceinline__ void ancf3243_compute_internal_force(
 
   // clang-format off
 
-    // set 0
-    #pragma unroll
-    for (int d = 0; d < 3; ++d)
-    {
-        d_data->f_int(node_base + node_idx)(d) = 0.0;
-    }
-
-
     #pragma unroll
     for (int qp_idx = 0; qp_idx < Quadrature::N_TOTAL_QP_3_2_2; qp_idx++)
     {

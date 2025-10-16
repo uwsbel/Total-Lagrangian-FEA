@@ -151,12 +151,6 @@ __device__ void feat10_compute_internal_force(int elem_idx, int node_local,
   // Initialize force accumulator for this node (3 components)
   double f_node[3] = {0.0, 0.0, 0.0};
 
-  // This is fine for small arrays
-  // TODO: race condition here?
-  for (int d = 0; d < 3; ++d) {
-    d_data->f_int(global_node_idx)(d) = 0.0;
-  }
-
   // Loop over all quadrature points for this element
   for (int qp_idx = 0; qp_idx < Quadrature::N_QP_T10_5; qp_idx++) {
     // Get precomputed P matrix for this element and quadrature point
@@ -201,5 +195,14 @@ __device__ void feat10_compute_internal_force(int elem_idx, int node_local,
   for (int i = 0; i < 3; i++) {
     int global_dof_idx = 3 * global_node_idx + i;
     atomicAdd(&(d_data->f_int()(global_dof_idx)), f_node[i]);
+  }
+}
+
+__device__ __forceinline__ void feat10_clear_internal_force(
+    GPU_FEAT10_Data* d_data) {
+  int thread_idx = blockIdx.x * blockDim.x + threadIdx.x;
+
+  if (thread_idx < d_data->n_coef * 3) {
+    d_data->f_int()[thread_idx] = 0.0;
   }
 }
