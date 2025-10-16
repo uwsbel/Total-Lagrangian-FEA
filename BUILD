@@ -186,6 +186,19 @@ cc_binary(
     ],
 )
 
+cc_binary(
+    name = "test_feat10_nesterov",
+    srcs = ["lib_bin/test_feat10_nesterov.cc"],
+    copts = ["--std=c++17"],
+    deps = [
+        ":FEAT10Data",
+        ":cpu_utils",
+        ":solvers_syncednesterov",
+        ":solvers_syncedadamw",
+        "@eigen//:eigen",
+    ],
+)
+
 # ========================================
 
 # ========================================

@@ -32,6 +32,11 @@ class SyncedNesterovSolver : public SolverBase {
       d_data_ = typed_data->d_data;  // This accesses the derived class's d_data
       n_total_qp_ = Quadrature::N_TOTAL_QP_4_4_3;
       n_shape_    = Quadrature::N_SHAPE_3443;
+    } else if (data->type == TYPE_T10) {
+      auto *typed_data = static_cast<GPU_FEAT10_Data *>(data);
+      d_data_ = typed_data->d_data;  // This accesses the derived class's d_data
+      n_total_qp_ = Quadrature::N_QP_T10_5;
+      n_shape_    = Quadrature::N_NODE_T10_10;
     } else {
       d_data_ = nullptr;
       std::cerr << "Unknown element type!" << std::endl;
