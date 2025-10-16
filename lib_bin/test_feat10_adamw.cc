@@ -48,6 +48,39 @@ int main() {
     h_z12(i) = nodes(i, 2);  // Z coordinates
   }
 
+  // ==========================================================================
+
+  // Find all nodes with z == 0
+  std::vector<int> fixed_node_indices;
+  for (int i = 0; i < h_z12.size(); ++i) {
+    if (std::abs(h_z12(i)) < 1e-8) {  // tolerance for floating point
+      fixed_node_indices.push_back(i);
+    }
+  }
+
+  // Convert to Eigen::VectorXi
+  Eigen::VectorXi h_fixed_nodes(fixed_node_indices.size());
+  for (size_t i = 0; i < fixed_node_indices.size(); ++i) {
+    h_fixed_nodes(i) = fixed_node_indices[i];
+  }
+
+  // print fixed nodes
+  std::cout << "Fixed nodes (z == 0):" << std::endl;
+  for (int i = 0; i < h_fixed_nodes.size(); ++i) {
+    std::cout << h_fixed_nodes(i) << " ";
+  }
+  std::cout << std::endl;
+
+  // Set fixed nodes
+  gpu_t10_data.SetNodalFixed(h_fixed_nodes);
+
+  // set external force
+  Eigen::VectorXd h_f_ext(gpu_t10_data.get_n_coef() * 3);
+  // set external force applied at the end of the beam to be 0,0,3100
+  h_f_ext.setZero();
+  h_f_ext(3 * 6 + 0) = 1000.0;
+  gpu_t10_data.SetExternalForce(h_f_ext);
+
   // Get quadrature data from quadrature_utils.h
   const Eigen::VectorXd& tet5pt_x_host       = Quadrature::tet5pt_x;
   const Eigen::VectorXd& tet5pt_y_host       = Quadrature::tet5pt_y;
@@ -63,7 +96,7 @@ int main() {
                      h_x12, h_y12, h_z12,  // Node coordinates
                      elements);            // Element connectivity
 
-  std::cout << "gpu_t10_data setup complete" << std::endl;
+  // =========================================================================
 
   gpu_t10_data.CalcDnDuPre();
 
@@ -138,6 +171,42 @@ int main() {
             << "):" << std::endl;
   std::cout << f_int.transpose() << std::endl;
   std::cout << "done retrieving internal force vector" << std::endl;
+
+  SyncedAdamWParams params = {2e-4, 0.9,  0.999, 1e-8, 1e-4, 1e-1,
+                              1e-6, 1e14, 5,     500,  1e-3};
+  SyncedAdamWSolver solver(&gpu_t10_data, gpu_t10_data.get_n_constraint());
+  solver.Setup();
+  solver.SetParameters(&params);
+  for (int i = 0; i < 50; i++) {
+    solver.Solve();
+  }
+
+  // // Set highest precision for cout
+  std::cout << std::fixed << std::setprecision(17);
+
+  Eigen::VectorXd x12, y12, z12;
+  gpu_t10_data.RetrievePositionToCPU(x12, y12, z12);
+
+  std::cout << "x12:" << std::endl;
+  for (int i = 0; i < x12.size(); i++) {
+    std::cout << x12(i) << " ";
+  }
+
+  std::cout << std::endl;
+
+  std::cout << "y12:" << std::endl;
+  for (int i = 0; i < y12.size(); i++) {
+    std::cout << y12(i) << " ";
+  }
+
+  std::cout << std::endl;
+
+  std::cout << "z12:" << std::endl;
+  for (int i = 0; i < z12.size(); i++) {
+    std::cout << z12(i) << " ";
+  }
+
+  std::cout << std::endl;
 
   gpu_t10_data.Destroy();
 

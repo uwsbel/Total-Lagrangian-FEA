@@ -9,7 +9,8 @@
 // A: 3x3 coefficient matrix (row-major)
 // b: right-hand side vector
 // x: solution vector (output)
-__device__ void solve_3x3_system(double A[3][3], double b[3], double x[3]) {
+__device__ __forceinline__ void solve_3x3_system(double A[3][3], double b[3],
+                                                 double x[3]) {
   // Create augmented matrix [A|b] for Gaussian elimination
   double aug[3][4];
   for (int i = 0; i < 3; i++) {
@@ -62,8 +63,8 @@ __device__ void solve_3x3_system(double A[3][3], double b[3], double x[3]) {
   x[0] = (aug[0][3] - aug[0][2] * x[2] - aug[0][1] * x[1]) / aug[0][0];
 }
 
-__device__ void feat10_compute_p(int elem_idx, int qp_idx,
-                                 GPU_FEAT10_Data* d_data) {
+__device__ __forceinline__ void feat10_compute_p(int elem_idx, int qp_idx,
+                                                 GPU_FEAT10_Data* d_data) {
   // Get current nodal positions for this element
   double x_nodes[10][3];  // 10 nodes × 3 coordinates
   for (int node = 0; node < 10; node++) {
@@ -143,8 +144,8 @@ __device__ void feat10_compute_p(int elem_idx, int qp_idx,
   }
 }
 
-__device__ void feat10_compute_internal_force(int elem_idx, int node_local,
-                                              GPU_FEAT10_Data* d_data) {
+__device__ __forceinline__ void feat10_compute_internal_force(
+    int elem_idx, int node_local, GPU_FEAT10_Data* d_data) {
   // Get global node index for this local node
   int global_node_idx = d_data->element_connectivity()(elem_idx, node_local);
 
@@ -204,5 +205,29 @@ __device__ __forceinline__ void feat10_clear_internal_force(
 
   if (thread_idx < d_data->n_coef * 3) {
     d_data->f_int()[thread_idx] = 0.0;
+  }
+}
+
+__device__ __forceinline__ void feat10_compute_constraint_data(
+    GPU_FEAT10_Data* d_data) {
+  int thread_idx = blockIdx.x * blockDim.x + threadIdx.x;
+
+  if (thread_idx < d_data->gpu_n_constraint() / 3) {
+    d_data->constraint()[thread_idx * 3 + 0] =
+        d_data->x12()(d_data->fixed_nodes()[thread_idx]) -
+        d_data->x12_jac()(d_data->fixed_nodes()[thread_idx]);
+    d_data->constraint()[thread_idx * 3 + 1] =
+        d_data->y12()(d_data->fixed_nodes()[thread_idx]) -
+        d_data->y12_jac()(d_data->fixed_nodes()[thread_idx]);
+    d_data->constraint()[thread_idx * 3 + 2] =
+        d_data->z12()(d_data->fixed_nodes()[thread_idx]) -
+        d_data->z12_jac()(d_data->fixed_nodes()[thread_idx]);
+
+    d_data->constraint_jac()(thread_idx * 3,
+                             d_data->fixed_nodes()[thread_idx] * 3)     = 1.0;
+    d_data->constraint_jac()(thread_idx * 3 + 1,
+                             d_data->fixed_nodes()[thread_idx] * 3 + 1) = 1.0;
+    d_data->constraint_jac()(thread_idx * 3 + 2,
+                             d_data->fixed_nodes()[thread_idx] * 3 + 2) = 1.0;
   }
 }

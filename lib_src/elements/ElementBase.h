@@ -3,7 +3,7 @@
 #include <Eigen/Dense>
 #include <vector>
 
-enum ElementType { TYPE_3243, TYPE_3443 };
+enum ElementType { TYPE_3243, TYPE_3443, TYPE_T10 };
 
 class ElementBase {
  public:

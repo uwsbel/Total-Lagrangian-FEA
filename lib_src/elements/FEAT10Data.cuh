@@ -112,26 +112,38 @@ struct GPU_FEAT10_Data : public ElementBase {
     return Eigen::Map<Eigen::VectorXd>(d_h_z12, n_coef);
   }
 
+  __device__ Eigen::Map<Eigen::VectorXd> const x12_jac() const {
+    return Eigen::Map<Eigen::VectorXd>(d_h_x12_jac, n_coef);
+  }
+
+  __device__ Eigen::Map<Eigen::VectorXd> const y12_jac() const {
+    return Eigen::Map<Eigen::VectorXd>(d_h_y12_jac, n_coef);
+  }
+
+  __device__ Eigen::Map<Eigen::VectorXd> const z12_jac() const {
+    return Eigen::Map<Eigen::VectorXd>(d_h_z12_jac, n_coef);
+  }
+
   __device__ Eigen::Map<Eigen::MatrixXd> F(int elem_idx, int qp_idx) {
     return Eigen::Map<Eigen::MatrixXd>(
-        d_F + (elem_idx * Quadrature::N_NODE_T10_10 + qp_idx) * 9, 3, 3);
+        d_F + (elem_idx * Quadrature::N_QP_T10_5 + qp_idx) * 9, 3, 3);
   }
 
   __device__ const Eigen::Map<Eigen::MatrixXd> F(int elem_idx,
                                                  int qp_idx) const {
     return Eigen::Map<Eigen::MatrixXd>(
-        d_F + (elem_idx * Quadrature::N_NODE_T10_10 + qp_idx) * 9, 3, 3);
+        d_F + (elem_idx * Quadrature::N_QP_T10_5 + qp_idx) * 9, 3, 3);
   }
 
   __device__ Eigen::Map<Eigen::MatrixXd> P(int elem_idx, int qp_idx) {
     return Eigen::Map<Eigen::MatrixXd>(
-        d_P + (elem_idx * Quadrature::N_NODE_T10_10 + qp_idx) * 9, 3, 3);
+        d_P + (elem_idx * Quadrature::N_QP_T10_5 + qp_idx) * 9, 3, 3);
   }
 
   __device__ const Eigen::Map<Eigen::MatrixXd> P(int elem_idx,
                                                  int qp_idx) const {
     return Eigen::Map<Eigen::MatrixXd>(
-        d_P + (elem_idx * Quadrature::N_NODE_T10_10 + qp_idx) * 9, 3, 3);
+        d_P + (elem_idx * Quadrature::N_QP_T10_5 + qp_idx) * 9, 3, 3);
   }
 
   __device__ Eigen::Map<Eigen::VectorXd> f_int(int global_node_idx) {
@@ -265,13 +277,15 @@ struct GPU_FEAT10_Data : public ElementBase {
 
   void RetrieveInternalForceToCPU(Eigen::VectorXd &internal_force) override;
 
+  void RetrieveExternalForceToCPU(Eigen::VectorXd &external_force);
+
   void RetrieveConstraintDataToCPU(Eigen::VectorXd &constraint) override {}
 
   void RetrieveConstraintJacobianToCPU(
       Eigen::MatrixXd &constraint_jac) override {}
 
   void RetrievePositionToCPU(Eigen::VectorXd &x12, Eigen::VectorXd &y12,
-                             Eigen::VectorXd &z12) override {}
+                             Eigen::VectorXd &z12) override;
 
   void RetrieveDeformationGradientToCPU(
       std::vector<std::vector<Eigen::MatrixXd>> &deformation_gradient)
@@ -287,12 +301,17 @@ struct GPU_FEAT10_Data : public ElementBase {
 
   // Constructor
   GPU_FEAT10_Data(int num_elements, int num_nodes)
-      : n_elem(num_elements), n_coef(num_nodes) {}
+      : n_elem(num_elements), n_coef(num_nodes) {
+    type = TYPE_T10;
+  }
 
   void Initialize() {
     HANDLE_ERROR(cudaMalloc(&d_h_x12, n_coef * sizeof(double)));
     HANDLE_ERROR(cudaMalloc(&d_h_y12, n_coef * sizeof(double)));
     HANDLE_ERROR(cudaMalloc(&d_h_z12, n_coef * sizeof(double)));
+    HANDLE_ERROR(cudaMalloc(&d_h_x12_jac, n_coef * sizeof(double)));
+    HANDLE_ERROR(cudaMalloc(&d_h_y12_jac, n_coef * sizeof(double)));
+    HANDLE_ERROR(cudaMalloc(&d_h_z12_jac, n_coef * sizeof(double)));
     HANDLE_ERROR(cudaMalloc(&d_element_connectivity,
                             n_elem * Quadrature::N_NODE_T10_10 * sizeof(int)));
 
@@ -348,6 +367,12 @@ struct GPU_FEAT10_Data : public ElementBase {
                             cudaMemcpyHostToDevice));
     HANDLE_ERROR(cudaMemcpy(d_h_z12, h_z12.data(), n_coef * sizeof(double),
                             cudaMemcpyHostToDevice));
+    HANDLE_ERROR(cudaMemcpy(d_h_x12_jac, h_x12.data(), n_coef * sizeof(double),
+                            cudaMemcpyHostToDevice));
+    HANDLE_ERROR(cudaMemcpy(d_h_y12_jac, h_y12.data(), n_coef * sizeof(double),
+                            cudaMemcpyHostToDevice));
+    HANDLE_ERROR(cudaMemcpy(d_h_z12_jac, h_z12.data(), n_coef * sizeof(double),
+                            cudaMemcpyHostToDevice));
 
     HANDLE_ERROR(cudaMemcpy(d_element_connectivity, element_connectivity.data(),
                             n_elem * Quadrature::N_NODE_T10_10 * sizeof(int),
@@ -377,9 +402,9 @@ struct GPU_FEAT10_Data : public ElementBase {
     cudaMemset(d_f_int, 0, n_coef * 3 * sizeof(double));
 
     cudaMemset(d_F, 0,
-               n_elem * Quadrature::N_NODE_T10_10 * 3 * 3 * sizeof(double));
+               n_elem * Quadrature::N_QP_T10_5 * 3 * 3 * sizeof(double));
     cudaMemset(d_P, 0,
-               n_elem * Quadrature::N_NODE_T10_10 * 3 * 3 * sizeof(double));
+               n_elem * Quadrature::N_QP_T10_5 * 3 * 3 * sizeof(double));
 
     HANDLE_ERROR(
         cudaMemcpy(d_rho0, &rho0, sizeof(double), cudaMemcpyHostToDevice));
@@ -401,13 +426,15 @@ struct GPU_FEAT10_Data : public ElementBase {
     is_setup = true;
   }
 
-  void SetExternalForce(const Eigen::VectorXd &f_ext) {
-    if (f_ext.size() != n_coef * 3) {
+  void SetExternalForce(const Eigen::VectorXd &h_f_ext) {
+    if (h_f_ext.size() != n_coef * 3) {
       std::cerr << "External force vector size mismatch." << std::endl;
       return;
     }
+
     cudaMemset(d_f_ext, 0, n_coef * 3 * sizeof(double));
-    HANDLE_ERROR(cudaMemcpy(d_f_ext, f_ext.data(), n_coef * 3 * sizeof(double),
+    HANDLE_ERROR(cudaMemcpy(d_f_ext, h_f_ext.data(),
+                            n_coef * 3 * sizeof(double),
                             cudaMemcpyHostToDevice));
   }
 
@@ -439,6 +466,11 @@ struct GPU_FEAT10_Data : public ElementBase {
     HANDLE_ERROR(cudaFree(d_h_x12));
     HANDLE_ERROR(cudaFree(d_h_y12));
     HANDLE_ERROR(cudaFree(d_h_z12));
+
+    HANDLE_ERROR(cudaFree(d_h_x12_jac));
+    HANDLE_ERROR(cudaFree(d_h_y12_jac));
+    HANDLE_ERROR(cudaFree(d_h_z12_jac));
+
     HANDLE_ERROR(cudaFree(d_element_connectivity));
     HANDLE_ERROR(cudaFree(d_node_values));
 
@@ -463,16 +495,11 @@ struct GPU_FEAT10_Data : public ElementBase {
 
     HANDLE_ERROR(cudaFree(d_data));
 
-    // // Around line 335-337 in Destroy():
-    // if (d_constraint != nullptr) {
-    //   HANDLE_ERROR(cudaFree(d_constraint));
-    // }
-    // if (d_constraint_jac != nullptr) {
-    //   HANDLE_ERROR(cudaFree(d_constraint_jac));
-    // }
-    // if (d_fixed_nodes != nullptr) {
-    //   HANDLE_ERROR(cudaFree(d_fixed_nodes));
-    // }
+    if (is_constraints_setup) {
+      HANDLE_ERROR(cudaFree(d_constraint));
+      HANDLE_ERROR(cudaFree(d_constraint_jac));
+      HANDLE_ERROR(cudaFree(d_fixed_nodes));
+    }
   }
 
   GPU_FEAT10_Data *d_data;  // Storing GPU copy of SAPGPUData
@@ -484,6 +511,7 @@ struct GPU_FEAT10_Data : public ElementBase {
  private:
   // Node positions (global, or per element)
   double *d_h_x12, *d_h_y12, *d_h_z12;  // (n_coef, 1)
+  double *d_h_x12_jac, *d_h_y12_jac, *d_h_z12_jac;
 
   // Element connectivity
   int *d_element_connectivity;  // (n_elem, 10)

@@ -587,9 +587,11 @@ struct GPU_ANCF3443_Data : public ElementBase {
 
     HANDLE_ERROR(cudaFree(d_data));
 
-    HANDLE_ERROR(cudaFree(d_constraint));
-    HANDLE_ERROR(cudaFree(d_constraint_jac));
-    HANDLE_ERROR(cudaFree(d_fixed_nodes));
+    if (is_constraints_setup) {
+      HANDLE_ERROR(cudaFree(d_constraint));
+      HANDLE_ERROR(cudaFree(d_constraint_jac));
+      HANDLE_ERROR(cudaFree(d_fixed_nodes));
+    }
   }
 
   void CalcDsDuPre();

@@ -352,7 +352,7 @@ if __name__ == "__main__":
     v_guess = v_prev.copy()
     lam_guess = np.zeros(3 * len(get_fixed_nodes(X_nodes)))
 
-    Nt = 100
+    Nt = 50
     node6_x = []  # List to store y position of node index 6
     node8_x = []  # List to store x position of node index 8
     outer_iters_per_step = []  # List to store outer iterations for each step
@@ -451,3 +451,15 @@ if __name__ == "__main__":
     plt.legend()
     plt.grid(True)
     plt.show()
+
+
+# Print final positions in the requested format
+    print("\n" + "="*50)
+    print("FINAL POSITIONS")
+    print("="*50)
+    print("x12:")
+    print(" ".join([f"{x:.17f}" for x in x_nodes[:, 0]]))
+    print("y12:")
+    print(" ".join([f"{y:.17f}" for y in x_nodes[:, 1]]))
+    print("z12:")
+    print(" ".join([f"{z:.17f}" for z in x_nodes[:, 2]]))

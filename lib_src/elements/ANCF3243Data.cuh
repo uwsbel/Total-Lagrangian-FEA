@@ -1,7 +1,3 @@
-// Corrected Include Order
-
-// STEP 1: Standard C++ and CUDA headers go FIRST.
-// Example:
 #include <cuda_runtime.h>
 
 #include <Eigen/Dense>
@@ -552,9 +548,11 @@ struct GPU_ANCF3243_Data : public ElementBase {
     HANDLE_ERROR(cudaFree(d_lambda));
     HANDLE_ERROR(cudaFree(d_mu));
 
-    HANDLE_ERROR(cudaFree(d_constraint));
-    HANDLE_ERROR(cudaFree(d_constraint_jac));
-    HANDLE_ERROR(cudaFree(d_fixed_nodes));
+    if (is_constraints_setup) {
+      HANDLE_ERROR(cudaFree(d_constraint));
+      HANDLE_ERROR(cudaFree(d_constraint_jac));
+      HANDLE_ERROR(cudaFree(d_fixed_nodes));
+    }
 
     HANDLE_ERROR(cudaFree(d_data));
   }

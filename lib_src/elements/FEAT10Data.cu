@@ -316,3 +316,32 @@ void GPU_FEAT10_Data::RetrieveInternalForceToCPU(
   HANDLE_ERROR(cudaMemcpy(internal_force.data(), d_f_int,
                           total_dofs * sizeof(double), cudaMemcpyDeviceToHost));
 }
+
+void GPU_FEAT10_Data::RetrieveExternalForceToCPU(
+    Eigen::VectorXd &external_force) {
+  // Resize to total DOFs (3 * number of nodes)
+  int total_dofs = 3 * n_coef;
+  external_force.resize(total_dofs);
+
+  // Copy from device to host
+  HANDLE_ERROR(cudaMemcpy(external_force.data(), d_f_ext,
+                          total_dofs * sizeof(double), cudaMemcpyDeviceToHost));
+}
+
+void GPU_FEAT10_Data::RetrievePositionToCPU(Eigen::VectorXd &x12,
+                                            Eigen::VectorXd &y12,
+                                            Eigen::VectorXd &z12) {
+  // Resize to total number of nodes
+  int total_nodes = n_coef;
+  x12.resize(total_nodes);
+  y12.resize(total_nodes);
+  z12.resize(total_nodes);
+
+  // Copy from device to host
+  HANDLE_ERROR(cudaMemcpy(x12.data(), d_h_x12, total_nodes * sizeof(double),
+                          cudaMemcpyDeviceToHost));
+  HANDLE_ERROR(cudaMemcpy(y12.data(), d_h_y12, total_nodes * sizeof(double),
+                          cudaMemcpyDeviceToHost));
+  HANDLE_ERROR(cudaMemcpy(z12.data(), d_h_z12, total_nodes * sizeof(double),
+                          cudaMemcpyDeviceToHost));
+}

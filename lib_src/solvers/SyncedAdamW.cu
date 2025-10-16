@@ -4,6 +4,8 @@
 #include "../elements/ANCF3243DataFunc.cuh"
 #include "../elements/ANCF3443Data.cuh"
 #include "../elements/ANCF3443DataFunc.cuh"
+#include "../elements/FEAT10Data.cuh"
+#include "../elements/FEAT10DataFunc.cuh"
 #include "SyncedAdamW.cuh"
 namespace cg = cooperative_groups;
 
@@ -23,6 +25,9 @@ __device__ double solver_grad_L(int tid, ElementBase *d_data,
     } else if (d_data->type == TYPE_3443) {
       auto *data = static_cast<GPU_ANCF3443_Data *>(d_data);
       mass_ij    = data->node_values()(node_i, node_j);
+    } else if (d_data->type == TYPE_T10) {
+      auto *data = static_cast<GPU_FEAT10_Data *>(d_data);
+      mass_ij    = data->node_values()(node_i, node_j);
     }
 
     int tid_j     = node_j * 3 + dof_i;
@@ -37,6 +42,9 @@ __device__ double solver_grad_L(int tid, ElementBase *d_data,
   } else if (d_data->type == TYPE_3443) {
     auto *data = static_cast<GPU_ANCF3443_Data *>(d_data);
     res -= (-data->f_int()(tid));
+  } else if (d_data->type == TYPE_T10) {
+    auto *data = static_cast<GPU_FEAT10_Data *>(d_data);
+    res -= (-data->f_int()(tid));
   }
 
   if (d_data->type == TYPE_3243) {
@@ -44,6 +52,9 @@ __device__ double solver_grad_L(int tid, ElementBase *d_data,
     res -= data->f_ext()(tid);
   } else if (d_data->type == TYPE_3443) {
     auto *data = static_cast<GPU_ANCF3443_Data *>(d_data);
+    res -= data->f_ext()(tid);
+  } else if (d_data->type == TYPE_T10) {
+    auto *data = static_cast<GPU_FEAT10_Data *>(d_data);
     res -= data->f_ext()(tid);
   }
 
@@ -60,7 +71,12 @@ __device__ double solver_grad_L(int tid, ElementBase *d_data,
       auto *data         = static_cast<GPU_ANCF3443_Data *>(d_data);
       constraint_jac_val = data->constraint_jac()(i, tid);
       constraint_val     = data->constraint()[i];
+    } else if (d_data->type == TYPE_T10) {
+      auto *data         = static_cast<GPU_FEAT10_Data *>(d_data);
+      constraint_jac_val = data->constraint_jac()(i, tid);
+      constraint_val     = data->constraint()[i];
     }
+
     res += constraint_jac_val *
            (d_solver->lambda_guess()[i] + *d_solver->solver_rho() *
                                               d_solver->solver_time_step() *
@@ -89,10 +105,25 @@ __global__ void one_step_adamw_kernel(ElementBase *d_data,
       d_adamw_solver->x12_prev()(tid) = data->x12()(tid);
       d_adamw_solver->y12_prev()(tid) = data->y12()(tid);
       d_adamw_solver->z12_prev()(tid) = data->z12()(tid);
+    } else if (d_data->type == TYPE_T10) {
+      auto *data                      = static_cast<GPU_FEAT10_Data *>(d_data);
+      d_adamw_solver->x12_prev()(tid) = data->x12()(tid);
+      d_adamw_solver->y12_prev()(tid) = data->y12()(tid);
+      d_adamw_solver->z12_prev()(tid) = data->z12()(tid);
     }
   }
 
   grid.sync();
+
+  if (tid == 0) {
+    // print f_ext
+    if (d_data->type == TYPE_T10) {
+      auto *data = static_cast<GPU_FEAT10_Data *>(d_data);
+      for (int i = 0; i < d_adamw_solver->get_n_coef() * 3; i++) {
+        printf("f_ext[%d] = %f\n", i, data->f_ext()(i));
+      }
+    }
+  }
 
   if (tid == 0) {
     *d_adamw_solver->inner_flag() = 0;
@@ -186,6 +217,17 @@ __global__ void one_step_adamw_kernel(ElementBase *d_data,
               data->z12()(tid) = d_adamw_solver->z12_prev()(tid) +
                                  d_adamw_solver->solver_time_step() *
                                      d_adamw_solver->v_guess()(tid * 3 + 2);
+            } else if (d_data->type == TYPE_T10) {
+              auto *data       = static_cast<GPU_FEAT10_Data *>(d_data);
+              data->x12()(tid) = d_adamw_solver->x12_prev()(tid) +
+                                 d_adamw_solver->solver_time_step() *
+                                     d_adamw_solver->v_guess()(tid * 3 + 0);
+              data->y12()(tid) = d_adamw_solver->y12_prev()(tid) +
+                                 d_adamw_solver->solver_time_step() *
+                                     d_adamw_solver->v_guess()(tid * 3 + 1);
+              data->z12()(tid) = d_adamw_solver->z12_prev()(tid) +
+                                 d_adamw_solver->solver_time_step() *
+                                     d_adamw_solver->v_guess()(tid * 3 + 2);
             }
           }
 
@@ -204,6 +246,9 @@ __global__ void one_step_adamw_kernel(ElementBase *d_data,
               } else if (d_data->type == TYPE_3443) {
                 ancf3443_compute_p(elem_idx, qp_idx,
                                    static_cast<GPU_ANCF3443_Data *>(d_data));
+              } else if (d_data->type == TYPE_T10) {
+                feat10_compute_p(elem_idx, qp_idx,
+                                 static_cast<GPU_FEAT10_Data *>(d_data));
               }
             }
           }
@@ -217,6 +262,9 @@ __global__ void one_step_adamw_kernel(ElementBase *d_data,
             } else if (d_data->type == TYPE_3443) {
               ancf3443_clear_internal_force(
                   static_cast<GPU_ANCF3443_Data *>(d_data));
+            } else if (d_data->type == TYPE_T10) {
+              feat10_clear_internal_force(
+                  static_cast<GPU_FEAT10_Data *>(d_data));
             }
           }
 
@@ -237,6 +285,9 @@ __global__ void one_step_adamw_kernel(ElementBase *d_data,
                 ancf3443_compute_internal_force(
                     elem_idx, node_idx,
                     static_cast<GPU_ANCF3443_Data *>(d_data));
+              } else if (d_data->type == TYPE_T10) {
+                feat10_compute_internal_force(
+                    elem_idx, node_idx, static_cast<GPU_FEAT10_Data *>(d_data));
               }
             }
           }
@@ -244,12 +295,16 @@ __global__ void one_step_adamw_kernel(ElementBase *d_data,
           grid.sync();
 
           if (tid < d_adamw_solver->gpu_n_constraints() / 3) {
-            if (d_data->type == TYPE_3243)
+            if (d_data->type == TYPE_3243) {
               ancf3243_compute_constraint_data(
                   static_cast<GPU_ANCF3243_Data *>(d_data));
-            else if (d_data->type == TYPE_3443)
+            } else if (d_data->type == TYPE_3443) {
               ancf3443_compute_constraint_data(
                   static_cast<GPU_ANCF3443_Data *>(d_data));
+            } else if (d_data->type == TYPE_T10) {
+              feat10_compute_constraint_data(
+                  static_cast<GPU_FEAT10_Data *>(d_data));
+            }
           }
 
           grid.sync();
@@ -331,12 +386,24 @@ __global__ void one_step_adamw_kernel(ElementBase *d_data,
           data->z12()(tid) = d_adamw_solver->z12_prev()(tid) +
                              d_adamw_solver->v_guess()(tid * 3 + 2) *
                                  d_adamw_solver->solver_time_step();
+        } else if (d_data->type == TYPE_T10) {
+          auto *data       = static_cast<GPU_FEAT10_Data *>(d_data);
+          data->x12()(tid) = d_adamw_solver->x12_prev()(tid) +
+                             d_adamw_solver->v_guess()(tid * 3 + 0) *
+                                 d_adamw_solver->solver_time_step();
+          data->y12()(tid) = d_adamw_solver->y12_prev()(tid) +
+                             d_adamw_solver->v_guess()(tid * 3 + 1) *
+                                 d_adamw_solver->solver_time_step();
+          data->z12()(tid) = d_adamw_solver->z12_prev()(tid) +
+                             d_adamw_solver->v_guess()(tid * 3 + 2) *
+                                 d_adamw_solver->solver_time_step();
         }
       }
 
       grid.sync();
 
-      // Only thread 0 handles constraint computation and dual variable updates
+      // Only thread 0 handles constraint computation and dual variable
+      // updates
 
       if (tid < d_adamw_solver->gpu_n_constraints() / 3) {
         // Compute constraints at new position
@@ -346,6 +413,9 @@ __global__ void one_step_adamw_kernel(ElementBase *d_data,
         } else if (d_data->type == TYPE_3443) {
           ancf3443_compute_constraint_data(
               static_cast<GPU_ANCF3443_Data *>(d_data));
+        } else if (d_data->type == TYPE_T10) {
+          feat10_compute_constraint_data(
+              static_cast<GPU_FEAT10_Data *>(d_data));
         }
       }
 
@@ -358,6 +428,9 @@ __global__ void one_step_adamw_kernel(ElementBase *d_data,
             constraint_val = data->constraint()[i];
           } else if (d_data->type == TYPE_3443) {
             auto *data     = static_cast<GPU_ANCF3443_Data *>(d_data);
+            constraint_val = data->constraint()[i];
+          } else if (d_data->type == TYPE_T10) {
+            auto *data     = static_cast<GPU_FEAT10_Data *>(d_data);
             constraint_val = data->constraint()[i];
           }
           d_adamw_solver->lambda_guess()[i] +=
@@ -374,6 +447,9 @@ __global__ void one_step_adamw_kernel(ElementBase *d_data,
             constraint_val = data->constraint()[i];
           } else if (d_data->type == TYPE_3443) {
             auto *data     = static_cast<GPU_ANCF3443_Data *>(d_data);
+            constraint_val = data->constraint()[i];
+          } else if (d_data->type == TYPE_T10) {
+            auto *data     = static_cast<GPU_FEAT10_Data *>(d_data);
             constraint_val = data->constraint()[i];
           }
           norm_constraint += constraint_val * constraint_val;
@@ -408,6 +484,17 @@ __global__ void one_step_adamw_kernel(ElementBase *d_data,
                              d_adamw_solver->solver_time_step();
     } else if (d_data->type == TYPE_3443) {
       auto *data       = static_cast<GPU_ANCF3443_Data *>(d_data);
+      data->x12()(tid) = d_adamw_solver->x12_prev()(tid) +
+                         d_adamw_solver->v_guess()(tid * 3 + 0) *
+                             d_adamw_solver->solver_time_step();
+      data->y12()(tid) = d_adamw_solver->y12_prev()(tid) +
+                         d_adamw_solver->v_guess()(tid * 3 + 1) *
+                             d_adamw_solver->solver_time_step();
+      data->z12()(tid) = d_adamw_solver->z12_prev()(tid) +
+                         d_adamw_solver->v_guess()(tid * 3 + 2) *
+                             d_adamw_solver->solver_time_step();
+    } else if (d_data->type == TYPE_T10) {
+      auto *data       = static_cast<GPU_FEAT10_Data *>(d_data);
       data->x12()(tid) = d_adamw_solver->x12_prev()(tid) +
                          d_adamw_solver->v_guess()(tid * 3 + 0) *
                              d_adamw_solver->solver_time_step();
