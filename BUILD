@@ -33,7 +33,7 @@ cuda_library(
     hdrs = ["lib_src/elements/ANCF3243Data.cuh",
             "lib_src/elements/ANCF3243DataFunc.cuh",
             "lib_src/elements/ElementBase.h"],
-    copts = ["--std=c++17", "-O3"],
+    copts = ["--std=c++17", "-O3", "--use_fast_math", "--extra-device-vectorization"],
     linkopts = ["-lcusolver","-lcublas"],
     deps = [
         ":cpu_utils",
@@ -48,7 +48,7 @@ cuda_library(
     hdrs = ["lib_src/elements/ANCF3443Data.cuh",
             "lib_src/elements/ANCF3443DataFunc.cuh",
             "lib_src/elements/ElementBase.h"],
-    copts = ["--std=c++17", "-O3"],
+    copts = ["--std=c++17", "-O3", "--use_fast_math", "--extra-device-vectorization"],
     linkopts = ["-lcusolver","-lcublas"],
     deps = [
         ":cpu_utils",
@@ -63,7 +63,7 @@ cuda_library(
     hdrs = ["lib_src/elements/FEAT10Data.cuh",
             "lib_src/elements/FEAT10DataFunc.cuh",
             "lib_src/elements/ElementBase.h"],
-    copts = ["--std=c++17", "-O3"],
+    copts = ["--std=c++17", "-O3", "--use_fast_math", "--extra-device-vectorization"],
     linkopts = ["-lcusolver","-lcublas"],
     deps = [
         ":cpu_utils",
@@ -84,7 +84,7 @@ cuda_library(
         "lib_src/solvers/SolverBase.h",
         "lib_src/solvers/SyncedNesterov.cuh",
     ],
-    copts = ["--std=c++17", "-O3"],
+    copts = ["--std=c++17", "-O3", "--use_fast_math", "--extra-device-vectorization"],
     deps = [
         ":ANCF3243Data",
         ":ANCF3443Data",
@@ -104,7 +104,7 @@ cuda_library(
         "lib_src/solvers/SolverBase.h",
         "lib_src/solvers/SyncedAdamW.cuh",
     ],
-    copts = ["--std=c++17", "-O3"],
+    copts = ["--std=c++17", "-O3", "--use_fast_math", "--extra-device-vectorization"],
     deps = [
         ":ANCF3243Data",
         ":ANCF3443Data",

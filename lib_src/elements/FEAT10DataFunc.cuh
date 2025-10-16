@@ -12,6 +12,7 @@
 __device__ __forceinline__ void solve_3x3_system(double A[3][3], double b[3],
                                                  double x[3]) {
   // Create augmented matrix [A|b] for Gaussian elimination
+
   double aug[3][4];
   for (int i = 0; i < 3; i++) {
     for (int j = 0; j < 3; j++) {
@@ -67,6 +68,10 @@ __device__ __forceinline__ void feat10_compute_p(int elem_idx, int qp_idx,
                                                  GPU_FEAT10_Data* d_data) {
   // Get current nodal positions for this element
   double x_nodes[10][3];  // 10 nodes × 3 coordinates
+
+  // clang-format off
+
+  #pragma unroll
   for (int node = 0; node < 10; node++) {
     int global_node_idx = d_data->element_connectivity()(elem_idx, node);
     x_nodes[node][0]    = d_data->x12()(global_node_idx);  // x coordinate
@@ -77,6 +82,7 @@ __device__ __forceinline__ void feat10_compute_p(int elem_idx, int qp_idx,
   // Get precomputed shape function gradients for this element and QP
   // grad_N[a][i] = ∂N_a/∂x_i (physical coordinates)
   double grad_N[10][3];
+  #pragma unroll
   for (int a = 0; a < 10; a++) {
     grad_N[a][0] = d_data->grad_N_ref(elem_idx, qp_idx)(a, 0);  // ∂N_a/∂x
     grad_N[a][1] = d_data->grad_N_ref(elem_idx, qp_idx)(a, 1);  // ∂N_a/∂y
@@ -88,6 +94,7 @@ __device__ __forceinline__ void feat10_compute_p(int elem_idx, int qp_idx,
 
   // Compute F = sum_a (x_nodes[a] ⊗ grad_N[a])
   // F[i][j] = sum_a (x_nodes[a][i] * grad_N[a][j])
+  #pragma unroll
   for (int a = 0; a < 10; a++) {
     for (int i = 0; i < 3; i++) {    // Current position components
       for (int j = 0; j < 3; j++) {  // Gradient components
@@ -98,8 +105,11 @@ __device__ __forceinline__ void feat10_compute_p(int elem_idx, int qp_idx,
 
   // Compute F^T * F
   double FtF[3][3] = {{0.0}};
+  #pragma unroll
   for (int i = 0; i < 3; i++) {
+    #pragma unroll
     for (int j = 0; j < 3; j++) {
+      #pragma unroll
       for (int k = 0; k < 3; k++) {
         FtF[i][j] += F[k][i] * F[k][j];  // F^T[i][k] * F[k][j]
       }
@@ -111,8 +121,11 @@ __device__ __forceinline__ void feat10_compute_p(int elem_idx, int qp_idx,
 
   // Compute F * F^T
   double FFt[3][3] = {{0.0}};
+  #pragma unroll
   for (int i = 0; i < 3; i++) {
+    #pragma unroll
     for (int j = 0; j < 3; j++) {
+      #pragma unroll
       for (int k = 0; k < 3; k++) {
         FFt[i][j] += F[i][k] * F[j][k];  // F[i][k] * F^T[k][j]
       }
@@ -121,6 +134,7 @@ __device__ __forceinline__ void feat10_compute_p(int elem_idx, int qp_idx,
 
   // Compute F * F^T * F
   double FFtF[3][3] = {{0.0}};
+  #pragma unroll
   for (int i = 0; i < 3; i++) {
     for (int j = 0; j < 3; j++) {
       for (int k = 0; k < 3; k++) {
@@ -136,12 +150,16 @@ __device__ __forceinline__ void feat10_compute_p(int elem_idx, int qp_idx,
   // Compute P = λ*(0.5*tr(F^T*F) - 1.5)*F + μ*(F*F^T*F - F)
   double lambda_factor = lambda * (0.5 * trFtF - 1.5);
 
+  #pragma unroll
   for (int i = 0; i < 3; i++) {
+    #pragma unroll
     for (int j = 0; j < 3; j++) {
       d_data->P(elem_idx, qp_idx)(i, j) =
           lambda_factor * F[i][j] + mu * (FFtF[i][j] - F[i][j]);
     }
   }
+
+  // clang-format on
 }
 
 __device__ __forceinline__ void feat10_compute_internal_force(
@@ -152,7 +170,10 @@ __device__ __forceinline__ void feat10_compute_internal_force(
   // Initialize force accumulator for this node (3 components)
   double f_node[3] = {0.0, 0.0, 0.0};
 
+  // clang-format off
+
   // Loop over all quadrature points for this element
+  #pragma unroll
   for (int qp_idx = 0; qp_idx < Quadrature::N_QP_T10_5; qp_idx++) {
     // Get precomputed P matrix for this element and quadrature point
     // P is the 3x3 first Piola-Kirchhoff stress tensor
@@ -178,6 +199,7 @@ __device__ __forceinline__ void feat10_compute_internal_force(
     // Compute P @ grad_N (matrix-vector multiply)
     // f_contribution[i] = sum_j(P[i][j] * grad_N[j])
     double f_contribution[3];
+    #pragma unroll
     for (int i = 0; i < 3; i++) {
       f_contribution[i] = 0.0;
       for (int j = 0; j < 3; j++) {
@@ -186,6 +208,7 @@ __device__ __forceinline__ void feat10_compute_internal_force(
     }
 
     // Accumulate: f[node_local] += (P @ grad_N[node_local]) * dV
+    #pragma unroll
     for (int i = 0; i < 3; i++) {
       f_node[i] += f_contribution[i] * dV;
     }
@@ -193,10 +216,13 @@ __device__ __forceinline__ void feat10_compute_internal_force(
 
   // Assemble into global internal force vector using atomic operations
   // Each thread handles one node, so we need atomicAdd for thread safety
+  #pragma unroll
   for (int i = 0; i < 3; i++) {
     int global_dof_idx = 3 * global_node_idx + i;
     atomicAdd(&(d_data->f_int()(global_dof_idx)), f_node[i]);
   }
+
+  // clang-format on
 }
 
 __device__ __forceinline__ void feat10_clear_internal_force(
