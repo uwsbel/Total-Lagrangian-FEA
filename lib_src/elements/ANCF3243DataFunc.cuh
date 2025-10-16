@@ -288,3 +288,12 @@ __device__ __forceinline__ void ancf3243_compute_constraint_data(
                              d_data->fixed_nodes()[thread_idx] * 3 + 2) = 1.0;
   }
 }
+
+__device__ __forceinline__ void ancf3243_clear_internal_force(
+    GPU_ANCF3243_Data *d_data) {
+  int thread_idx = blockIdx.x * blockDim.x + threadIdx.x;
+
+  if (thread_idx < d_data->n_coef * 3) {
+    d_data->f_int()[thread_idx] = 0.0;
+  }
+}

@@ -247,6 +247,18 @@ __global__ void one_step_nesterov_kernel(
 
           grid.sync();
 
+          if (tid < d_nesterov_solver->get_n_coef() * 3) {
+            if (d_data->type == TYPE_3243) {
+              ancf3243_clear_internal_force(
+                  static_cast<GPU_ANCF3243_Data *>(d_data));
+            } else if (d_data->type == TYPE_3443) {
+              ancf3443_clear_internal_force(
+                  static_cast<GPU_ANCF3443_Data *>(d_data));
+            }
+          }
+
+          grid.sync();
+
           if (tid < d_nesterov_solver->get_n_beam() *
                         d_nesterov_solver->gpu_n_shape()) {
             for (int idx = tid; idx < d_nesterov_solver->get_n_beam() *
