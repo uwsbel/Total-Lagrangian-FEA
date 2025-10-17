@@ -262,8 +262,6 @@ __global__ void one_step_adamw_kernel(ElementBase *d_data,
 
           grid.sync();
 
-          unsigned long long t0 = clock64();
-
           if (tid < d_adamw_solver->get_n_coef() * 3) {
             if (d_data->type == TYPE_3243) {
               ancf3243_clear_internal_force(
