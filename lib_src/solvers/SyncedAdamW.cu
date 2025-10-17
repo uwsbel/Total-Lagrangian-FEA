@@ -154,10 +154,11 @@ __global__ void one_step_adamw_kernel(ElementBase *d_data,
       double beta2        = d_adamw_solver->solver_beta2();
       double eps          = d_adamw_solver->solver_eps();
       double weight_decay = d_adamw_solver->solver_weight_decay();
+      int conv_check_interval =
+          d_adamw_solver->solver_convergence_check_interval();
 
       if (tid == 0) {
-        *d_adamw_solver->prev_norm_g() = 0.0;
-        *d_adamw_solver->norm_g()      = 0.0;
+        *d_adamw_solver->norm_g() = 0.0;
       }
 
       grid.sync();
@@ -173,7 +174,7 @@ __global__ void one_step_adamw_kernel(ElementBase *d_data,
         grid.sync();
 
         if (*d_adamw_solver->inner_flag() == 0) {
-          if (tid == 0) {
+          if (tid == 0 && inner_iter % conv_check_interval == 0) {
             printf("outer iter: %d, inner iter: %d\n", outer_iter, inner_iter);
           }
 
@@ -261,6 +262,8 @@ __global__ void one_step_adamw_kernel(ElementBase *d_data,
 
           grid.sync();
 
+          unsigned long long t0 = clock64();
+
           if (tid < d_adamw_solver->get_n_coef() * 3) {
             if (d_data->type == TYPE_3243) {
               ancf3243_clear_internal_force(
@@ -322,7 +325,7 @@ __global__ void one_step_adamw_kernel(ElementBase *d_data,
 
           grid.sync();
 
-          if (tid == 0) {
+          if (tid == 0 && inner_iter % conv_check_interval == 0) {
             // calculate norm of g
             double norm_g = 0.0;
             for (int i = 0; i < 3 * d_adamw_solver->get_n_coef(); i++) {
@@ -344,17 +347,12 @@ __global__ void one_step_adamw_kernel(ElementBase *d_data,
             // Use the same convergence criterion as Python AdamW
             if (*d_adamw_solver->norm_g() <=
                 d_adamw_solver->solver_inner_tol() * (1.0 + norm_v_curr)) {
-              printf("Converged: gnorm=%.17f <= tol*(1+||v||)=%.17f\n",
-                     *d_adamw_solver->norm_g(),
-                     d_adamw_solver->solver_inner_tol() * (1.0 + norm_v_curr));
+              // printf("Converged: gnorm=%.17f <= tol*(1+||v||)=%.17f\n",
+              //        *d_adamw_solver->norm_g(),
+              //        d_adamw_solver->solver_inner_tol() * (1.0 +
+              //        norm_v_curr));
               *d_adamw_solver->inner_flag() = 1;
             }
-          }
-
-          grid.sync();
-
-          if (tid == 0) {
-            *d_adamw_solver->prev_norm_g() = *d_adamw_solver->norm_g();
           }
 
           grid.sync();
@@ -461,10 +459,10 @@ __global__ void one_step_adamw_kernel(ElementBase *d_data,
           norm_constraint += constraint_val * constraint_val;
         }
         norm_constraint = sqrt(norm_constraint);
-        printf("norm_constraint: %.17f\n", norm_constraint);
+        // printf("norm_constraint: %.17f\n", norm_constraint);
 
         if (norm_constraint < d_adamw_solver->solver_outer_tol()) {
-          printf("Converged constraint: %.17f\n", norm_constraint);
+          // printf("Converged constraint: %.17f\n", norm_constraint);
           *d_adamw_solver->outer_flag() = 1;
         }
       }
