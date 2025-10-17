@@ -16,23 +16,34 @@ __device__ double solver_grad_L(int tid, ElementBase *d_data,
   int node_i = tid / 3;
   int dof_i  = tid % 3;
 
-  // Mass matrix contribution
-  for (int node_j = 0; node_j < d_solver->get_n_coef(); node_j++) {
-    double mass_ij = 0.0;
-    if (d_data->type == TYPE_3243) {
-      auto *data = static_cast<GPU_ANCF3243_Data *>(d_data);
-      mass_ij    = data->node_values()(node_i, node_j);
-    } else if (d_data->type == TYPE_3443) {
-      auto *data = static_cast<GPU_ANCF3443_Data *>(d_data);
-      mass_ij    = data->node_values()(node_i, node_j);
-    } else if (d_data->type == TYPE_T10) {
-      auto *data = static_cast<GPU_FEAT10_Data *>(d_data);
-      mass_ij    = data->node_values()(node_i, node_j);
-    }
+  const int n_coef    = d_solver->get_n_coef();
+  const double inv_dt = 1.0 / d_solver->solver_time_step();
 
-    int tid_j     = node_j * 3 + dof_i;
-    double v_diff = d_solver->v_guess()[tid_j] - d_solver->v_prev()[tid_j];
-    res += mass_ij * v_diff / d_solver->solver_time_step();
+  // Mass matrix contribution - cast outside loop
+  if (d_data->type == TYPE_3243) {
+    auto *data = static_cast<GPU_ANCF3243_Data *>(d_data);
+    for (int node_j = 0; node_j < n_coef; node_j++) {
+      double mass_ij = data->node_values()(node_i, node_j);
+      int tid_j      = node_j * 3 + dof_i;
+      double v_diff  = d_solver->v_guess()[tid_j] - d_solver->v_prev()[tid_j];
+      res += mass_ij * v_diff * inv_dt;
+    }
+  } else if (d_data->type == TYPE_3443) {
+    auto *data = static_cast<GPU_ANCF3443_Data *>(d_data);
+    for (int node_j = 0; node_j < n_coef; node_j++) {
+      double mass_ij = data->node_values()(node_i, node_j);
+      int tid_j      = node_j * 3 + dof_i;
+      double v_diff  = d_solver->v_guess()[tid_j] - d_solver->v_prev()[tid_j];
+      res += mass_ij * v_diff * inv_dt;
+    }
+  } else if (d_data->type == TYPE_T10) {
+    auto *data = static_cast<GPU_FEAT10_Data *>(d_data);
+    for (int node_j = 0; node_j < n_coef; node_j++) {
+      double mass_ij = data->node_values()(node_i, node_j);
+      int tid_j      = node_j * 3 + dof_i;
+      double v_diff  = d_solver->v_guess()[tid_j] - d_solver->v_prev()[tid_j];
+      res += mass_ij * v_diff * inv_dt;
+    }
   }
 
   // Internal force
@@ -58,29 +69,34 @@ __device__ double solver_grad_L(int tid, ElementBase *d_data,
     res -= data->f_ext()(tid);
   }
 
-  // Constraints
-  for (int i = 0; i < d_solver->gpu_n_constraints(); i++) {
-    double constraint_jac_val = 0.0;
-    double constraint_val     = 0.0;
+  // Constraints - cast once, hoist invariants
+  const int n_constraints = d_solver->gpu_n_constraints();
+  const double rho_dt = *d_solver->solver_rho() * d_solver->solver_time_step();
 
-    if (d_data->type == TYPE_3243) {
-      auto *data         = static_cast<GPU_ANCF3243_Data *>(d_data);
-      constraint_jac_val = data->constraint_jac()(i, tid);
-      constraint_val     = data->constraint()[i];
-    } else if (d_data->type == TYPE_3443) {
-      auto *data         = static_cast<GPU_ANCF3443_Data *>(d_data);
-      constraint_jac_val = data->constraint_jac()(i, tid);
-      constraint_val     = data->constraint()[i];
-    } else if (d_data->type == TYPE_T10) {
-      auto *data         = static_cast<GPU_FEAT10_Data *>(d_data);
-      constraint_jac_val = data->constraint_jac()(i, tid);
-      constraint_val     = data->constraint()[i];
+  if (d_data->type == TYPE_3243) {
+    auto *data = static_cast<GPU_ANCF3243_Data *>(d_data);
+    for (int i = 0; i < n_constraints; i++) {
+      double constraint_jac_val = data->constraint_jac()(i, tid);
+      double constraint_val     = data->constraint()[i];
+      res += constraint_jac_val *
+             (d_solver->lambda_guess()[i] + rho_dt * constraint_val);
     }
-
-    res += constraint_jac_val *
-           (d_solver->lambda_guess()[i] + *d_solver->solver_rho() *
-                                              d_solver->solver_time_step() *
-                                              constraint_val);
+  } else if (d_data->type == TYPE_3443) {
+    auto *data = static_cast<GPU_ANCF3443_Data *>(d_data);
+    for (int i = 0; i < n_constraints; i++) {
+      double constraint_jac_val = data->constraint_jac()(i, tid);
+      double constraint_val     = data->constraint()[i];
+      res += constraint_jac_val *
+             (d_solver->lambda_guess()[i] + rho_dt * constraint_val);
+    }
+  } else if (d_data->type == TYPE_T10) {
+    auto *data = static_cast<GPU_FEAT10_Data *>(d_data);
+    for (int i = 0; i < n_constraints; i++) {
+      double constraint_jac_val = data->constraint_jac()(i, tid);
+      double constraint_val     = data->constraint()[i];
+      res += constraint_jac_val *
+             (d_solver->lambda_guess()[i] + rho_dt * constraint_val);
+    }
   }
 
   return res;
@@ -138,10 +154,11 @@ __global__ void one_step_adamw_kernel(ElementBase *d_data,
       double beta2        = d_adamw_solver->solver_beta2();
       double eps          = d_adamw_solver->solver_eps();
       double weight_decay = d_adamw_solver->solver_weight_decay();
+      int conv_check_interval =
+          d_adamw_solver->solver_convergence_check_interval();
 
       if (tid == 0) {
-        *d_adamw_solver->prev_norm_g() = 0.0;
-        *d_adamw_solver->norm_g()      = 0.0;
+        *d_adamw_solver->norm_g() = 0.0;
       }
 
       grid.sync();
@@ -157,7 +174,7 @@ __global__ void one_step_adamw_kernel(ElementBase *d_data,
         grid.sync();
 
         if (*d_adamw_solver->inner_flag() == 0) {
-          if (tid == 0) {
+          if (tid == 0 && inner_iter % conv_check_interval == 0) {
             printf("outer iter: %d, inner iter: %d\n", outer_iter, inner_iter);
           }
 
@@ -306,7 +323,7 @@ __global__ void one_step_adamw_kernel(ElementBase *d_data,
 
           grid.sync();
 
-          if (tid == 0) {
+          if (tid == 0 && inner_iter % conv_check_interval == 0) {
             // calculate norm of g
             double norm_g = 0.0;
             for (int i = 0; i < 3 * d_adamw_solver->get_n_coef(); i++) {
@@ -328,17 +345,12 @@ __global__ void one_step_adamw_kernel(ElementBase *d_data,
             // Use the same convergence criterion as Python AdamW
             if (*d_adamw_solver->norm_g() <=
                 d_adamw_solver->solver_inner_tol() * (1.0 + norm_v_curr)) {
-              printf("Converged: gnorm=%.17f <= tol*(1+||v||)=%.17f\n",
-                     *d_adamw_solver->norm_g(),
-                     d_adamw_solver->solver_inner_tol() * (1.0 + norm_v_curr));
+              // printf("Converged: gnorm=%.17f <= tol*(1+||v||)=%.17f\n",
+              //        *d_adamw_solver->norm_g(),
+              //        d_adamw_solver->solver_inner_tol() * (1.0 +
+              //        norm_v_curr));
               *d_adamw_solver->inner_flag() = 1;
             }
-          }
-
-          grid.sync();
-
-          if (tid == 0) {
-            *d_adamw_solver->prev_norm_g() = *d_adamw_solver->norm_g();
           }
 
           grid.sync();
@@ -445,10 +457,10 @@ __global__ void one_step_adamw_kernel(ElementBase *d_data,
           norm_constraint += constraint_val * constraint_val;
         }
         norm_constraint = sqrt(norm_constraint);
-        printf("norm_constraint: %.17f\n", norm_constraint);
+        // printf("norm_constraint: %.17f\n", norm_constraint);
 
         if (norm_constraint < d_adamw_solver->solver_outer_tol()) {
-          printf("Converged constraint: %.17f\n", norm_constraint);
+          // printf("Converged constraint: %.17f\n", norm_constraint);
           *d_adamw_solver->outer_flag() = 1;
         }
       }

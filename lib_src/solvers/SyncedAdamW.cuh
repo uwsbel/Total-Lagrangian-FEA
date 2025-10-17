@@ -14,6 +14,7 @@ struct SyncedAdamWParams {
   double inner_tol, outer_tol, rho;
   int max_outer, max_inner;
   double time_step;
+  int convergence_check_interval;
 };
 
 class SyncedAdamWSolver : public SolverBase {
@@ -54,7 +55,6 @@ class SyncedAdamWSolver : public SolverBase {
     cudaMalloc(&d_v_next_, n_coef_ * 3 * sizeof(double));
     cudaMalloc(&d_lambda_guess_, n_constraints_ * sizeof(double));
     cudaMalloc(&d_g_, n_coef_ * 3 * sizeof(double));
-    cudaMalloc(&d_prev_norm_g_, sizeof(double));
     cudaMalloc(&d_norm_g_, sizeof(double));
     cudaMalloc(&d_inner_flag_, sizeof(int));
     cudaMalloc(&d_outer_flag_, sizeof(int));
@@ -65,6 +65,7 @@ class SyncedAdamWSolver : public SolverBase {
     cudaMalloc(&d_max_inner_, sizeof(int));
     cudaMalloc(&d_time_step_, sizeof(double));
     cudaMalloc(&d_solver_rho_, sizeof(double));
+    cudaMalloc(&d_convergence_check_interval_, sizeof(int));
 
     cudaMalloc(&d_adamw_solver_, sizeof(SyncedAdamWSolver));
 
@@ -86,7 +87,6 @@ class SyncedAdamWSolver : public SolverBase {
     cudaFree(d_v_next_);
     cudaFree(d_lambda_guess_);
     cudaFree(d_g_);
-    cudaFree(d_prev_norm_g_);
     cudaFree(d_norm_g_);
     cudaFree(d_inner_flag_);
     cudaFree(d_outer_flag_);
@@ -97,6 +97,7 @@ class SyncedAdamWSolver : public SolverBase {
     cudaFree(d_max_inner_);
     cudaFree(d_time_step_);
     cudaFree(d_solver_rho_);
+    cudaFree(d_convergence_check_interval_);
 
     cudaFree(d_lr_);
     cudaFree(d_beta1_);
@@ -132,6 +133,8 @@ class SyncedAdamWSolver : public SolverBase {
     cudaMemcpy(d_time_step_, &p->time_step, sizeof(double),
                cudaMemcpyHostToDevice);
     cudaMemcpy(d_solver_rho_, &p->rho, sizeof(double), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_convergence_check_interval_, &p->convergence_check_interval,
+               sizeof(int), cudaMemcpyHostToDevice);
 
     cudaMemset(d_v_guess_, 0, n_coef_ * 3 * sizeof(double));
     cudaMemset(d_v_prev_, 0, n_coef_ * 3 * sizeof(double));
@@ -185,9 +188,6 @@ class SyncedAdamWSolver : public SolverBase {
     return n_shape_;
   }
 
-  __device__ double *prev_norm_g() {
-    return d_prev_norm_g_;
-  }
   __device__ double *norm_g() {
     return d_norm_g_;
   }
@@ -234,6 +234,10 @@ class SyncedAdamWSolver : public SolverBase {
     return *d_weight_decay_;
   }
 
+  __device__ int solver_convergence_check_interval() const {
+    return *d_convergence_check_interval_;
+  }
+
   __device__ Eigen::Map<Eigen::VectorXd> x12_prev() {
     return Eigen::Map<Eigen::VectorXd>(d_x12_prev, n_coef_);
   }
@@ -268,11 +272,14 @@ class SyncedAdamWSolver : public SolverBase {
 
   double *d_v_guess_, *d_v_prev_, *d_v_k_, *d_v_next_;
   double *d_lambda_guess_, *d_g_;
-  double *d_prev_norm_g_, *d_norm_g_;
+  double *d_norm_g_;
   int *d_inner_flag_, *d_outer_flag_;
 
   double *d_lr_, *d_beta1_, *d_beta2_, *d_eps_, *d_weight_decay_;
 
   double *d_alpha_, *d_inner_tol_, *d_outer_tol_, *d_time_step_, *d_solver_rho_;
+
+  int *d_convergence_check_interval_;
+
   int *d_max_inner_, *d_max_outer_;
 };
