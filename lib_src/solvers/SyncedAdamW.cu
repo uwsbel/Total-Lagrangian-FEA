@@ -16,23 +16,34 @@ __device__ double solver_grad_L(int tid, ElementBase *d_data,
   int node_i = tid / 3;
   int dof_i  = tid % 3;
 
-  // Mass matrix contribution
-  for (int node_j = 0; node_j < d_solver->get_n_coef(); node_j++) {
-    double mass_ij = 0.0;
-    if (d_data->type == TYPE_3243) {
-      auto *data = static_cast<GPU_ANCF3243_Data *>(d_data);
-      mass_ij    = data->node_values()(node_i, node_j);
-    } else if (d_data->type == TYPE_3443) {
-      auto *data = static_cast<GPU_ANCF3443_Data *>(d_data);
-      mass_ij    = data->node_values()(node_i, node_j);
-    } else if (d_data->type == TYPE_T10) {
-      auto *data = static_cast<GPU_FEAT10_Data *>(d_data);
-      mass_ij    = data->node_values()(node_i, node_j);
-    }
+  const int n_coef    = d_solver->get_n_coef();
+  const double inv_dt = 1.0 / d_solver->solver_time_step();
 
-    int tid_j     = node_j * 3 + dof_i;
-    double v_diff = d_solver->v_guess()[tid_j] - d_solver->v_prev()[tid_j];
-    res += mass_ij * v_diff / d_solver->solver_time_step();
+  // Mass matrix contribution - cast outside loop
+  if (d_data->type == TYPE_3243) {
+    auto *data = static_cast<GPU_ANCF3243_Data *>(d_data);
+    for (int node_j = 0; node_j < n_coef; node_j++) {
+      double mass_ij = data->node_values()(node_i, node_j);
+      int tid_j      = node_j * 3 + dof_i;
+      double v_diff  = d_solver->v_guess()[tid_j] - d_solver->v_prev()[tid_j];
+      res += mass_ij * v_diff * inv_dt;
+    }
+  } else if (d_data->type == TYPE_3443) {
+    auto *data = static_cast<GPU_ANCF3443_Data *>(d_data);
+    for (int node_j = 0; node_j < n_coef; node_j++) {
+      double mass_ij = data->node_values()(node_i, node_j);
+      int tid_j      = node_j * 3 + dof_i;
+      double v_diff  = d_solver->v_guess()[tid_j] - d_solver->v_prev()[tid_j];
+      res += mass_ij * v_diff * inv_dt;
+    }
+  } else if (d_data->type == TYPE_T10) {
+    auto *data = static_cast<GPU_FEAT10_Data *>(d_data);
+    for (int node_j = 0; node_j < n_coef; node_j++) {
+      double mass_ij = data->node_values()(node_i, node_j);
+      int tid_j      = node_j * 3 + dof_i;
+      double v_diff  = d_solver->v_guess()[tid_j] - d_solver->v_prev()[tid_j];
+      res += mass_ij * v_diff * inv_dt;
+    }
   }
 
   // Internal force
@@ -58,29 +69,34 @@ __device__ double solver_grad_L(int tid, ElementBase *d_data,
     res -= data->f_ext()(tid);
   }
 
-  // Constraints
-  for (int i = 0; i < d_solver->gpu_n_constraints(); i++) {
-    double constraint_jac_val = 0.0;
-    double constraint_val     = 0.0;
+  // Constraints - cast once, hoist invariants
+  const int n_constraints = d_solver->gpu_n_constraints();
+  const double rho_dt = *d_solver->solver_rho() * d_solver->solver_time_step();
 
-    if (d_data->type == TYPE_3243) {
-      auto *data         = static_cast<GPU_ANCF3243_Data *>(d_data);
-      constraint_jac_val = data->constraint_jac()(i, tid);
-      constraint_val     = data->constraint()[i];
-    } else if (d_data->type == TYPE_3443) {
-      auto *data         = static_cast<GPU_ANCF3443_Data *>(d_data);
-      constraint_jac_val = data->constraint_jac()(i, tid);
-      constraint_val     = data->constraint()[i];
-    } else if (d_data->type == TYPE_T10) {
-      auto *data         = static_cast<GPU_FEAT10_Data *>(d_data);
-      constraint_jac_val = data->constraint_jac()(i, tid);
-      constraint_val     = data->constraint()[i];
+  if (d_data->type == TYPE_3243) {
+    auto *data = static_cast<GPU_ANCF3243_Data *>(d_data);
+    for (int i = 0; i < n_constraints; i++) {
+      double constraint_jac_val = data->constraint_jac()(i, tid);
+      double constraint_val     = data->constraint()[i];
+      res += constraint_jac_val *
+             (d_solver->lambda_guess()[i] + rho_dt * constraint_val);
     }
-
-    res += constraint_jac_val *
-           (d_solver->lambda_guess()[i] + *d_solver->solver_rho() *
-                                              d_solver->solver_time_step() *
-                                              constraint_val);
+  } else if (d_data->type == TYPE_3443) {
+    auto *data = static_cast<GPU_ANCF3443_Data *>(d_data);
+    for (int i = 0; i < n_constraints; i++) {
+      double constraint_jac_val = data->constraint_jac()(i, tid);
+      double constraint_val     = data->constraint()[i];
+      res += constraint_jac_val *
+             (d_solver->lambda_guess()[i] + rho_dt * constraint_val);
+    }
+  } else if (d_data->type == TYPE_T10) {
+    auto *data = static_cast<GPU_FEAT10_Data *>(d_data);
+    for (int i = 0; i < n_constraints; i++) {
+      double constraint_jac_val = data->constraint_jac()(i, tid);
+      double constraint_val     = data->constraint()[i];
+      res += constraint_jac_val *
+             (d_solver->lambda_guess()[i] + rho_dt * constraint_val);
+    }
   }
 
   return res;
