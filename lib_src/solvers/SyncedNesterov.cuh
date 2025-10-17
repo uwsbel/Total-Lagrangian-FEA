@@ -3,6 +3,7 @@
 #include "../elements/ANCF3243Data.cuh"
 #include "../elements/ANCF3443Data.cuh"
 #include "../elements/ElementBase.h"
+#include "../elements/FEAT10Data.cuh"
 #include "SolverBase.h"
 
 // this is a true first order Nesterov method
@@ -15,21 +16,27 @@ struct SyncedNesterovParams {
 };
 
 class SyncedNesterovSolver : public SolverBase {
-public:
+ public:
   SyncedNesterovSolver(ElementBase *data, int n_constraints)
-      : n_coef_(data->get_n_coef()), n_beam_(data->get_n_beam()),
+      : n_coef_(data->get_n_coef()),
+        n_beam_(data->get_n_beam()),
         n_constraints_(n_constraints) {
     // Type-based casting to get the correct d_data from derived class
     if (data->type == TYPE_3243) {
       auto *typed_data = static_cast<GPU_ANCF3243_Data *>(data);
-      d_data_ = typed_data->d_data; // This accesses the derived class's d_data
+      d_data_ = typed_data->d_data;  // This accesses the derived class's d_data
       n_total_qp_ = Quadrature::N_TOTAL_QP_3_2_2;
-      n_shape_ = Quadrature::N_SHAPE_3243;
+      n_shape_    = Quadrature::N_SHAPE_3243;
     } else if (data->type == TYPE_3443) {
       auto *typed_data = static_cast<GPU_ANCF3443_Data *>(data);
-      d_data_ = typed_data->d_data; // This accesses the derived class's d_data
+      d_data_ = typed_data->d_data;  // This accesses the derived class's d_data
       n_total_qp_ = Quadrature::N_TOTAL_QP_4_4_3;
-      n_shape_ = Quadrature::N_SHAPE_3443;
+      n_shape_    = Quadrature::N_SHAPE_3443;
+    } else if (data->type == TYPE_T10) {
+      auto *typed_data = static_cast<GPU_FEAT10_Data *>(data);
+      d_data_ = typed_data->d_data;  // This accesses the derived class's d_data
+      n_total_qp_ = Quadrature::N_QP_T10_5;
+      n_shape_    = Quadrature::N_NODE_T10_10;
     } else {
       d_data_ = nullptr;
       std::cerr << "Unknown element type!" << std::endl;
@@ -149,21 +156,49 @@ public:
     return Eigen::Map<Eigen::VectorXd>(d_g_, 3 * n_coef_);
   }
 
-  __device__ int gpu_n_constraints() { return n_constraints_; }
-  __device__ int gpu_n_total_qp() { return n_total_qp_; }
-  __device__ int gpu_n_shape() { return n_shape_; }
+  __device__ int gpu_n_constraints() {
+    return n_constraints_;
+  }
+  __device__ int gpu_n_total_qp() {
+    return n_total_qp_;
+  }
+  __device__ int gpu_n_shape() {
+    return n_shape_;
+  }
 
-  __device__ double *prev_norm_g() { return d_prev_norm_g_; }
-  __device__ double *norm_g() { return d_norm_g_; }
-  __device__ int *inner_flag() { return d_inner_flag_; }
-  __device__ int *outer_flag() { return d_outer_flag_; }
-  __device__ double *solver_rho() { return d_solver_rho_; }
-  __device__ double solver_alpha() const { return *d_alpha_; }
-  __device__ double solver_inner_tol() const { return *d_inner_tol_; }
-  __device__ double solver_outer_tol() const { return *d_outer_tol_; }
-  __device__ int solver_max_outer() const { return *d_max_outer_; }
-  __device__ int solver_max_inner() const { return *d_max_inner_; }
-  __device__ double solver_time_step() const { return *d_time_step_; }
+  __device__ double *prev_norm_g() {
+    return d_prev_norm_g_;
+  }
+  __device__ double *norm_g() {
+    return d_norm_g_;
+  }
+  __device__ int *inner_flag() {
+    return d_inner_flag_;
+  }
+  __device__ int *outer_flag() {
+    return d_outer_flag_;
+  }
+  __device__ double *solver_rho() {
+    return d_solver_rho_;
+  }
+  __device__ double solver_alpha() const {
+    return *d_alpha_;
+  }
+  __device__ double solver_inner_tol() const {
+    return *d_inner_tol_;
+  }
+  __device__ double solver_outer_tol() const {
+    return *d_outer_tol_;
+  }
+  __device__ int solver_max_outer() const {
+    return *d_max_outer_;
+  }
+  __device__ int solver_max_inner() const {
+    return *d_max_inner_;
+  }
+  __device__ double solver_time_step() const {
+    return *d_time_step_;
+  }
 
   __device__ Eigen::Map<Eigen::VectorXd> x12_prev() {
     return Eigen::Map<Eigen::VectorXd>(d_x12_prev, n_coef_);
@@ -176,14 +211,20 @@ public:
   }
 #endif
 
-  __host__ __device__ int get_n_coef() const { return n_coef_; }
-  __host__ __device__ int get_n_beam() const { return n_beam_; }
+  __host__ __device__ int get_n_coef() const {
+    return n_coef_;
+  }
+  __host__ __device__ int get_n_beam() const {
+    return n_beam_;
+  }
 
   void OneStepNesterov();
 
-  void Solve() override { OneStepNesterov(); }
+  void Solve() override {
+    OneStepNesterov();
+  }
 
-private:
+ private:
   ElementBase *d_data_;
   SyncedNesterovSolver *d_nesterov_solver_;
   int n_total_qp_, n_shape_;

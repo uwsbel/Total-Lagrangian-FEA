@@ -15,4 +15,4 @@ bool loadMatrixCSV(Eigen::MatrixXd &matrix, const std::string &filepath);
  */
 bool saveMatrixCSV(const Eigen::MatrixXd &matrix, const std::string &filepath);
 
-} // namespace CSVUtils
+}  // namespace CSVUtils
