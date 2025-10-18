@@ -306,6 +306,7 @@ cc_test(
     ],
     data = glob([
         "data/utest/**/*",
+        "data/meshes/**",
     ]),
     deps = [
         ":FEAT10Data",
