@@ -2,6 +2,7 @@
 
 #include <Eigen/Dense>
 
+#include "../lib_src/elements/ANCF3243Data.cuh"
 #include "../lib_src/elements/ANCF3443Data.cuh"
 #include "../lib_src/elements/FEAT10Data.cuh"
 #include "../lib_utils/cpu_utils.h"
@@ -228,4 +229,101 @@ TEST_F(TestSparseMass, ANCF_3443_SparseMassMatrix) {
   }
 
   gpu_3443_data.ConvertToCSRMass();
+}
+
+TEST_F(TestSparseMass, ANCF_3243_SparseMassMatrix) {
+  // initialize GPU data structure
+  int n_beam = 3;  // this is working
+  GPU_ANCF3243_Data gpu_3243_data(n_beam);
+  gpu_3243_data.Initialize();
+
+  double L = 2.0, W = 1.0, H = 1.0;
+
+  const double E    = 7e8;   // Young's modulus
+  const double nu   = 0.33;  // Poisson's ratio
+  const double rho0 = 2700;  // Density
+
+  std::cout << "Number of beams: " << gpu_3243_data.get_n_beam() << std::endl;
+  std::cout << "Total nodes: " << gpu_3243_data.get_n_coef() << std::endl;
+
+  // Compute B_inv on CPU
+  Eigen::MatrixXd h_B_inv(Quadrature::N_SHAPE_3243, Quadrature::N_SHAPE_3243);
+  ANCFCPUUtils::ANCF3243_B12_matrix(2.0, 1.0, 1.0, h_B_inv,
+                                    Quadrature::N_SHAPE_3243);
+
+  // Generate nodal coordinates for multiple beams - using Eigen vectors
+  Eigen::VectorXd h_x12(gpu_3243_data.get_n_coef());
+  Eigen::VectorXd h_y12(gpu_3243_data.get_n_coef());
+  Eigen::VectorXd h_z12(gpu_3243_data.get_n_coef());
+  Eigen::VectorXd h_x12_jac(gpu_3243_data.get_n_coef());
+  Eigen::VectorXd h_y12_jac(gpu_3243_data.get_n_coef());
+  Eigen::VectorXd h_z12_jac(gpu_3243_data.get_n_coef());
+
+  ANCFCPUUtils::ANCF3243_generate_beam_coordinates(n_beam, h_x12, h_y12, h_z12);
+
+  // print h_x12
+  for (int i = 0; i < gpu_3243_data.get_n_coef(); i++) {
+    printf("h_x12(%d) = %f\n", i, h_x12(i));
+  }
+
+  // print h_y12
+  for (int i = 0; i < gpu_3243_data.get_n_coef(); i++) {
+    printf("h_y12(%d) = %f\n", i, h_y12(i));
+  }
+
+  // print h_z12
+  for (int i = 0; i < gpu_3243_data.get_n_coef(); i++) {
+    printf("h_z12(%d) = %f\n", i, h_z12(i));
+  }
+
+  h_x12_jac = h_x12;
+  h_y12_jac = h_y12;
+  h_z12_jac = h_z12;
+
+  // Calculate offsets - using Eigen vectors
+  Eigen::VectorXi h_offset_start(gpu_3243_data.get_n_beam());
+  Eigen::VectorXi h_offset_end(gpu_3243_data.get_n_beam());
+  ANCFCPUUtils::ANCF3243_calculate_offsets(gpu_3243_data.get_n_beam(),
+                                           h_offset_start, h_offset_end);
+
+  // ======================================================================
+
+  // set fixed nodal unknowns
+  Eigen::VectorXi h_fixed_nodes(4);
+  h_fixed_nodes << 0, 1, 2, 3;
+  gpu_3243_data.SetNodalFixed(h_fixed_nodes);
+
+  // set external force
+  Eigen::VectorXd h_f_ext(gpu_3243_data.get_n_coef() * 3);
+  // set external force applied at the end of the beam to be 0,0,3100
+  h_f_ext.setZero();
+  h_f_ext(3 * gpu_3243_data.get_n_coef() - 10) = 3100.0;
+  gpu_3243_data.SetExternalForce(h_f_ext);
+
+  // set up the system
+  gpu_3243_data.Setup(L, W, H, rho0, nu, E, h_B_inv, Quadrature::gauss_xi_m_6,
+                      Quadrature::gauss_xi_3, Quadrature::gauss_eta_2,
+                      Quadrature::gauss_zeta_2, Quadrature::weight_xi_m_6,
+                      Quadrature::weight_xi_3, Quadrature::weight_eta_2,
+                      Quadrature::weight_zeta_2, h_x12, h_y12, h_z12,
+                      h_offset_start, h_offset_end);
+
+  // ======================================================================
+
+  gpu_3243_data.CalcDsDuPre();
+  gpu_3243_data.PrintDsDuPre();
+  gpu_3243_data.CalcMassMatrix();
+
+  Eigen::MatrixXd mass_matrix;
+  gpu_3243_data.RetrieveMassMatrixToCPU(mass_matrix);
+
+  std::cout << "mass matrix:" << std::endl;
+  for (int i = 0; i < mass_matrix.rows(); i++) {
+    for (int j = 0; j < mass_matrix.cols(); j++) {
+      std::cout << mass_matrix(i, j) << " ";
+    }
+    std::cout << std::endl;
+  }
+
+  gpu_3243_data.ConvertToCSRMass();
 }

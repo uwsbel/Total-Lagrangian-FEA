@@ -107,6 +107,10 @@ int main() {
     std::cout << std::endl;
   }
 
+  gpu_3243_data.ConvertToCSRMass();
+
+  std::cout << "done ConvertToCSRMass" << std::endl;
+
   // // Set highest precision for cout
   std::cout << std::fixed << std::setprecision(17);
 

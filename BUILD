@@ -41,7 +41,7 @@ cuda_library(
             "lib_src/elements/ANCF3243DataFunc.cuh",
             "lib_src/elements/ElementBase.h"],
     copts = ["--std=c++17", "-O3", "--use_fast_math", "--extra-device-vectorization"],
-    linkopts = ["-lcusolver","-lcublas"],
+    linkopts = ["-lcusolver","-lcublas", "-lcusparse"],
     deps = [
         ":cpu_utils",
         "@eigen//:eigen",
@@ -137,6 +137,11 @@ cc_binary(
     name = "test_ancf3243_nesterov",
     srcs = ["lib_bin/test_ancf3243_nesterov.cc"],
     copts = ["--std=c++17"],
+    linkopts = [
+        "-L/usr/local/cuda/lib64",
+        "-lcusparse",
+        "-lcudart",
+    ],
     deps = [
         ":ANCF3243Data",
         ":cpu_utils",
@@ -168,6 +173,11 @@ cc_binary(
     name = "test_ancf3243_adamw",
     srcs = ["lib_bin/test_ancf3243_adamw.cc"],
     copts = ["--std=c++17"],
+    linkopts = [
+        "-L/usr/local/cuda/lib64",
+        "-lcusparse",
+        "-lcudart",
+    ],
     deps = [
         ":ANCF3243Data",
         ":cpu_utils",
@@ -257,6 +267,11 @@ cc_test(
     name = "utest_3243",
     srcs = ["lib_utest/utest_3243.cc"],
     copts = ["--std=c++17"],
+    linkopts = [
+        "-L/usr/local/cuda/lib64",
+        "-lcusparse",
+        "-lcudart",                
+    ],
     data = glob([
         "data/utest/**/*",
     ]),
@@ -295,6 +310,7 @@ cc_test(
     deps = [
         ":FEAT10Data",
         ":ANCF3443Data",
+        ":ANCF3243Data",
         ":cpu_utils",
         "@eigen//:eigen",
         "@googletest//:gtest_main",
