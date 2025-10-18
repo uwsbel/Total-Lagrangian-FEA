@@ -555,7 +555,7 @@ for step in range(Nt):
         lam = lam_guess.copy()
 
         max_outer = 5
-        max_inner = 400
+        max_inner = 500
         # ← base tol (choose your target accuracy here)
         inner_tol_base = 1e-1
         outer_tol = 1e-6

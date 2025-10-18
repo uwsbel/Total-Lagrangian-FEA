@@ -22,24 +22,54 @@ __device__ double solver_grad_L(int tid, ElementBase *d_data,
   // Mass matrix contribution - cast outside loop
   if (d_data->type == TYPE_3243) {
     auto *data = static_cast<GPU_ANCF3243_Data *>(d_data);
-    for (int node_j = 0; node_j < n_coef; node_j++) {
-      double mass_ij = data->node_values()(node_i, node_j);
+
+    // Get base pointers ONCE - avoid repeated function calls
+    int *offsets   = data->csr_offsets();
+    int *columns   = data->csr_columns();
+    double *values = data->csr_values();
+
+    int row_start = offsets[node_i];
+    int row_end   = offsets[node_i + 1];
+
+    for (int idx = row_start; idx < row_end; idx++) {
+      int node_j     = columns[idx];
+      double mass_ij = values[idx];
       int tid_j      = node_j * 3 + dof_i;
       double v_diff  = d_solver->v_guess()[tid_j] - d_solver->v_prev()[tid_j];
       res += mass_ij * v_diff * inv_dt;
     }
   } else if (d_data->type == TYPE_3443) {
     auto *data = static_cast<GPU_ANCF3443_Data *>(d_data);
-    for (int node_j = 0; node_j < n_coef; node_j++) {
-      double mass_ij = data->node_values()(node_i, node_j);
+
+    // Get base pointers ONCE - avoid repeated function calls
+    int *offsets   = data->csr_offsets();
+    int *columns   = data->csr_columns();
+    double *values = data->csr_values();
+
+    int row_start = offsets[node_i];
+    int row_end   = offsets[node_i + 1];
+
+    for (int idx = row_start; idx < row_end; idx++) {
+      int node_j     = columns[idx];
+      double mass_ij = values[idx];
       int tid_j      = node_j * 3 + dof_i;
       double v_diff  = d_solver->v_guess()[tid_j] - d_solver->v_prev()[tid_j];
       res += mass_ij * v_diff * inv_dt;
     }
   } else if (d_data->type == TYPE_T10) {
     auto *data = static_cast<GPU_FEAT10_Data *>(d_data);
-    for (int node_j = 0; node_j < n_coef; node_j++) {
-      double mass_ij = data->node_values()(node_i, node_j);
+
+    // Get base pointers ONCE - avoid repeated function calls
+    int *offsets   = data->csr_offsets();
+    int *columns   = data->csr_columns();
+    double *values = data->csr_values();
+
+    int row_start = offsets[node_i];
+    int row_end   = offsets[node_i + 1];
+
+    for (int idx = row_start; idx < row_end; idx++) {
+      int node_j     = columns[idx];
+      double mass_ij = values[idx];
       int tid_j      = node_j * 3 + dof_i;
       double v_diff  = d_solver->v_guess()[tid_j] - d_solver->v_prev()[tid_j];
       res += mass_ij * v_diff * inv_dt;

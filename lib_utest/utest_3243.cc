@@ -79,6 +79,9 @@ TEST(Test3243, MassMatrix2Beams) {
       computed_mass_matrix - computed_mass_matrix.transpose();
   EXPECT_LT(diff.norm(), tolerance);
 
+  // TODO: in the end we will just use sparse, no more dense mass matrix
+  gpu_3243_data.ConvertToCSRMass();
+
   gpu_3243_data.Destroy();
 }
 
@@ -142,6 +145,9 @@ TEST(Test3243, MassMatrix3Beams) {
   Eigen::MatrixXd diff =
       computed_mass_matrix - computed_mass_matrix.transpose();
   EXPECT_LT(diff.norm(), tolerance);
+
+  // TODO: in the end we will just use sparse, no more dense mass matrix
+  gpu_3243_data.ConvertToCSRMass();
 
   gpu_3243_data.Destroy();
 }

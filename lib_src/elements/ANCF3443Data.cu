@@ -231,6 +231,142 @@ void GPU_ANCF3443_Data::CalcMassMatrix() {
   cudaDeviceSynchronize();
 }
 
+void GPU_ANCF3443_Data::ConvertToCSRMass() {
+  int num_rows   = n_coef;
+  int num_cols   = n_coef;
+  int ld         = num_cols;
+  int dense_size = ld * num_rows;
+
+  int *d_csr_offsets_temp;
+  int *d_csr_columns_temp;
+  double *d_csr_values_temp;
+  int *d_nnz_temp;
+
+  // Device memory management
+  double *d_dense = d_node_values;
+  HANDLE_ERROR(
+      cudaMalloc((void **)&d_csr_offsets_temp, (num_rows + 1) * sizeof(int)));
+
+  cusparseHandle_t handle = NULL;
+  cusparseSpMatDescr_t matB;
+  cusparseDnMatDescr_t matA;
+  void *dBuffer     = NULL;
+  size_t bufferSize = 0;
+  CHECK_CUSPARSE(cusparseCreate(&handle));
+
+  // Create dense matrix A
+  CHECK_CUSPARSE(cusparseCreateDnMat(&matA, num_rows, num_cols, ld, d_dense,
+                                     CUDA_R_64F, CUSPARSE_ORDER_ROW));
+  // Create sparse matrix B in CSR format
+  CHECK_CUSPARSE(cusparseCreateCsr(&matB, num_rows, num_cols, 0,
+                                   d_csr_offsets_temp, NULL, NULL,
+                                   CUSPARSE_INDEX_32I, CUSPARSE_INDEX_32I,
+                                   CUSPARSE_INDEX_BASE_ZERO, CUDA_R_64F));
+
+  // // allocate an external buffer if needed
+  CHECK_CUSPARSE(cusparseDenseToSparse_bufferSize(
+      handle, matA, matB, CUSPARSE_DENSETOSPARSE_ALG_DEFAULT, &bufferSize));
+  HANDLE_ERROR(cudaMalloc(&dBuffer, bufferSize));
+
+  // execute Sparse to Dense conversion
+  CHECK_CUSPARSE(cusparseDenseToSparse_analysis(
+      handle, matA, matB, CUSPARSE_DENSETOSPARSE_ALG_DEFAULT, dBuffer));
+  // get number of non-zero elements
+  int64_t num_rows_tmp, num_cols_tmp, nnz;
+  CHECK_CUSPARSE(
+      cusparseSpMatGetSize(matB, &num_rows_tmp, &num_cols_tmp, &nnz));
+
+  // copy over nnz
+  HANDLE_ERROR(cudaMalloc((void **)&d_nnz_temp, sizeof(int)));
+  HANDLE_ERROR(
+      cudaMemcpy(d_nnz_temp, &nnz, sizeof(int), cudaMemcpyHostToDevice));
+
+  int *h_csr_offsets   = new int[num_rows + 1];
+  int *h_csr_columns   = new int[nnz];
+  double *h_csr_values = new double[nnz];
+
+  // allocate CSR column indices and values
+  HANDLE_ERROR(cudaMalloc((void **)&d_csr_columns_temp, nnz * sizeof(int)));
+  HANDLE_ERROR(cudaMalloc((void **)&d_csr_values_temp, nnz * sizeof(double)));
+  // reset offsets, column indices, and values pointers
+  CHECK_CUSPARSE(cusparseCsrSetPointers(matB, d_csr_offsets_temp,
+                                        d_csr_columns_temp, d_csr_values_temp));
+  CHECK_CUSPARSE(cusparseDenseToSparse_convert(
+      handle, matA, matB, CUSPARSE_DENSETOSPARSE_ALG_DEFAULT, dBuffer));
+
+  HANDLE_ERROR(cudaMemcpy(h_csr_offsets, d_csr_offsets_temp,
+                          (num_rows + 1) * sizeof(int),
+                          cudaMemcpyDeviceToHost));
+  HANDLE_ERROR(cudaMemcpy(h_csr_columns, d_csr_columns_temp, nnz * sizeof(int),
+                          cudaMemcpyDeviceToHost));
+  HANDLE_ERROR(cudaMemcpy(h_csr_values, d_csr_values_temp, nnz * sizeof(double),
+                          cudaMemcpyDeviceToHost));
+
+  // print h_csr_offsets, h_csr_columns, h_csr_values
+  std::cout << "CSR Offsets:" << std::endl;
+  for (int i = 0; i <= num_rows; i++) {
+    std::cout << h_csr_offsets[i] << " ";
+  }
+  std::cout << std::endl;
+  std::cout << "CSR Columns:" << std::endl;
+  for (int i = 0; i < nnz; i++) {
+    std::cout << h_csr_columns[i] << " ";
+  }
+  std::cout << std::endl;
+  std::cout << "CSR Values:" << std::endl;
+  for (int i = 0; i < nnz; i++) {
+    std::cout << std::setprecision(6) << h_csr_values[i] << " ";
+  }
+  std::cout << std::endl;
+
+  // copy all temp arrays to class members
+  HANDLE_ERROR(cudaMalloc((void **)&d_csr_columns, nnz * sizeof(int)));
+  HANDLE_ERROR(cudaMalloc((void **)&d_csr_values, nnz * sizeof(double)));
+  HANDLE_ERROR(
+      cudaMalloc((void **)&d_csr_offsets, (num_rows + 1) * sizeof(int)));
+  HANDLE_ERROR(cudaMalloc((void **)&d_nnz, sizeof(int)));
+
+  HANDLE_ERROR(cudaMemcpy(d_csr_offsets, d_csr_offsets_temp,
+                          (num_rows + 1) * sizeof(int),
+                          cudaMemcpyDeviceToDevice));
+  HANDLE_ERROR(cudaMemcpy(d_csr_columns, d_csr_columns_temp, nnz * sizeof(int),
+                          cudaMemcpyDeviceToDevice));
+  HANDLE_ERROR(cudaMemcpy(d_csr_values, d_csr_values_temp, nnz * sizeof(double),
+                          cudaMemcpyDeviceToDevice));
+  HANDLE_ERROR(
+      cudaMemcpy(d_nnz, d_nnz_temp, sizeof(int), cudaMemcpyDeviceToDevice));
+
+  // destroy matrix/vector descriptors
+  CHECK_CUSPARSE(cusparseDestroyDnMat(matA));
+  CHECK_CUSPARSE(cusparseDestroySpMat(matB));
+  CHECK_CUSPARSE(cusparseDestroy(handle));
+  HANDLE_ERROR(cudaFree(dBuffer));
+
+  delete[] h_csr_offsets;
+  delete[] h_csr_columns;
+  delete[] h_csr_values;
+
+  // Free temporary allocations
+  HANDLE_ERROR(cudaFree(d_csr_offsets_temp));
+  HANDLE_ERROR(cudaFree(d_csr_columns_temp));
+  HANDLE_ERROR(cudaFree(d_csr_values_temp));
+  HANDLE_ERROR(cudaFree(d_nnz_temp));
+
+  // Flash GPU data back to cpu, update pointer then flash back
+  GPU_ANCF3443_Data *h_data_flash =
+      (GPU_ANCF3443_Data *)malloc(sizeof(GPU_ANCF3443_Data));
+  HANDLE_ERROR(cudaMemcpy(h_data_flash, d_data, sizeof(GPU_ANCF3443_Data),
+                          cudaMemcpyDeviceToHost));
+  h_data_flash->d_csr_offsets = d_csr_offsets;
+  h_data_flash->d_csr_columns = d_csr_columns;
+  h_data_flash->d_csr_values  = d_csr_values;
+  h_data_flash->d_nnz         = d_nnz;
+  HANDLE_ERROR(cudaMemcpy(d_data, h_data_flash, sizeof(GPU_ANCF3443_Data),
+                          cudaMemcpyHostToDevice));
+
+  free(h_data_flash);
+}
+
 void GPU_ANCF3443_Data::RetrieveMassMatrixToCPU(Eigen::MatrixXd &mass_matrix) {
   // Allocate host memory for all quadrature points
   const int total_size = n_coef * n_coef;

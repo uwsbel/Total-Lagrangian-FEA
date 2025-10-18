@@ -23,7 +23,7 @@ int main() {
   int plot_target_node;
   int n_nodes, n_elems;
 
-  MESH_RESOLUTION resolution = RES_4;
+  MESH_RESOLUTION resolution = RES_0;
 
   if (resolution == RES_0) {
     n_nodes = ANCFCPUUtils::FEAT10_read_nodes(
@@ -174,7 +174,11 @@ int main() {
   std::cout << "mass_matrix (size: " << mass_matrix.rows() << " x "
             << mass_matrix.cols() << "):" << std::endl;
 
-  // Use Eigen's IOFormat for cleaner output
+  gpu_t10_data.ConvertToCSRMass();
+
+  std::cout << "done ConvertToCSRMass" << std::endl;
+
+  // // Use Eigen's IOFormat for cleaner output
   Eigen::IOFormat CleanFmt(4, 0, ", ", "\n", "[", "]");
   std::cout << mass_matrix.format(CleanFmt) << std::endl;
 

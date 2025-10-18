@@ -1,9 +1,12 @@
 #include <cuda_runtime.h>
+#include <cuda_runtime_api.h>
+#include <cusparse.h>
 
 #include <Eigen/Dense>
 #include <iostream>
 #include <vector>
 
+#include "../../lib_utils/cuda_utils.h"
 #include "ElementBase.h"
 
 // Add this include at the top:
@@ -245,6 +248,21 @@ struct GPU_FEAT10_Data : public ElementBase {
     return d_node_values + j + i * n_coef;
   }
 
+  __device__ int *csr_offsets() {
+    return d_csr_offsets;
+  }
+
+  __device__ int *csr_columns() {
+    return d_csr_columns;
+  }
+
+  __device__ double *csr_values() {
+    return d_csr_values;
+  }
+
+  __device__ int nnz() {
+    return *d_nnz;
+  }
 #endif
 
   __host__ __device__ int get_n_elem() const {
@@ -266,6 +284,8 @@ struct GPU_FEAT10_Data : public ElementBase {
   void CalcDnDuPre();
 
   void CalcMassMatrix() override;
+
+  void ConvertToCSRMass();
 
   void CalcInternalForce() override;
 
@@ -473,6 +493,10 @@ struct GPU_FEAT10_Data : public ElementBase {
 
     HANDLE_ERROR(cudaFree(d_element_connectivity));
     HANDLE_ERROR(cudaFree(d_node_values));
+    HANDLE_ERROR(cudaFree(d_csr_offsets));
+    HANDLE_ERROR(cudaFree(d_csr_columns));
+    HANDLE_ERROR(cudaFree(d_csr_values));
+    HANDLE_ERROR(cudaFree(d_nnz));
 
     HANDLE_ERROR(cudaFree(d_tet5pt_x));
     HANDLE_ERROR(cudaFree(d_tet5pt_y));
@@ -518,6 +542,9 @@ struct GPU_FEAT10_Data : public ElementBase {
 
   // Mass Matrix
   double *d_node_values;
+  int *d_csr_offsets, *d_csr_columns;
+  double *d_csr_values;
+  int *d_nnz;
 
   // Quadrature points and weights
   double *d_tet5pt_x, *d_tet5pt_y, *d_tet5pt_z;

@@ -22,24 +22,54 @@ __device__ double solver_grad_L(int tid, ElementBase *d_data,
   // Mass matrix contribution - cast outside loop
   if (d_data->type == TYPE_3243) {
     auto *data = static_cast<GPU_ANCF3243_Data *>(d_data);
-    for (int node_j = 0; node_j < n_coef; node_j++) {
-      double mass_ij = data->node_values()(node_i, node_j);
+
+    // Get base pointers ONCE - avoid repeated function calls
+    int *offsets   = data->csr_offsets();
+    int *columns   = data->csr_columns();
+    double *values = data->csr_values();
+
+    int row_start = offsets[node_i];
+    int row_end   = offsets[node_i + 1];
+
+    for (int idx = row_start; idx < row_end; idx++) {
+      int node_j     = columns[idx];
+      double mass_ij = values[idx];
       int tid_j      = node_j * 3 + dof_i;
       double v_diff  = d_solver->v_guess()[tid_j] - d_solver->v_prev()[tid_j];
       res += mass_ij * v_diff * inv_dt;
     }
   } else if (d_data->type == TYPE_3443) {
     auto *data = static_cast<GPU_ANCF3443_Data *>(d_data);
-    for (int node_j = 0; node_j < n_coef; node_j++) {
-      double mass_ij = data->node_values()(node_i, node_j);
+
+    // Get base pointers ONCE - avoid repeated function calls
+    int *offsets   = data->csr_offsets();
+    int *columns   = data->csr_columns();
+    double *values = data->csr_values();
+
+    int row_start = offsets[node_i];
+    int row_end   = offsets[node_i + 1];
+
+    for (int idx = row_start; idx < row_end; idx++) {
+      int node_j     = columns[idx];
+      double mass_ij = values[idx];
       int tid_j      = node_j * 3 + dof_i;
       double v_diff  = d_solver->v_guess()[tid_j] - d_solver->v_prev()[tid_j];
       res += mass_ij * v_diff * inv_dt;
     }
   } else if (d_data->type == TYPE_T10) {
     auto *data = static_cast<GPU_FEAT10_Data *>(d_data);
-    for (int node_j = 0; node_j < n_coef; node_j++) {
-      double mass_ij = data->node_values()(node_i, node_j);
+
+    // Get base pointers ONCE - avoid repeated function calls
+    int *offsets   = data->csr_offsets();
+    int *columns   = data->csr_columns();
+    double *values = data->csr_values();
+
+    int row_start = offsets[node_i];
+    int row_end   = offsets[node_i + 1];
+
+    for (int idx = row_start; idx < row_end; idx++) {
+      int node_j     = columns[idx];
+      double mass_ij = values[idx];
       int tid_j      = node_j * 3 + dof_i;
       double v_diff  = d_solver->v_guess()[tid_j] - d_solver->v_prev()[tid_j];
       res += mass_ij * v_diff * inv_dt;
@@ -181,17 +211,17 @@ __global__ void one_step_adamw_kernel(ElementBase *d_data,
           // Step 1: Each thread computes its look-ahead velocity component
           double y = 0.0;  // Declare y here
           if (tid < d_adamw_solver->get_n_coef() * 3) {
-            lr = lr * 0.998;
+            double g_tid       = d_adamw_solver->g()(tid);
+            double v_guess_tid = d_adamw_solver->v_guess()(tid);
+            lr                 = lr * 0.998;
             t += 1;
 
-            m_t = beta1 * m_t + (1 - beta1) * d_adamw_solver->g()(tid);
-            v_t = beta2 * v_t + (1 - beta2) * d_adamw_solver->g()(tid) *
-                                    d_adamw_solver->g()(tid);
+            m_t          = beta1 * m_t + (1 - beta1) * g_tid;
+            v_t          = beta2 * v_t + (1 - beta2) * g_tid * g_tid;
             double m_hat = m_t / (1 - pow(beta1, t));
             double v_hat = v_t / (1 - pow(beta2, t));
-            y            = d_adamw_solver->v_guess()(tid) -
-                lr * (m_hat / (sqrt(v_hat) + eps) +
-                      weight_decay * d_adamw_solver->v_guess()(tid));
+            y            = v_guess_tid -
+                lr * (m_hat / (sqrt(v_hat) + eps) + weight_decay * v_guess_tid);
 
             // Store look-ahead velocity temporarily
             d_adamw_solver->v_guess()(tid) =
@@ -345,10 +375,9 @@ __global__ void one_step_adamw_kernel(ElementBase *d_data,
             // Use the same convergence criterion as Python AdamW
             if (*d_adamw_solver->norm_g() <=
                 d_adamw_solver->solver_inner_tol() * (1.0 + norm_v_curr)) {
-              // printf("Converged: gnorm=%.17f <= tol*(1+||v||)=%.17f\n",
-              //        *d_adamw_solver->norm_g(),
-              //        d_adamw_solver->solver_inner_tol() * (1.0 +
-              //        norm_v_curr));
+              printf("Converged: gnorm=%.17f <= tol*(1+||v||)=%.17f\n",
+                     *d_adamw_solver->norm_g(),
+                     d_adamw_solver->solver_inner_tol() * (1.0 + norm_v_curr));
               *d_adamw_solver->inner_flag() = 1;
             }
           }

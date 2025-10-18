@@ -23,6 +23,13 @@ cc_library(
     deps = ["@eigen//:eigen"],
     visibility = ["//visibility:public"],
 )
+
+cc_library(
+    name = "cuda_utils",
+    hdrs = ["lib_utils/cuda_utils.h"],
+    copts = ["--std=c++17"],
+    visibility = ["//visibility:public"],
+)
 # ========================================
 
 # ========================================
@@ -34,10 +41,11 @@ cuda_library(
             "lib_src/elements/ANCF3243DataFunc.cuh",
             "lib_src/elements/ElementBase.h"],
     copts = ["--std=c++17", "-O3", "--use_fast_math", "--extra-device-vectorization"],
-    linkopts = ["-lcusolver","-lcublas"],
+    linkopts = ["-lcusolver","-lcublas", "-lcusparse"],
     deps = [
         ":cpu_utils",
-        "@eigen//:eigen"
+        "@eigen//:eigen",
+        ":cuda_utils"
     ],
     visibility = ["//visibility:public"],
 )
@@ -49,10 +57,11 @@ cuda_library(
             "lib_src/elements/ANCF3443DataFunc.cuh",
             "lib_src/elements/ElementBase.h"],
     copts = ["--std=c++17", "-O3", "--use_fast_math", "--extra-device-vectorization"],
-    linkopts = ["-lcusolver","-lcublas"],
+    linkopts = ["-lcusolver","-lcublas","-lcusparse"],
     deps = [
         ":cpu_utils",
-        "@eigen//:eigen"
+        "@eigen//:eigen",
+        ":cuda_utils"
     ],
     visibility = ["//visibility:public"],
 )
@@ -64,10 +73,11 @@ cuda_library(
             "lib_src/elements/FEAT10DataFunc.cuh",
             "lib_src/elements/ElementBase.h"],
     copts = ["--std=c++17", "-O3", "--use_fast_math", "--extra-device-vectorization"],
-    linkopts = ["-lcusolver","-lcublas"],
+    linkopts = ["-lcusolver","-lcublas", "-lcusparse"],
     deps = [
         ":cpu_utils",
-        "@eigen//:eigen"
+        "@eigen//:eigen",
+        ":cuda_utils"
     ],
     visibility = ["//visibility:public"],
 )
@@ -82,7 +92,7 @@ cuda_library(
     ],
     hdrs = [
         "lib_src/solvers/SolverBase.h",
-        "lib_src/solvers/SyncedNesterov.cuh",
+        "lib_src/solvers/SyncedNesterov.cuh"
     ],
     copts = ["--std=c++17", "-O3", "--use_fast_math", "--extra-device-vectorization"],
     deps = [
@@ -90,6 +100,7 @@ cuda_library(
         ":ANCF3443Data",
         ":FEAT10Data",
         ":cpu_utils",
+        ":cuda_utils",
         "@eigen//:eigen",
     ],
     visibility = ["//visibility:public"],
@@ -109,6 +120,7 @@ cuda_library(
         ":ANCF3243Data",
         ":ANCF3443Data",
         ":FEAT10Data",
+        ":cuda_utils",
         ":cpu_utils",
         "@eigen//:eigen",
     ],
@@ -125,6 +137,11 @@ cc_binary(
     name = "test_ancf3243_nesterov",
     srcs = ["lib_bin/test_ancf3243_nesterov.cc"],
     copts = ["--std=c++17"],
+    linkopts = [
+        "-L/usr/local/cuda/lib64",
+        "-lcusparse",
+        "-lcudart",
+    ],
     deps = [
         ":ANCF3243Data",
         ":cpu_utils",
@@ -138,6 +155,11 @@ cc_binary(
     name = "test_ancf3443_nesterov",
     srcs = ["lib_bin/test_ancf3443_nesterov.cc"],
     copts = ["--std=c++17"],
+    linkopts = [
+        "-L/usr/local/cuda/lib64",
+        "-lcusparse",
+        "-lcudart",
+    ],
     deps = [
         ":ANCF3443Data",
         ":cpu_utils",
@@ -151,6 +173,11 @@ cc_binary(
     name = "test_ancf3243_adamw",
     srcs = ["lib_bin/test_ancf3243_adamw.cc"],
     copts = ["--std=c++17"],
+    linkopts = [
+        "-L/usr/local/cuda/lib64",
+        "-lcusparse",
+        "-lcudart",
+    ],
     deps = [
         ":ANCF3243Data",
         ":cpu_utils",
@@ -164,6 +191,11 @@ cc_binary(
     name = "test_ancf3443_adamw",
     srcs = ["lib_bin/test_ancf3443_adamw.cc"],
     copts = ["--std=c++17"],
+    linkopts = [
+        "-L/usr/local/cuda/lib64",
+        "-lcusparse",
+        "-lcudart",
+    ],
     deps = [
         ":ANCF3443Data",
         ":cpu_utils",
@@ -177,6 +209,11 @@ cc_binary(
     name = "test_feat10_adamw",
     srcs = ["lib_bin/test_feat10_adamw.cc"],
     copts = ["--std=c++17"],
+    linkopts = [
+        "-L/usr/local/cuda/lib64",
+        "-lcusparse",
+        "-lcudart",
+    ],
     deps = [
         ":FEAT10Data",
         ":cpu_utils",
@@ -190,6 +227,11 @@ cc_binary(
     name = "test_feat10_resolution_adamw",
     srcs = ["lib_bin/test_feat10_resolution_adamw.cc"],
     copts = ["--std=c++17"],
+    linkopts = [
+        "-L/usr/local/cuda/lib64",
+        "-lcusparse",
+        "-lcudart",
+    ],
     deps = [
         ":FEAT10Data",
         ":cpu_utils",
@@ -203,6 +245,11 @@ cc_binary(
     name = "test_feat10_nesterov",
     srcs = ["lib_bin/test_feat10_nesterov.cc"],
     copts = ["--std=c++17"],
+    linkopts = [
+        "-L/usr/local/cuda/lib64",
+        "-lcusparse",
+        "-lcudart",
+    ],
     deps = [
         ":FEAT10Data",
         ":cpu_utils",
@@ -220,6 +267,11 @@ cc_test(
     name = "utest_3243",
     srcs = ["lib_utest/utest_3243.cc"],
     copts = ["--std=c++17"],
+    linkopts = [
+        "-L/usr/local/cuda/lib64",
+        "-lcusparse",
+        "-lcudart",                
+    ],
     data = glob([
         "data/utest/**/*",
     ]),
@@ -240,6 +292,30 @@ cc_test(
         ":cpu_utils",
         "@eigen//:eigen",
         "@googletest//:gtest_main",
+    ],
+)
+
+cc_test(
+    name = "utest_sparse_mass",
+    srcs = ["lib_utest/utest_sparse_mass.cc"],
+    copts = ["--std=c++17"],
+    linkopts = [
+        "-L/usr/local/cuda/lib64",
+        "-lcusparse",
+        "-lcudart",                
+    ],
+    data = glob([
+        "data/utest/**/*",
+        "data/meshes/**",
+    ]),
+    deps = [
+        ":FEAT10Data",
+        ":ANCF3443Data",
+        ":ANCF3243Data",
+        ":cpu_utils",
+        "@eigen//:eigen",
+        "@googletest//:gtest_main",
+        ":csv_utils",
     ],
 )
 # ========================================
