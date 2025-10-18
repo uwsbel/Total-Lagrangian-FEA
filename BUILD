@@ -57,7 +57,7 @@ cuda_library(
             "lib_src/elements/ANCF3443DataFunc.cuh",
             "lib_src/elements/ElementBase.h"],
     copts = ["--std=c++17", "-O3", "--use_fast_math", "--extra-device-vectorization"],
-    linkopts = ["-lcusolver","-lcublas"],
+    linkopts = ["-lcusolver","-lcublas","-lcusparse"],
     deps = [
         ":cpu_utils",
         "@eigen//:eigen",
@@ -150,6 +150,11 @@ cc_binary(
     name = "test_ancf3443_nesterov",
     srcs = ["lib_bin/test_ancf3443_nesterov.cc"],
     copts = ["--std=c++17"],
+    linkopts = [
+        "-L/usr/local/cuda/lib64",
+        "-lcusparse",
+        "-lcudart",
+    ],
     deps = [
         ":ANCF3443Data",
         ":cpu_utils",
@@ -176,6 +181,11 @@ cc_binary(
     name = "test_ancf3443_adamw",
     srcs = ["lib_bin/test_ancf3443_adamw.cc"],
     copts = ["--std=c++17"],
+    linkopts = [
+        "-L/usr/local/cuda/lib64",
+        "-lcusparse",
+        "-lcudart",
+    ],
     deps = [
         ":ANCF3443Data",
         ":cpu_utils",
@@ -284,6 +294,7 @@ cc_test(
     ]),
     deps = [
         ":FEAT10Data",
+        ":ANCF3443Data",
         ":cpu_utils",
         "@eigen//:eigen",
         "@googletest//:gtest_main",

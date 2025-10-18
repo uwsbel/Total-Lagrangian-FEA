@@ -3,6 +3,7 @@
 // STEP 1: Standard C++ and CUDA headers go FIRST.
 // Example:
 #include <cuda_runtime.h>
+#include <cusparse.h>
 
 #include <Eigen/Dense>
 #include <iostream>
@@ -303,6 +304,22 @@ struct GPU_ANCF3443_Data : public ElementBase {
     return d_node_values + j + i * n_coef;
   }
 
+  __device__ int *csr_offsets() {
+    return d_csr_offsets;
+  }
+
+  __device__ int *csr_columns() {
+    return d_csr_columns;
+  }
+
+  __device__ double *csr_values() {
+    return d_csr_values;
+  }
+
+  __device__ int nnz() {
+    return *d_nnz;
+  }
+
   __device__ int gpu_n_beam() const {
     return n_beam;
   }
@@ -568,8 +585,11 @@ struct GPU_ANCF3443_Data : public ElementBase {
     HANDLE_ERROR(cudaFree(d_z12));
 
     HANDLE_ERROR(cudaFree(d_element_connectivity));
-
     HANDLE_ERROR(cudaFree(d_node_values));
+    HANDLE_ERROR(cudaFree(d_csr_offsets));
+    HANDLE_ERROR(cudaFree(d_csr_columns));
+    HANDLE_ERROR(cudaFree(d_csr_values));
+    HANDLE_ERROR(cudaFree(d_nnz));
 
     HANDLE_ERROR(cudaFree(d_F));
     HANDLE_ERROR(cudaFree(d_P));
@@ -598,6 +618,8 @@ struct GPU_ANCF3443_Data : public ElementBase {
   void CalcDsDuPre();
 
   void CalcMassMatrix();
+
+  void ConvertToCSRMass();
 
   void CalcP();
 
@@ -643,6 +665,9 @@ struct GPU_ANCF3443_Data : public ElementBase {
   int *d_element_connectivity;
 
   double *d_node_values;
+  int *d_csr_offsets, *d_csr_columns;
+  double *d_csr_values;
+  int *d_nnz;
 
   double *d_F, *d_P;
 

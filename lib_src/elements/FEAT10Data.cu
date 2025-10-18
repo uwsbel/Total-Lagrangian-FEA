@@ -374,6 +374,7 @@ void GPU_FEAT10_Data::ConvertToCSRMass() {
   h_data_flash->d_nnz         = d_nnz;
   HANDLE_ERROR(cudaMemcpy(d_data, h_data_flash, sizeof(GPU_FEAT10_Data),
                           cudaMemcpyHostToDevice));
+
   free(h_data_flash);
 }
 

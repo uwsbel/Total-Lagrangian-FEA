@@ -2,6 +2,7 @@
 
 #include <Eigen/Dense>
 
+#include "../lib_src/elements/ANCF3443Data.cuh"
 #include "../lib_src/elements/FEAT10Data.cuh"
 #include "../lib_utils/cpu_utils.h"
 #include "../lib_utils/csv_utils.h"
@@ -22,7 +23,7 @@ class TestSparseMass : public ::testing::Test {
 // Tests for calculate_offsets
 // ========================================
 
-TEST_F(TestSparseMass, test0) {
+TEST_F(TestSparseMass, FEA_T10_SparseMassMatrix) {
   // Read mesh data
   Eigen::MatrixXd nodes;
   Eigen::MatrixXi elements;
@@ -109,4 +110,122 @@ TEST_F(TestSparseMass, test0) {
   }
 
   gpu_t10_data.ConvertToCSRMass();
+}
+
+TEST_F(TestSparseMass, ANCF_3443_SparseMassMatrix) {
+  // initialize GPU data structure
+  int n_beam = 2;  // this is working
+  GPU_ANCF3443_Data gpu_3443_data(n_beam);
+  gpu_3443_data.Initialize();
+
+  double L = 2.0, W = 1.0, H = 1.0;
+
+  const double E    = 7e8;   // Young's modulus
+  const double nu   = 0.33;  // Poisson's ratio
+  const double rho0 = 2700;  // Density
+
+  std::cout << "Number of beams: " << gpu_3443_data.get_n_beam() << std::endl;
+  std::cout << "Total nodes: " << gpu_3443_data.get_n_coef() << std::endl;
+
+  // Compute B_inv on CPU
+  Eigen::MatrixXd h_B_inv(Quadrature::N_SHAPE_3443, Quadrature::N_SHAPE_3443);
+  ANCFCPUUtils::ANCF3443_B12_matrix(2.0, 1.0, 1.0, h_B_inv,
+                                    Quadrature::N_SHAPE_3443);
+
+  std::cout << "B_inv:" << std::endl;
+  std::cout << h_B_inv << std::endl;
+
+  // Generate nodal coordinates for multiple beams - using Eigen vectors
+  Eigen::VectorXd h_x12(gpu_3443_data.get_n_coef());
+  Eigen::VectorXd h_y12(gpu_3443_data.get_n_coef());
+  Eigen::VectorXd h_z12(gpu_3443_data.get_n_coef());
+  Eigen::MatrixXi element_connectivity(gpu_3443_data.get_n_beam(), 4);
+  Eigen::VectorXd h_x12_jac(gpu_3443_data.get_n_coef());
+  Eigen::VectorXd h_y12_jac(gpu_3443_data.get_n_coef());
+  Eigen::VectorXd h_z12_jac(gpu_3443_data.get_n_coef());
+
+  ANCFCPUUtils::ANCF3443_generate_beam_coordinates(n_beam, h_x12, h_y12, h_z12,
+                                                   element_connectivity);
+
+  // print h_x12
+  for (int i = 0; i < gpu_3443_data.get_n_coef(); i++) {
+    printf("h_x12(%d) = %f\n", i, h_x12(i));
+  }
+
+  // print h_y12
+  for (int i = 0; i < gpu_3443_data.get_n_coef(); i++) {
+    printf("h_y12(%d) = %f\n", i, h_y12(i));
+  }
+
+  // print h_z12
+  for (int i = 0; i < gpu_3443_data.get_n_coef(); i++) {
+    printf("h_z12(%d) = %f\n", i, h_z12(i));
+  }
+
+  for (int i = 0; i < gpu_3443_data.get_n_beam(); i++) {
+    printf("element_connectivity(%d, :) = %d %d %d %d\n", i,
+           element_connectivity(i, 0), element_connectivity(i, 1),
+           element_connectivity(i, 2), element_connectivity(i, 3));
+  }
+
+  h_x12_jac = h_x12;
+  h_y12_jac = h_y12;
+  h_z12_jac = h_z12;
+
+  // ==========================================================================
+
+  // set fixed nodal unknowns
+  Eigen::VectorXi h_fixed_nodes(8);
+  h_fixed_nodes << 0, 1, 2, 3, 12, 13, 14, 15;
+  gpu_3443_data.SetNodalFixed(h_fixed_nodes);
+
+  // set external force
+  Eigen::VectorXd h_f_ext(gpu_3443_data.get_n_coef() * 3);
+  // set external force applied at the end of the beam to be 0,0,3100
+  h_f_ext.setZero();
+  h_f_ext(3 * gpu_3443_data.get_n_coef() - 4)  = -125.0;
+  h_f_ext(3 * gpu_3443_data.get_n_coef() - 10) = 500.0;
+  h_f_ext(3 * gpu_3443_data.get_n_coef() - 16) = 125.0;
+  h_f_ext(3 * gpu_3443_data.get_n_coef() - 22) = 500.0;
+  gpu_3443_data.SetExternalForce(h_f_ext);
+
+  gpu_3443_data.Setup(L, W, H, rho0, nu, E, h_B_inv, Quadrature::gauss_xi_m_7,
+                      Quadrature::gauss_eta_m_7, Quadrature::gauss_zeta_m_3,
+                      Quadrature::gauss_xi_4, Quadrature::gauss_eta_4,
+                      Quadrature::gauss_zeta_3, Quadrature::weight_xi_m_7,
+                      Quadrature::weight_eta_m_7, Quadrature::weight_zeta_m_3,
+                      Quadrature::weight_xi_4, Quadrature::weight_eta_4,
+                      Quadrature::weight_zeta_3, h_x12, h_y12, h_z12,
+                      element_connectivity);
+
+  // =========================================================================
+
+  gpu_3443_data.CalcDsDuPre();
+  gpu_3443_data.PrintDsDuPre();
+
+  std::cout << "done PrintDsDuPre" << std::endl;
+
+  std::cout << "gpu_3443_data.n_beam" << gpu_3443_data.get_n_beam()
+            << std::endl;
+  std::cout << "gpu_3443_data.n_coef" << gpu_3443_data.get_n_coef()
+            << std::endl;
+
+  gpu_3443_data.CalcMassMatrix();
+
+  std::cout << "done CalcMassMatrix" << std::endl;
+
+  Eigen::MatrixXd mass_matrix;
+  gpu_3443_data.RetrieveMassMatrixToCPU(mass_matrix);
+
+  std::cout << "done RetrieveMassMatrixToCPU" << std::endl;
+
+  std::cout << "mass matrix:" << std::endl;
+  for (int i = 0; i < mass_matrix.rows(); i++) {
+    for (int j = 0; j < mass_matrix.cols(); j++) {
+      std::cout << mass_matrix(i, j) << " ";
+    }
+    std::cout << std::endl;
+  }
+
+  gpu_3443_data.ConvertToCSRMass();
 }

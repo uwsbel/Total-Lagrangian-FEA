@@ -509,8 +509,8 @@ def alm_adamw_step(v_guess, lam_guess, v_prev, q_prev, M, f_int_func, f_int, f_e
     lam = lam_guess.copy()
 
     max_outer = 5
-    max_inner = 400
-    inner_tol_base = 1e-2
+    max_inner = 500
+    inner_tol_base = 1e-1
     outer_tol = 1e-6
 
     # AdamW hyperparams

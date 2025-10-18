@@ -19,8 +19,6 @@ __device__ double solver_grad_L(int tid, ElementBase *d_data,
   const int n_coef    = d_solver->get_n_coef();
   const double inv_dt = 1.0 / d_solver->solver_time_step();
 
-  // signed long long t0 = clock64();
-
   // Mass matrix contribution - cast outside loop
   if (d_data->type == TYPE_3243) {
     auto *data = static_cast<GPU_ANCF3243_Data *>(d_data);
@@ -32,21 +30,23 @@ __device__ double solver_grad_L(int tid, ElementBase *d_data,
     }
   } else if (d_data->type == TYPE_3443) {
     auto *data = static_cast<GPU_ANCF3443_Data *>(d_data);
-    for (int node_j = 0; node_j < n_coef; node_j++) {
-      double mass_ij = data->node_values()(node_i, node_j);
+
+    // Get base pointers ONCE - avoid repeated function calls
+    int *offsets   = data->csr_offsets();
+    int *columns   = data->csr_columns();
+    double *values = data->csr_values();
+
+    int row_start = offsets[node_i];
+    int row_end   = offsets[node_i + 1];
+
+    for (int idx = row_start; idx < row_end; idx++) {
+      int node_j     = columns[idx];
+      double mass_ij = values[idx];
       int tid_j      = node_j * 3 + dof_i;
       double v_diff  = d_solver->v_guess()[tid_j] - d_solver->v_prev()[tid_j];
       res += mass_ij * v_diff * inv_dt;
     }
   } else if (d_data->type == TYPE_T10) {
-    // auto *data = static_cast<GPU_FEAT10_Data *>(d_data);
-    // for (int node_j = 0; node_j < n_coef; node_j++) {
-    //   double mass_ij = data->node_values()(node_i, node_j);
-    //   int tid_j      = node_j * 3 + dof_i;
-    //   double v_diff  = d_solver->v_guess()[tid_j] -
-    //   d_solver->v_prev()[tid_j]; res += mass_ij * v_diff * inv_dt;
-    // }
-
     auto *data = static_cast<GPU_FEAT10_Data *>(d_data);
 
     // Get base pointers ONCE - avoid repeated function calls
@@ -65,14 +65,6 @@ __device__ double solver_grad_L(int tid, ElementBase *d_data,
       res += mass_ij * v_diff * inv_dt;
     }
   }
-
-  // signed long long t1 = clock64();
-
-  // if (tid == 0) {
-  //   printf("Mass matrix grad_L time: %lld cycles\n", t1 - t0);
-  // }
-
-  // signed long long t2 = clock64();
 
   // Internal force
   if (d_data->type == TYPE_3243) {
@@ -96,14 +88,6 @@ __device__ double solver_grad_L(int tid, ElementBase *d_data,
     auto *data = static_cast<GPU_FEAT10_Data *>(d_data);
     res -= data->f_ext()(tid);
   }
-
-  // signed long long t3 = clock64();
-
-  // if (tid == 0) {
-  //   printf("Internal/External force grad_L time: %lld cycles\n", t3 - t2);
-  // }
-
-  // signed long long t4 = clock64();
 
   // Constraints - cast once, hoist invariants
   const int n_constraints = d_solver->gpu_n_constraints();
@@ -134,12 +118,6 @@ __device__ double solver_grad_L(int tid, ElementBase *d_data,
              (d_solver->lambda_guess()[i] + rho_dt * constraint_val);
     }
   }
-
-  // signed long long t5 = clock64();
-
-  // if (tid == 0) {
-  //   printf("Constraint grad_L time: %lld cycles\n", t5 - t4);
-  // }
 
   return res;
 }
@@ -224,17 +202,17 @@ __global__ void one_step_adamw_kernel(ElementBase *d_data,
           // Step 1: Each thread computes its look-ahead velocity component
           double y = 0.0;  // Declare y here
           if (tid < d_adamw_solver->get_n_coef() * 3) {
-            lr = lr * 0.998;
+            double g_tid       = d_adamw_solver->g()(tid);
+            double v_guess_tid = d_adamw_solver->v_guess()(tid);
+            lr                 = lr * 0.998;
             t += 1;
 
-            m_t = beta1 * m_t + (1 - beta1) * d_adamw_solver->g()(tid);
-            v_t = beta2 * v_t + (1 - beta2) * d_adamw_solver->g()(tid) *
-                                    d_adamw_solver->g()(tid);
+            m_t          = beta1 * m_t + (1 - beta1) * g_tid;
+            v_t          = beta2 * v_t + (1 - beta2) * g_tid * g_tid;
             double m_hat = m_t / (1 - pow(beta1, t));
             double v_hat = v_t / (1 - pow(beta2, t));
-            y            = d_adamw_solver->v_guess()(tid) -
-                lr * (m_hat / (sqrt(v_hat) + eps) +
-                      weight_decay * d_adamw_solver->v_guess()(tid));
+            y            = v_guess_tid -
+                lr * (m_hat / (sqrt(v_hat) + eps) + weight_decay * v_guess_tid);
 
             // Store look-ahead velocity temporarily
             d_adamw_solver->v_guess()(tid) =
