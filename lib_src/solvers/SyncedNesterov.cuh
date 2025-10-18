@@ -1,4 +1,5 @@
 #pragma once
+#include "../../lib_utils/cuda_utils.h"
 #include "../../lib_utils/quadrature_utils.h"
 #include "../elements/ANCF3243Data.cuh"
 #include "../elements/ANCF3443Data.cuh"

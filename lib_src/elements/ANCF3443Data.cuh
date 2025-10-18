@@ -11,6 +11,7 @@
 #include "ElementBase.h"
 
 // Add this include at the top:
+#include "../../lib_utils/cuda_utils.h"
 #include "../../lib_utils/quadrature_utils.h"
 
 // Definition of GPU_ANCF3443 and data access device functions
