@@ -141,6 +141,10 @@ int main() {
 
   std::cout << "\ndone retrieving mass_matrix" << std::endl;
 
+  gpu_t10_data.ConvertToCSRMass();
+
+  std::cout << "done ConvertToCSRMass" << std::endl;
+
   // calculate p
   gpu_t10_data.CalcP();
 

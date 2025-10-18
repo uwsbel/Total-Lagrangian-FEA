@@ -204,10 +204,9 @@ __global__ void one_step_adamw_kernel(ElementBase *d_data,
         grid.sync();
 
         if (*d_adamw_solver->inner_flag() == 0) {
-          // if (tid == 0 && inner_iter % conv_check_interval == 0) {
-          //   printf("outer iter: %d, inner iter: %d\n", outer_iter,
-          //   inner_iter);
-          // }
+          if (tid == 0 && inner_iter % conv_check_interval == 0) {
+            printf("outer iter: %d, inner iter: %d\n", outer_iter, inner_iter);
+          }
 
           // Step 1: Each thread computes its look-ahead velocity component
           double y = 0.0;  // Declare y here
@@ -370,16 +369,15 @@ __global__ void one_step_adamw_kernel(ElementBase *d_data,
             }
             norm_v_curr = sqrt(norm_v_curr);
 
-            // printf("norm_g: %.17f, norm_v_curr: %.17f\n",
-            //        *d_adamw_solver->norm_g(), norm_v_curr);
+            printf("norm_g: %.17f, norm_v_curr: %.17f\n",
+                   *d_adamw_solver->norm_g(), norm_v_curr);
 
             // Use the same convergence criterion as Python AdamW
             if (*d_adamw_solver->norm_g() <=
                 d_adamw_solver->solver_inner_tol() * (1.0 + norm_v_curr)) {
-              // printf("Converged: gnorm=%.17f <= tol*(1+||v||)=%.17f\n",
-              //        *d_adamw_solver->norm_g(),
-              //        d_adamw_solver->solver_inner_tol() * (1.0 +
-              //        norm_v_curr));
+              printf("Converged: gnorm=%.17f <= tol*(1+||v||)=%.17f\n",
+                     *d_adamw_solver->norm_g(),
+                     d_adamw_solver->solver_inner_tol() * (1.0 + norm_v_curr));
               *d_adamw_solver->inner_flag() = 1;
             }
           }
