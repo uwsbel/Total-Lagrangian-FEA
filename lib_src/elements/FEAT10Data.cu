@@ -243,10 +243,9 @@ void GPU_FEAT10_Data::CalcMassMatrix() {
 }
 
 void GPU_FEAT10_Data::ConvertToCSRMass() {
-  int num_rows   = n_coef;
-  int num_cols   = n_coef;
-  int ld         = num_cols;
-  int dense_size = ld * num_rows;
+  int num_rows = n_coef;
+  int num_cols = n_coef;
+  int ld       = num_cols;
 
   int *d_csr_offsets_temp;
   int *d_csr_columns_temp;

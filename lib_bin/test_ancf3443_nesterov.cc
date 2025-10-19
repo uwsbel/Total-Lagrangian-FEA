@@ -142,9 +142,9 @@ int main() {
   gpu_3443_data.RetrievePFromFToCPU(p_from_F);
   std::cout << "p from f:" << std::endl;
 
-  for (int i = 0; i < p_from_F.size(); i++) {
+  for (size_t i = 0; i < p_from_F.size(); i++) {
     std::cout << "Element " << i << ":" << std::endl;
-    for (int j = 0; j < p_from_F[i].size(); j++)  // quadrature points
+    for (size_t j = 0; j < p_from_F[i].size(); j++)  // quadrature points
     {
       std::cout << "  QP " << j << ":" << std::endl;
       std::cout << p_from_F[i][j] << std::endl;  // 3x3 matrix

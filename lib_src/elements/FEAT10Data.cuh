@@ -75,10 +75,6 @@ struct GPU_FEAT10_Data : public ElementBase {
     return d_tet5pt_weights[qp_idx];
   }
 
-  __device__ const double tet5pt_weights(int qp_idx) const {
-    return d_tet5pt_weights[qp_idx];
-  }
-
   __device__ Eigen::Map<Eigen::VectorXd> x12() {
     return Eigen::Map<Eigen::VectorXd>(d_h_x12, n_coef);
   }
