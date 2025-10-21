@@ -26,16 +26,19 @@ class SyncedAdamWSolver : public SolverBase {
         n_constraints_(n_constraints) {
     // Type-based casting to get the correct d_data from derived class
     if (data->type == TYPE_3243) {
+      type_            = TYPE_3243;
       auto *typed_data = static_cast<GPU_ANCF3243_Data *>(data);
       d_data_ = typed_data->d_data;  // This accesses the derived class's d_data
       n_total_qp_ = Quadrature::N_TOTAL_QP_3_2_2;
       n_shape_    = Quadrature::N_SHAPE_3243;
     } else if (data->type == TYPE_3443) {
+      type_            = TYPE_3443;
       auto *typed_data = static_cast<GPU_ANCF3443_Data *>(data);
       d_data_ = typed_data->d_data;  // This accesses the derived class's d_data
       n_total_qp_ = Quadrature::N_TOTAL_QP_4_4_3;
       n_shape_    = Quadrature::N_SHAPE_3443;
     } else if (data->type == TYPE_T10) {
+      type_            = TYPE_T10;
       auto *typed_data = static_cast<GPU_FEAT10_Data *>(data);
       d_data_ = typed_data->d_data;  // This accesses the derived class's d_data
       n_total_qp_ = Quadrature::N_QP_T10_5;
@@ -43,11 +46,6 @@ class SyncedAdamWSolver : public SolverBase {
     } else {
       d_data_ = nullptr;
       std::cerr << "Unknown element type!" << std::endl;
-    }
-
-    if (d_data_ == nullptr) {
-      std::cerr << "d_data_ is null in SyncedAdamWSolver constructor"
-                << std::endl;
     }
 
     cudaMalloc(&d_v_guess_, n_coef_ * 3 * sizeof(double));
@@ -264,6 +262,7 @@ class SyncedAdamWSolver : public SolverBase {
   }
 
  private:
+  ElementType type_;
   ElementBase *d_data_;
   SyncedAdamWSolver *d_adamw_solver_;
   int n_total_qp_, n_shape_;

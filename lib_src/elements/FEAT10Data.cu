@@ -201,7 +201,7 @@ __global__ void calc_p_kernel(GPU_FEAT10_Data *d_data) {
   if (elem_idx >= d_data->gpu_n_elem() || qp_idx >= Quadrature::N_QP_T10_5)
     return;
 
-  feat10_compute_p(elem_idx, qp_idx, d_data);
+  compute_p(elem_idx, qp_idx, d_data);
 }
 
 void GPU_FEAT10_Data::CalcP() {
@@ -222,7 +222,7 @@ __global__ void compute_internal_force_kernel(GPU_FEAT10_Data *d_data) {
       node_local >= Quadrature::N_NODE_T10_10)
     return;
 
-  feat10_compute_internal_force(elem_idx, node_local, d_data);
+  compute_internal_force(elem_idx, node_local, d_data);
 }
 
 void GPU_FEAT10_Data::CalcInternalForce() {

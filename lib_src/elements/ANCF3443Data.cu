@@ -164,7 +164,7 @@ __global__ void calc_p_kernel(GPU_ANCF3443_Data *d_data) {
       qp_idx >= Quadrature::N_TOTAL_QP_4_4_3)
     return;
 
-  ancf3443_compute_p(elem_idx, qp_idx, d_data);
+  compute_p(elem_idx, qp_idx, d_data);
 }
 
 void GPU_ANCF3443_Data::CalcP() {
@@ -443,7 +443,7 @@ __global__ void compute_internal_force_kernel(GPU_ANCF3443_Data *d_data) {
   if (elem_idx >= d_data->gpu_n_beam() || node_idx >= Quadrature::N_SHAPE_3443)
     return;
 
-  ancf3443_compute_internal_force(elem_idx, node_idx, d_data);
+  compute_internal_force(elem_idx, node_idx, d_data);
 }
 
 void GPU_ANCF3443_Data::CalcInternalForce() {
@@ -454,7 +454,7 @@ void GPU_ANCF3443_Data::CalcInternalForce() {
 }
 
 __global__ void compute_constraint_data_kernel(GPU_ANCF3443_Data *d_data) {
-  ancf3443_compute_constraint_data(d_data);
+  compute_constraint_data(d_data);
 }
 
 void GPU_ANCF3443_Data::CalcConstraintData() {

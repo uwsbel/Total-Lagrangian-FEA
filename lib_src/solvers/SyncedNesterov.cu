@@ -267,14 +267,14 @@ __global__ void one_step_nesterov_kernel(
               int elem_idx = idx / d_nesterov_solver->gpu_n_total_qp();
               int qp_idx   = idx % d_nesterov_solver->gpu_n_total_qp();
               if (d_data->type == TYPE_3243) {
-                ancf3243_compute_p(elem_idx, qp_idx,
-                                   static_cast<GPU_ANCF3243_Data *>(d_data));
+                compute_p(elem_idx, qp_idx,
+                          static_cast<GPU_ANCF3243_Data *>(d_data));
               } else if (d_data->type == TYPE_3443) {
-                ancf3443_compute_p(elem_idx, qp_idx,
-                                   static_cast<GPU_ANCF3443_Data *>(d_data));
+                compute_p(elem_idx, qp_idx,
+                          static_cast<GPU_ANCF3443_Data *>(d_data));
               } else if (d_data->type == TYPE_T10) {
-                feat10_compute_p(elem_idx, qp_idx,
-                                 static_cast<GPU_FEAT10_Data *>(d_data));
+                compute_p(elem_idx, qp_idx,
+                          static_cast<GPU_FEAT10_Data *>(d_data));
               }
             }
           }
@@ -283,14 +283,11 @@ __global__ void one_step_nesterov_kernel(
 
           if (tid < d_nesterov_solver->get_n_coef() * 3) {
             if (d_data->type == TYPE_3243) {
-              ancf3243_clear_internal_force(
-                  static_cast<GPU_ANCF3243_Data *>(d_data));
+              clear_internal_force(static_cast<GPU_ANCF3243_Data *>(d_data));
             } else if (d_data->type == TYPE_3443) {
-              ancf3443_clear_internal_force(
-                  static_cast<GPU_ANCF3443_Data *>(d_data));
+              clear_internal_force(static_cast<GPU_ANCF3443_Data *>(d_data));
             } else if (d_data->type == TYPE_T10) {
-              feat10_clear_internal_force(
-                  static_cast<GPU_FEAT10_Data *>(d_data));
+              clear_internal_force(static_cast<GPU_FEAT10_Data *>(d_data));
             }
           }
 
@@ -304,16 +301,16 @@ __global__ void one_step_nesterov_kernel(
               int elem_idx = idx / d_nesterov_solver->gpu_n_shape();
               int node_idx = idx % d_nesterov_solver->gpu_n_shape();
               if (d_data->type == TYPE_3243) {
-                ancf3243_compute_internal_force(
+                compute_internal_force(
                     elem_idx, node_idx,
                     static_cast<GPU_ANCF3243_Data *>(d_data));
               } else if (d_data->type == TYPE_3443) {
-                ancf3443_compute_internal_force(
+                compute_internal_force(
                     elem_idx, node_idx,
                     static_cast<GPU_ANCF3443_Data *>(d_data));
               } else if (d_data->type == TYPE_T10) {
-                feat10_compute_internal_force(
-                    elem_idx, node_idx, static_cast<GPU_FEAT10_Data *>(d_data));
+                compute_internal_force(elem_idx, node_idx,
+                                       static_cast<GPU_FEAT10_Data *>(d_data));
               }
             }
           }
@@ -322,14 +319,11 @@ __global__ void one_step_nesterov_kernel(
 
           if (tid < d_nesterov_solver->gpu_n_constraints() / 3) {
             if (d_data->type == TYPE_3243) {
-              ancf3243_compute_constraint_data(
-                  static_cast<GPU_ANCF3243_Data *>(d_data));
+              compute_constraint_data(static_cast<GPU_ANCF3243_Data *>(d_data));
             } else if (d_data->type == TYPE_3443) {
-              ancf3443_compute_constraint_data(
-                  static_cast<GPU_ANCF3443_Data *>(d_data));
+              compute_constraint_data(static_cast<GPU_ANCF3443_Data *>(d_data));
             } else if (d_data->type == TYPE_T10) {
-              feat10_compute_constraint_data(
-                  static_cast<GPU_FEAT10_Data *>(d_data));
+              compute_constraint_data(static_cast<GPU_FEAT10_Data *>(d_data));
             }
           }
 
@@ -469,14 +463,11 @@ __global__ void one_step_nesterov_kernel(
       if (tid < d_nesterov_solver->gpu_n_constraints() / 3) {
         // Compute constraints at new position
         if (d_data->type == TYPE_3243) {
-          ancf3243_compute_constraint_data(
-              static_cast<GPU_ANCF3243_Data *>(d_data));
+          compute_constraint_data(static_cast<GPU_ANCF3243_Data *>(d_data));
         } else if (d_data->type == TYPE_3443) {
-          ancf3443_compute_constraint_data(
-              static_cast<GPU_ANCF3443_Data *>(d_data));
+          compute_constraint_data(static_cast<GPU_ANCF3443_Data *>(d_data));
         } else if (d_data->type == TYPE_T10) {
-          feat10_compute_constraint_data(
-              static_cast<GPU_FEAT10_Data *>(d_data));
+          compute_constraint_data(static_cast<GPU_FEAT10_Data *>(d_data));
         }
       }
 
