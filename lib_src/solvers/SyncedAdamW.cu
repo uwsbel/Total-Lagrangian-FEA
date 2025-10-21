@@ -46,17 +46,34 @@ __device__ double solver_grad_L(int tid, ElementType *data,
   // External force
   res -= data->f_ext()(tid);
 
-  // Constraints
   const int n_constraints = d_solver->gpu_n_constraints();
-  const double rho_dt = *d_solver->solver_rho() * d_solver->solver_time_step();
 
-  const double *__restrict__ lam = d_solver->lambda_guess().data();
-  const double *__restrict__ con = data->constraint().data();
+  if (n_constraints > 0) {
+    const double rho_dt =
+        *d_solver->solver_rho() * d_solver->solver_time_step();
 
-  for (int i = 0; i < n_constraints; i++) {
-    double constraint_jac_val = data->constraint_jac()(i, tid);
-    double constraint_val     = con[i];
-    res += constraint_jac_val * (lam[i] + rho_dt * constraint_val);
+    const double *__restrict__ lam = d_solver->lambda_guess().data();
+    const double *__restrict__ con = data->constraint().data();
+
+    // If you have CSC format (or build it once):
+    const int *__restrict__ cjT_offsets   = data->cj_csr_offsets();
+    const int *__restrict__ cjT_columns   = data->cj_csr_columns();
+    const double *__restrict__ cjT_values = data->cj_csr_values();
+
+    // Get all constraints that affect this DOF (tid)
+    const int col_start = cjT_offsets[tid];
+    const int col_end   = cjT_offsets[tid + 1];
+
+    for (int idx = col_start; idx < col_end; idx++) {
+      const int constraint_idx = cjT_columns[idx];  // Which constraint
+      const double constraint_jac_val =
+          cjT_values[idx];  // J^T[tid, constraint_idx] = J[constraint_idx, tid]
+      const double constraint_val = con[constraint_idx];
+
+      // Add constraint contribution: J^T * (lambda + rho*dt*c)
+      res +=
+          constraint_jac_val * (lam[constraint_idx] + rho_dt * constraint_val);
+    }
   }
 
   return res;

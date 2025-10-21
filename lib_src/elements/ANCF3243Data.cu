@@ -297,6 +297,150 @@ void GPU_ANCF3243_Data::ConvertToCSRMass() {
   is_csr_setup = true;
 }
 
+void GPU_ANCF3243_Data::ConvertTOCSRConstraintJac() {
+  int num_rows = n_constraint;
+  int num_cols = n_coef * 3;
+  int ld       = num_rows;
+
+  int *d_cj_csr_offsets_temp;
+  int *d_cj_csr_columns_temp;
+  double *d_cj_csr_values_temp;
+  int *d_cj_nnz_temp;
+
+  // Device memory management
+  double *d_dense = d_constraint_jac;
+  HANDLE_ERROR(cudaMalloc((void **)&d_cj_csr_offsets_temp,
+                          (num_rows + 1) * sizeof(int)));
+
+  cusparseHandle_t handle = NULL;
+  cusparseSpMatDescr_t matB;
+  cusparseDnMatDescr_t matA;
+  void *dBuffer     = NULL;
+  size_t bufferSize = 0;
+  CHECK_CUSPARSE(cusparseCreate(&handle));
+
+  // Create dense matrix A
+  CHECK_CUSPARSE(cusparseCreateDnMat(&matA, num_rows, num_cols, ld, d_dense,
+                                     CUDA_R_64F, CUSPARSE_ORDER_COL));
+  // Create sparse matrix B in CSR format
+  CHECK_CUSPARSE(cusparseCreateCsr(&matB, num_rows, num_cols, 0,
+                                   d_cj_csr_offsets_temp, NULL, NULL,
+                                   CUSPARSE_INDEX_32I, CUSPARSE_INDEX_32I,
+                                   CUSPARSE_INDEX_BASE_ZERO, CUDA_R_64F));
+
+  std::cout << "tp 0" << std::endl;
+
+  // allocate an external buffer if needed
+  CHECK_CUSPARSE(cusparseDenseToSparse_bufferSize(
+      handle, matA, matB, CUSPARSE_DENSETOSPARSE_ALG_DEFAULT, &bufferSize));
+  HANDLE_ERROR(cudaMalloc(&dBuffer, bufferSize));
+
+  // execute Sparse to Dense conversion
+  CHECK_CUSPARSE(cusparseDenseToSparse_analysis(
+      handle, matA, matB, CUSPARSE_DENSETOSPARSE_ALG_DEFAULT, dBuffer));
+
+  std::cout << "tp 1" << std::endl;
+  // get number of non-zero elements
+  int64_t num_rows_tmp, num_cols_tmp, nnz;
+  CHECK_CUSPARSE(
+      cusparseSpMatGetSize(matB, &num_rows_tmp, &num_cols_tmp, &nnz));
+
+  // copy over nnz
+  HANDLE_ERROR(cudaMalloc((void **)&d_cj_nnz_temp, sizeof(int)));
+  HANDLE_ERROR(
+      cudaMemcpy(d_cj_nnz_temp, &nnz, sizeof(int), cudaMemcpyHostToDevice));
+
+  int *h_csr_offsets   = new int[num_rows + 1];
+  int *h_csr_columns   = new int[nnz];
+  double *h_csr_values = new double[nnz];
+
+  std::cout << "tp 2" << std::endl;
+
+  // allocate CSR column indices and values
+  HANDLE_ERROR(cudaMalloc((void **)&d_cj_csr_columns_temp, nnz * sizeof(int)));
+  HANDLE_ERROR(
+      cudaMalloc((void **)&d_cj_csr_values_temp, nnz * sizeof(double)));
+  // reset offsets, column indices, and values pointers
+  CHECK_CUSPARSE(cusparseCsrSetPointers(matB, d_cj_csr_offsets_temp,
+                                        d_cj_csr_columns_temp,
+                                        d_cj_csr_values_temp));
+  CHECK_CUSPARSE(cusparseDenseToSparse_convert(
+      handle, matA, matB, CUSPARSE_DENSETOSPARSE_ALG_DEFAULT, dBuffer));
+
+  HANDLE_ERROR(cudaMemcpy(h_csr_offsets, d_cj_csr_offsets_temp,
+                          (num_rows + 1) * sizeof(int),
+                          cudaMemcpyDeviceToHost));
+  HANDLE_ERROR(cudaMemcpy(h_csr_columns, d_cj_csr_columns_temp,
+                          nnz * sizeof(int), cudaMemcpyDeviceToHost));
+  HANDLE_ERROR(cudaMemcpy(h_csr_values, d_cj_csr_values_temp,
+                          nnz * sizeof(double), cudaMemcpyDeviceToHost));
+
+  // copy all temp arrays to class members
+  HANDLE_ERROR(cudaMalloc((void **)&d_cj_csr_columns, nnz * sizeof(int)));
+  HANDLE_ERROR(cudaMalloc((void **)&d_cj_csr_values, nnz * sizeof(double)));
+  HANDLE_ERROR(
+      cudaMalloc((void **)&d_cj_csr_offsets, (num_rows + 1) * sizeof(int)));
+  HANDLE_ERROR(cudaMalloc((void **)&d_cj_nnz, sizeof(int)));
+
+  HANDLE_ERROR(cudaMemcpy(d_cj_csr_offsets, d_cj_csr_offsets_temp,
+                          (num_rows + 1) * sizeof(int),
+                          cudaMemcpyDeviceToDevice));
+  HANDLE_ERROR(cudaMemcpy(d_cj_csr_columns, d_cj_csr_columns_temp,
+                          nnz * sizeof(int), cudaMemcpyDeviceToDevice));
+  HANDLE_ERROR(cudaMemcpy(d_cj_csr_values, d_cj_csr_values_temp,
+                          nnz * sizeof(double), cudaMemcpyDeviceToDevice));
+  HANDLE_ERROR(cudaMemcpy(d_cj_nnz, d_cj_nnz_temp, sizeof(int),
+                          cudaMemcpyDeviceToDevice));
+
+  // destroy matrix/vector descriptors
+  CHECK_CUSPARSE(cusparseDestroyDnMat(matA));
+  CHECK_CUSPARSE(cusparseDestroySpMat(matB));
+  CHECK_CUSPARSE(cusparseDestroy(handle));
+  HANDLE_ERROR(cudaFree(dBuffer));
+
+  // print h_csr_offsets, h_csr_columns, h_csr_values for debugging
+  std::cout << "Constraint Jacobian CSR Offsets: ";
+  for (int i = 0; i < num_rows + 1; i++)
+    std::cout << h_csr_offsets[i] << " ";
+  std::cout << std::endl;
+
+  std::cout << "Constraint Jacobian CSR Columns: ";
+  for (int i = 0; i < nnz; i++)
+    std::cout << h_csr_columns[i] << " ";
+  std::cout << std::endl;
+
+  std::cout << "Constraint Jacobian CSR Values: ";
+  for (int i = 0; i < nnz; i++)
+    std::cout << h_csr_values[i] << " ";
+  std::cout << std::endl;
+
+  delete[] h_csr_offsets;
+  delete[] h_csr_columns;
+  delete[] h_csr_values;
+
+  // Free temporary allocations
+  HANDLE_ERROR(cudaFree(d_cj_csr_offsets_temp));
+  HANDLE_ERROR(cudaFree(d_cj_csr_columns_temp));
+  HANDLE_ERROR(cudaFree(d_cj_csr_values_temp));
+  HANDLE_ERROR(cudaFree(d_cj_nnz_temp));
+
+  // Flash GPU data back to cpu, update pointer then flash back
+  GPU_ANCF3243_Data *h_data_flash =
+      (GPU_ANCF3243_Data *)malloc(sizeof(GPU_ANCF3243_Data));
+  HANDLE_ERROR(cudaMemcpy(h_data_flash, d_data, sizeof(GPU_ANCF3243_Data),
+                          cudaMemcpyDeviceToHost));
+  h_data_flash->d_cj_csr_offsets = d_cj_csr_offsets;
+  h_data_flash->d_cj_csr_columns = d_cj_csr_columns;
+  h_data_flash->d_cj_csr_values  = d_cj_csr_values;
+  h_data_flash->d_cj_nnz         = d_cj_nnz;
+  HANDLE_ERROR(cudaMemcpy(d_data, h_data_flash, sizeof(GPU_ANCF3243_Data),
+                          cudaMemcpyHostToDevice));
+
+  free(h_data_flash);
+
+  is_csr_setup = true;
+}
+
 void GPU_ANCF3243_Data::RetrieveMassMatrixToCPU(Eigen::MatrixXd &mass_matrix) {
   // Allocate host memory for all quadrature points
   const int total_size = n_coef * n_coef;

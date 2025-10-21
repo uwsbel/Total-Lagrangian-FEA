@@ -304,6 +304,18 @@ struct GPU_ANCF3443_Data : public ElementBase {
     return d_csr_values;
   }
 
+  __device__ int *cj_csr_offsets() {
+    return d_cj_csr_offsets;
+  }
+
+  __device__ int *cj_csr_columns() {
+    return d_cj_csr_columns;
+  }
+
+  __device__ double *cj_csr_values() {
+    return d_cj_csr_values;
+  }
+
   __device__ int nnz() {
     return *d_nnz;
   }
@@ -612,11 +624,13 @@ struct GPU_ANCF3443_Data : public ElementBase {
 
   void ConvertToCSRMass();
 
+  void ConvertTOCSRConstraintJac();
+
   void CalcP();
 
   void CalcInternalForce();
 
-  void CalcConstraintData();
+  void CalcConstraintData() override;
 
   void PrintDsDuPre();
 
@@ -668,6 +682,11 @@ struct GPU_ANCF3443_Data : public ElementBase {
 
   double *d_constraint, *d_constraint_jac;
   int *d_fixed_nodes;
+
+  // Constraint jac in CSR format
+  int *d_cj_csr_offsets, *d_cj_csr_columns;
+  double *d_cj_csr_values;
+  int *d_cj_nnz;
 
   // force related parameters
   double *d_f_int, *d_f_ext;

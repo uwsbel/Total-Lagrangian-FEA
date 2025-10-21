@@ -183,6 +183,10 @@ __global__ void mass_matrix_qp_kernel(GPU_FEAT10_Data *d_data) {
   atomicAdd(d_data->node_values(i_global, j_global), mass_contribution);
 }
 
+__global__ void calc_constraint_kernel(GPU_FEAT10_Data *d_data) {
+  compute_constraint_data(d_data);
+}
+
 void GPU_FEAT10_Data::CalcDnDuPre() {
   int total_threads = n_elem * Quadrature::N_QP_T10_5;
 
@@ -229,6 +233,19 @@ void GPU_FEAT10_Data::CalcInternalForce() {
   int threads = 128;
   int blocks  = (n_elem * Quadrature::N_NODE_T10_10 + threads - 1) / threads;
   compute_internal_force_kernel<<<blocks, threads>>>(d_data);
+  cudaDeviceSynchronize();
+}
+
+void GPU_FEAT10_Data::CalcConstraintData() {
+  if (!is_constraints_setup) {
+    std::cerr << "constraint it not set up" << std::endl;
+    return;
+  }
+  int total_threads     = n_constraint / 3;
+  int threads_per_block = 128;
+  int blocks = (total_threads + threads_per_block - 1) / threads_per_block;
+
+  calc_constraint_kernel<<<blocks, threads_per_block>>>(d_data);
   cudaDeviceSynchronize();
 }
 
@@ -361,6 +378,158 @@ void GPU_FEAT10_Data::ConvertToCSRMass() {
 
   is_csr_setup = true;
 }
+void GPU_FEAT10_Data::ConvertTOCSRConstraintJac() {
+  // TRANSPOSE: rows become columns, columns become rows
+  int num_rows = n_coef * 3;    // J^T has (n_coef*3) rows (was columns in J)
+  int num_cols = n_constraint;  // J^T has n_constraint cols (was rows in J)
+  int ld       = num_cols;      // Leading dimension for row-major
+
+  int *d_cj_csr_offsets_temp;
+  int *d_cj_csr_columns_temp;
+  double *d_cj_csr_values_temp;
+  int *d_cj_nnz_temp;
+
+  // Device memory management
+  double *d_dense =
+      d_constraint_jac;  // Original J matrix (n_constraint × n_coef*3)
+  HANDLE_ERROR(cudaMalloc((void **)&d_cj_csr_offsets_temp,
+                          (num_rows + 1) * sizeof(int)));
+
+  cusparseHandle_t handle = NULL;
+  cusparseSpMatDescr_t matB;
+  cusparseDnMatDescr_t matA;
+  void *dBuffer     = NULL;
+  size_t bufferSize = 0;
+  CHECK_CUSPARSE(cusparseCreate(&handle));
+
+  // Create dense matrix A as TRANSPOSE of J
+  // Original J is column-major (n_constraint × n_coef*3)
+  // We want J^T which is row-major (n_coef*3 × n_constraint)
+  // So we swap dimensions and use ROW order
+  CHECK_CUSPARSE(cusparseCreateDnMat(&matA, num_rows, num_cols, ld, d_dense,
+                                     CUDA_R_64F, CUSPARSE_ORDER_ROW));
+
+  // Create sparse matrix B in CSR format (for J^T)
+  CHECK_CUSPARSE(cusparseCreateCsr(&matB, num_rows, num_cols, 0,
+                                   d_cj_csr_offsets_temp, NULL, NULL,
+                                   CUSPARSE_INDEX_32I, CUSPARSE_INDEX_32I,
+                                   CUSPARSE_INDEX_BASE_ZERO, CUDA_R_64F));
+
+  std::cout << "Converting J^T to CSR format..." << std::endl;
+  std::cout << "J^T dimensions: " << num_rows << " × " << num_cols << std::endl;
+
+  // allocate an external buffer if needed
+  CHECK_CUSPARSE(cusparseDenseToSparse_bufferSize(
+      handle, matA, matB, CUSPARSE_DENSETOSPARSE_ALG_DEFAULT, &bufferSize));
+  HANDLE_ERROR(cudaMalloc(&dBuffer, bufferSize));
+
+  // execute Dense to Sparse conversion
+  CHECK_CUSPARSE(cusparseDenseToSparse_analysis(
+      handle, matA, matB, CUSPARSE_DENSETOSPARSE_ALG_DEFAULT, dBuffer));
+
+  // get number of non-zero elements
+  int64_t num_rows_tmp, num_cols_tmp, nnz;
+  CHECK_CUSPARSE(
+      cusparseSpMatGetSize(matB, &num_rows_tmp, &num_cols_tmp, &nnz));
+
+  std::cout << "NNZ in J^T: " << nnz << std::endl;
+
+  // copy over nnz
+  HANDLE_ERROR(cudaMalloc((void **)&d_cj_nnz_temp, sizeof(int)));
+  HANDLE_ERROR(
+      cudaMemcpy(d_cj_nnz_temp, &nnz, sizeof(int), cudaMemcpyHostToDevice));
+
+  int *h_csr_offsets   = new int[num_rows + 1];
+  int *h_csr_columns   = new int[nnz];
+  double *h_csr_values = new double[nnz];
+
+  // allocate CSR column indices and values
+  HANDLE_ERROR(cudaMalloc((void **)&d_cj_csr_columns_temp, nnz * sizeof(int)));
+  HANDLE_ERROR(
+      cudaMalloc((void **)&d_cj_csr_values_temp, nnz * sizeof(double)));
+
+  // reset offsets, column indices, and values pointers
+  CHECK_CUSPARSE(cusparseCsrSetPointers(matB, d_cj_csr_offsets_temp,
+                                        d_cj_csr_columns_temp,
+                                        d_cj_csr_values_temp));
+  CHECK_CUSPARSE(cusparseDenseToSparse_convert(
+      handle, matA, matB, CUSPARSE_DENSETOSPARSE_ALG_DEFAULT, dBuffer));
+
+  HANDLE_ERROR(cudaMemcpy(h_csr_offsets, d_cj_csr_offsets_temp,
+                          (num_rows + 1) * sizeof(int),
+                          cudaMemcpyDeviceToHost));
+  HANDLE_ERROR(cudaMemcpy(h_csr_columns, d_cj_csr_columns_temp,
+                          nnz * sizeof(int), cudaMemcpyDeviceToHost));
+  HANDLE_ERROR(cudaMemcpy(h_csr_values, d_cj_csr_values_temp,
+                          nnz * sizeof(double), cudaMemcpyDeviceToHost));
+
+  // copy all temp arrays to class members
+  HANDLE_ERROR(cudaMalloc((void **)&d_cj_csr_columns, nnz * sizeof(int)));
+  HANDLE_ERROR(cudaMalloc((void **)&d_cj_csr_values, nnz * sizeof(double)));
+  HANDLE_ERROR(
+      cudaMalloc((void **)&d_cj_csr_offsets, (num_rows + 1) * sizeof(int)));
+  HANDLE_ERROR(cudaMalloc((void **)&d_cj_nnz, sizeof(int)));
+
+  HANDLE_ERROR(cudaMemcpy(d_cj_csr_offsets, d_cj_csr_offsets_temp,
+                          (num_rows + 1) * sizeof(int),
+                          cudaMemcpyDeviceToDevice));
+  HANDLE_ERROR(cudaMemcpy(d_cj_csr_columns, d_cj_csr_columns_temp,
+                          nnz * sizeof(int), cudaMemcpyDeviceToDevice));
+  HANDLE_ERROR(cudaMemcpy(d_cj_csr_values, d_cj_csr_values_temp,
+                          nnz * sizeof(double), cudaMemcpyDeviceToDevice));
+  HANDLE_ERROR(cudaMemcpy(d_cj_nnz, d_cj_nnz_temp, sizeof(int),
+                          cudaMemcpyDeviceToDevice));
+
+  // destroy matrix/vector descriptors
+  CHECK_CUSPARSE(cusparseDestroyDnMat(matA));
+  CHECK_CUSPARSE(cusparseDestroySpMat(matB));
+  CHECK_CUSPARSE(cusparseDestroy(handle));
+  HANDLE_ERROR(cudaFree(dBuffer));
+
+  // print h_csr_offsets, h_csr_columns, h_csr_values for debugging
+  std::cout << "Constraint Jacobian TRANSPOSE (J^T) CSR Offsets (ALL "
+            << (num_rows + 1) << " entries): ";
+  for (int i = 0; i < num_rows + 1; i++)
+    std::cout << h_csr_offsets[i] << " ";
+  std::cout << std::endl;
+
+  std::cout << "Constraint Jacobian TRANSPOSE (J^T) CSR Columns (ALL " << nnz
+            << " entries): ";
+  for (int i = 0; i < nnz; i++)
+    std::cout << h_csr_columns[i] << " ";
+  std::cout << std::endl;
+
+  std::cout << "Constraint Jacobian TRANSPOSE (J^T) CSR Values (ALL " << nnz
+            << " entries): ";
+  for (int i = 0; i < nnz; i++)
+    std::cout << std::fixed << std::setprecision(6) << h_csr_values[i] << " ";
+  std::cout << std::endl;
+  delete[] h_csr_offsets;
+  delete[] h_csr_columns;
+  delete[] h_csr_values;
+
+  // Free temporary allocations
+  HANDLE_ERROR(cudaFree(d_cj_csr_offsets_temp));
+  HANDLE_ERROR(cudaFree(d_cj_csr_columns_temp));
+  HANDLE_ERROR(cudaFree(d_cj_csr_values_temp));
+  HANDLE_ERROR(cudaFree(d_cj_nnz_temp));
+
+  // Flash GPU data back to cpu, update pointer then flash back
+  GPU_FEAT10_Data *h_data_flash =
+      (GPU_FEAT10_Data *)malloc(sizeof(GPU_FEAT10_Data));
+  HANDLE_ERROR(cudaMemcpy(h_data_flash, d_data, sizeof(GPU_FEAT10_Data),
+                          cudaMemcpyDeviceToHost));
+  h_data_flash->d_cj_csr_offsets = d_cj_csr_offsets;
+  h_data_flash->d_cj_csr_columns = d_cj_csr_columns;
+  h_data_flash->d_cj_csr_values  = d_cj_csr_values;
+  h_data_flash->d_cj_nnz         = d_cj_nnz;
+  HANDLE_ERROR(cudaMemcpy(d_data, h_data_flash, sizeof(GPU_FEAT10_Data),
+                          cudaMemcpyHostToDevice));
+
+  free(h_data_flash);
+
+  is_csr_setup = true;
+}
 
 void GPU_FEAT10_Data::RetrieveDetJToCPU(
     std::vector<std::vector<double>> &detJ) {
@@ -464,4 +633,27 @@ void GPU_FEAT10_Data::RetrievePositionToCPU(Eigen::VectorXd &x12,
                           cudaMemcpyDeviceToHost));
   HANDLE_ERROR(cudaMemcpy(z12.data(), d_h_z12, total_nodes * sizeof(double),
                           cudaMemcpyDeviceToHost));
+}
+
+void GPU_FEAT10_Data::SetNodalFixed(const Eigen::VectorXi &fixed_nodes) {
+  if (is_constraints_setup) {
+    std::cerr << "GPU_FEAT10_Data CONSTRAINT is already set up." << std::endl;
+    return;
+  }
+
+  n_constraint = fixed_nodes.size() * 3;
+
+  HANDLE_ERROR(cudaMalloc(&d_constraint, n_constraint * sizeof(double)));
+  HANDLE_ERROR(cudaMalloc(&d_constraint_jac,
+                          n_constraint * (n_coef * 3) * sizeof(double)));
+  HANDLE_ERROR(cudaMalloc(&d_fixed_nodes, fixed_nodes.size() * sizeof(int)));
+
+  HANDLE_ERROR(cudaMemset(d_constraint, 0, n_constraint * sizeof(double)));
+  HANDLE_ERROR(cudaMemset(d_constraint_jac, 0,
+                          n_constraint * (n_coef * 3) * sizeof(double)));
+  HANDLE_ERROR(cudaMemcpy(d_fixed_nodes, fixed_nodes.data(),
+                          fixed_nodes.size() * sizeof(int),
+                          cudaMemcpyHostToDevice));
+
+  is_constraints_setup = true;
 }
