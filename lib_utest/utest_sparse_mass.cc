@@ -66,6 +66,34 @@ TEST_F(TestSparseMass, FEA_T10_SparseMassMatrix) {
   const Eigen::VectorXd& tet5pt_z_host       = Quadrature::tet5pt_z;
   const Eigen::VectorXd& tet5pt_weights_host = Quadrature::tet5pt_weights;
 
+  // ======================================
+
+  // Find all nodes with x == 0
+  std::vector<int> fixed_node_indices;
+  for (int i = 0; i < h_x12.size(); ++i) {
+    if (std::abs(h_x12(i)) < 1e-8) {  // tolerance for floating point
+      fixed_node_indices.push_back(i);
+    }
+  }
+
+  // Convert to Eigen::VectorXi
+  Eigen::VectorXi h_fixed_nodes(fixed_node_indices.size());
+  for (size_t i = 0; i < fixed_node_indices.size(); ++i) {
+    h_fixed_nodes(i) = fixed_node_indices[i];
+  }
+
+  // print fixed nodes
+  std::cout << "Fixed nodes (x == 0):" << std::endl;
+  for (int i = 0; i < h_fixed_nodes.size(); ++i) {
+    std::cout << h_fixed_nodes(i) << " ";
+  }
+  std::cout << std::endl;
+
+  // Set fixed nodes
+  gpu_t10_data.SetNodalFixed(h_fixed_nodes);
+
+  // ====================================
+
   // Call Setup with all required parameters
   gpu_t10_data.Setup(rho0, nu, E,          // Material properties
                      tet5pt_x_host,        // Quadrature points
@@ -111,6 +139,10 @@ TEST_F(TestSparseMass, FEA_T10_SparseMassMatrix) {
   }
 
   gpu_t10_data.ConvertToCSRMass();
+
+  gpu_t10_data.CalcConstraintData();
+
+  gpu_t10_data.ConvertTOCSRConstraintJac();
 }
 
 TEST_F(TestSparseMass, ANCF_3443_SparseMassMatrix) {
@@ -173,8 +205,6 @@ TEST_F(TestSparseMass, ANCF_3443_SparseMassMatrix) {
   h_y12_jac = h_y12;
   h_z12_jac = h_z12;
 
-  // ==========================================================================
-
   // set fixed nodal unknowns
   Eigen::VectorXi h_fixed_nodes(8);
   h_fixed_nodes << 0, 1, 2, 3, 12, 13, 14, 15;
@@ -198,8 +228,6 @@ TEST_F(TestSparseMass, ANCF_3443_SparseMassMatrix) {
                       Quadrature::weight_xi_4, Quadrature::weight_eta_4,
                       Quadrature::weight_zeta_3, h_x12, h_y12, h_z12,
                       element_connectivity);
-
-  // =========================================================================
 
   gpu_3443_data.CalcDsDuPre();
   gpu_3443_data.PrintDsDuPre();
@@ -229,6 +257,10 @@ TEST_F(TestSparseMass, ANCF_3443_SparseMassMatrix) {
   }
 
   gpu_3443_data.ConvertToCSRMass();
+
+  gpu_3443_data.CalcConstraintData();
+
+  gpu_3443_data.ConvertTOCSRConstraintJac();
 }
 
 TEST_F(TestSparseMass, ANCF_3243_SparseMassMatrix) {
@@ -326,4 +358,8 @@ TEST_F(TestSparseMass, ANCF_3243_SparseMassMatrix) {
   }
 
   gpu_3243_data.ConvertToCSRMass();
+
+  gpu_3243_data.CalcConstraintData();
+
+  gpu_3243_data.ConvertTOCSRConstraintJac();
 }

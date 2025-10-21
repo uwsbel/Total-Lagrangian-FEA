@@ -1,12 +1,10 @@
 #pragma once
 #include "ANCF3243Data.cuh"
 
-__device__ __forceinline__ void ancf3243_compute_p(int, int,
-                                                   GPU_ANCF3243_Data *);
-__device__ __forceinline__ void ancf3243_compute_internal_force(
-    int, int, GPU_ANCF3243_Data *);
-__device__ __forceinline__ void ancf3243_compute_constraint_data(
-    GPU_ANCF3243_Data *);
+__device__ __forceinline__ void compute_p(int, int, GPU_ANCF3243_Data *);
+__device__ __forceinline__ void compute_internal_force(int, int,
+                                                       GPU_ANCF3243_Data *);
+__device__ __forceinline__ void compute_constraint_data(GPU_ANCF3243_Data *);
 
 // Device function: matrix-vector multiply (8x8 * 8x1)
 __device__ __forceinline__ void ancf3243_mat_vec_mul8(
@@ -106,8 +104,8 @@ __device__ __forceinline__ void ancf3243_calc_det_J_xi(
   // clang-format on
 }
 
-__device__ __forceinline__ void ancf3243_compute_p(int elem_idx, int qp_idx,
-                                                   GPU_ANCF3243_Data *d_data) {
+__device__ __forceinline__ void compute_p(int elem_idx, int qp_idx,
+                                          GPU_ANCF3243_Data *d_data) {
   // clang-format off
     // --- Compute C = F^T * F ---
 
@@ -218,7 +216,7 @@ __device__ __forceinline__ void ancf3243_compute_p(int elem_idx, int qp_idx,
   // clang-format on
 }
 
-__device__ __forceinline__ void ancf3243_compute_internal_force(
+__device__ __forceinline__ void compute_internal_force(
     int elem_idx, int node_idx, GPU_ANCF3243_Data *d_data) {
   double f_i[3] = {0};
   int node_base = d_data->offset_start()(elem_idx);
@@ -257,7 +255,7 @@ __device__ __forceinline__ void ancf3243_compute_internal_force(
   // clang-format on
 }
 
-__device__ __forceinline__ void ancf3243_compute_constraint_data(
+__device__ __forceinline__ void compute_constraint_data(
     GPU_ANCF3243_Data *d_data) {
   int thread_idx = blockIdx.x * blockDim.x + threadIdx.x;
 
@@ -281,7 +279,7 @@ __device__ __forceinline__ void ancf3243_compute_constraint_data(
   }
 }
 
-__device__ __forceinline__ void ancf3243_clear_internal_force(
+__device__ __forceinline__ void clear_internal_force(
     GPU_ANCF3243_Data *d_data) {
   int thread_idx = blockIdx.x * blockDim.x + threadIdx.x;
 

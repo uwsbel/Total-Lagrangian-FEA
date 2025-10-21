@@ -64,8 +64,8 @@ __device__ __forceinline__ void solve_3x3_system(double A[3][3], double b[3],
   x[0] = (aug[0][3] - aug[0][2] * x[2] - aug[0][1] * x[1]) / aug[0][0];
 }
 
-__device__ __forceinline__ void feat10_compute_p(int elem_idx, int qp_idx,
-                                                 GPU_FEAT10_Data* d_data) {
+__device__ __forceinline__ void compute_p(int elem_idx, int qp_idx,
+                                          GPU_FEAT10_Data* d_data) {
   // Get current nodal positions for this element
   double x_nodes[10][3];  // 10 nodes × 3 coordinates
 
@@ -162,7 +162,7 @@ __device__ __forceinline__ void feat10_compute_p(int elem_idx, int qp_idx,
   // clang-format on
 }
 
-__device__ __forceinline__ void feat10_compute_internal_force(
+__device__ __forceinline__ void compute_internal_force(
     int elem_idx, int node_local, GPU_FEAT10_Data* d_data) {
   // Get global node index for this local node
   int global_node_idx = d_data->element_connectivity()(elem_idx, node_local);
@@ -225,8 +225,7 @@ __device__ __forceinline__ void feat10_compute_internal_force(
   // clang-format on
 }
 
-__device__ __forceinline__ void feat10_clear_internal_force(
-    GPU_FEAT10_Data* d_data) {
+__device__ __forceinline__ void clear_internal_force(GPU_FEAT10_Data* d_data) {
   int thread_idx = blockIdx.x * blockDim.x + threadIdx.x;
 
   if (thread_idx < d_data->n_coef * 3) {
@@ -234,7 +233,7 @@ __device__ __forceinline__ void feat10_clear_internal_force(
   }
 }
 
-__device__ __forceinline__ void feat10_compute_constraint_data(
+__device__ __forceinline__ void compute_constraint_data(
     GPU_FEAT10_Data* d_data) {
   int thread_idx = blockIdx.x * blockDim.x + threadIdx.x;
 

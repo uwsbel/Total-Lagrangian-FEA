@@ -244,6 +244,18 @@ struct GPU_FEAT10_Data : public ElementBase {
     return d_csr_values;
   }
 
+  __device__ int *cj_csr_offsets() {
+    return d_cj_csr_offsets;
+  }
+
+  __device__ int *cj_csr_columns() {
+    return d_cj_csr_columns;
+  }
+
+  __device__ double *cj_csr_values() {
+    return d_cj_csr_values;
+  }
+
   __device__ int nnz() {
     return *d_nnz;
   }
@@ -271,9 +283,11 @@ struct GPU_FEAT10_Data : public ElementBase {
 
   void ConvertToCSRMass();
 
+  void ConvertTOCSRConstraintJac();
+
   void CalcInternalForce() override;
 
-  void CalcConstraintData() override {}
+  void CalcConstraintData() override;
 
   void CalcP() override;
 
@@ -442,28 +456,7 @@ struct GPU_FEAT10_Data : public ElementBase {
                             cudaMemcpyHostToDevice));
   }
 
-  void SetNodalFixed(const Eigen::VectorXi &fixed_nodes) {
-    if (is_constraints_setup) {
-      std::cerr << "GPU_FEAT10_Data CONSTRAINT is already set up." << std::endl;
-      return;
-    }
-
-    n_constraint = fixed_nodes.size() * 3;
-
-    HANDLE_ERROR(cudaMalloc(&d_constraint, n_constraint * sizeof(double)));
-    HANDLE_ERROR(cudaMalloc(&d_constraint_jac,
-                            n_constraint * (n_coef * 3) * sizeof(double)));
-    HANDLE_ERROR(cudaMalloc(&d_fixed_nodes, fixed_nodes.size() * sizeof(int)));
-
-    HANDLE_ERROR(cudaMemset(d_constraint, 0, n_constraint * sizeof(double)));
-    HANDLE_ERROR(cudaMemset(d_constraint_jac, 0,
-                            n_constraint * (n_coef * 3) * sizeof(double)));
-    HANDLE_ERROR(cudaMemcpy(d_fixed_nodes, fixed_nodes.data(),
-                            fixed_nodes.size() * sizeof(int),
-                            cudaMemcpyHostToDevice));
-
-    is_constraints_setup = true;
-  }
+  void SetNodalFixed(const Eigen::VectorXi &fixed_nodes);
 
   // Free memory
   void Destroy() {
@@ -483,6 +476,13 @@ struct GPU_FEAT10_Data : public ElementBase {
       HANDLE_ERROR(cudaFree(d_csr_columns));
       HANDLE_ERROR(cudaFree(d_csr_values));
       HANDLE_ERROR(cudaFree(d_nnz));
+    }
+
+    if (is_cj_csr_setup) {
+      HANDLE_ERROR(cudaFree(d_cj_csr_offsets));
+      HANDLE_ERROR(cudaFree(d_cj_csr_columns));
+      HANDLE_ERROR(cudaFree(d_cj_csr_values));
+      HANDLE_ERROR(cudaFree(d_cj_nnz));
     }
 
     HANDLE_ERROR(cudaFree(d_tet5pt_x));
@@ -529,6 +529,7 @@ struct GPU_FEAT10_Data : public ElementBase {
 
   // Mass Matrix
   double *d_node_values;
+  // Mass Matrix in CSR format
   int *d_csr_offsets, *d_csr_columns;
   double *d_csr_values;
   int *d_nnz;
@@ -551,6 +552,10 @@ struct GPU_FEAT10_Data : public ElementBase {
   // Constraint data
   double *d_constraint, *d_constraint_jac;
   int *d_fixed_nodes;
+  // Constraint jac in CSR format
+  int *d_cj_csr_offsets, *d_cj_csr_columns;
+  double *d_cj_csr_values;
+  int *d_cj_nnz;
 
   // Force vectors
   double *d_f_int, *d_f_ext;  // (n_nodes*3)
@@ -558,4 +563,5 @@ struct GPU_FEAT10_Data : public ElementBase {
   bool is_setup             = false;
   bool is_constraints_setup = false;
   bool is_csr_setup         = false;
+  bool is_cj_csr_setup      = false;
 };
