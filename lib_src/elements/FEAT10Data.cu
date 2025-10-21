@@ -358,6 +358,8 @@ void GPU_FEAT10_Data::ConvertToCSRMass() {
                           cudaMemcpyHostToDevice));
 
   free(h_data_flash);
+
+  is_csr_setup = false;
 }
 
 void GPU_FEAT10_Data::RetrieveDetJToCPU(

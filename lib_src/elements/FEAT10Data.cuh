@@ -477,10 +477,13 @@ struct GPU_FEAT10_Data : public ElementBase {
 
     HANDLE_ERROR(cudaFree(d_element_connectivity));
     HANDLE_ERROR(cudaFree(d_node_values));
-    HANDLE_ERROR(cudaFree(d_csr_offsets));
-    HANDLE_ERROR(cudaFree(d_csr_columns));
-    HANDLE_ERROR(cudaFree(d_csr_values));
-    HANDLE_ERROR(cudaFree(d_nnz));
+
+    if (is_csr_setup) {
+      HANDLE_ERROR(cudaFree(d_csr_offsets));
+      HANDLE_ERROR(cudaFree(d_csr_columns));
+      HANDLE_ERROR(cudaFree(d_csr_values));
+      HANDLE_ERROR(cudaFree(d_nnz));
+    }
 
     HANDLE_ERROR(cudaFree(d_tet5pt_x));
     HANDLE_ERROR(cudaFree(d_tet5pt_y));
@@ -554,4 +557,5 @@ struct GPU_FEAT10_Data : public ElementBase {
 
   bool is_setup             = false;
   bool is_constraints_setup = false;
+  bool is_csr_setup         = false;
 };

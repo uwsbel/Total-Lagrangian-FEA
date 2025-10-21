@@ -539,10 +539,12 @@ struct GPU_ANCF3243_Data : public ElementBase {
 
     HANDLE_ERROR(cudaFree(d_node_values));
 
-    HANDLE_ERROR(cudaFree(d_csr_offsets));
-    HANDLE_ERROR(cudaFree(d_csr_columns));
-    HANDLE_ERROR(cudaFree(d_csr_values));
-    HANDLE_ERROR(cudaFree(d_nnz));
+    if (is_csr_setup) {
+      HANDLE_ERROR(cudaFree(d_csr_offsets));
+      HANDLE_ERROR(cudaFree(d_csr_columns));
+      HANDLE_ERROR(cudaFree(d_csr_values));
+      HANDLE_ERROR(cudaFree(d_nnz));
+    }
 
     HANDLE_ERROR(cudaFree(d_F));
     HANDLE_ERROR(cudaFree(d_P));
@@ -634,4 +636,5 @@ struct GPU_ANCF3243_Data : public ElementBase {
 
   bool is_setup             = false;
   bool is_constraints_setup = false;
+  bool is_csr_setup         = false;
 };

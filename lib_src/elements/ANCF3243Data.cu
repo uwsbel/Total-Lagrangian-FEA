@@ -293,6 +293,8 @@ void GPU_ANCF3243_Data::ConvertToCSRMass() {
                           cudaMemcpyHostToDevice));
 
   free(h_data_flash);
+
+  is_csr_setup = true;
 }
 
 void GPU_ANCF3243_Data::RetrieveMassMatrixToCPU(Eigen::MatrixXd &mass_matrix) {
