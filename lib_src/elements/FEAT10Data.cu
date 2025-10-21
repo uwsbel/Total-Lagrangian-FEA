@@ -359,7 +359,7 @@ void GPU_FEAT10_Data::ConvertToCSRMass() {
 
   free(h_data_flash);
 
-  is_csr_setup = false;
+  is_csr_setup = true;
 }
 
 void GPU_FEAT10_Data::RetrieveDetJToCPU(
