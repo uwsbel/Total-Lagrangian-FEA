@@ -313,15 +313,17 @@ __global__ void one_step_nesterov_kernel(
 
       grid.sync();
 
-      if (tid == 0) {
-        // Dual variable update
-        for (int i = 0; i < d_nesterov_solver->gpu_n_constraints(); i++) {
-          double constraint_val = data->constraint()[i];
-          d_nesterov_solver->lambda_guess()[i] +=
-              *d_nesterov_solver->solver_rho() *
-              d_nesterov_solver->solver_time_step() * constraint_val;
-        }
+      // Dual variable update
+      int n_constraints = d_nesterov_solver->gpu_n_constraints();
+      for (int i = tid; i < n_constraints; i += grid.size()) {
+        double constraint_val = data->constraint()[i];
+        d_nesterov_solver->lambda_guess()[i] +=
+            *d_nesterov_solver->solver_rho() *
+            d_nesterov_solver->solver_time_step() * constraint_val;
+      }
+      grid.sync();
 
+      if (tid == 0) {
         // Check constraint convergence
         double norm_constraint = 0.0;
         for (int i = 0; i < d_nesterov_solver->gpu_n_constraints(); i++) {
