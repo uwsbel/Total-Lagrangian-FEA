@@ -132,6 +132,14 @@ int main() {
 
   std::cout << "done ConvertToCSRMass" << std::endl;
 
+  gpu_3443_data.CalcConstraintData();
+
+  std::cout << "done CalcConstraintData" << std::endl;
+
+  gpu_3443_data.ConvertTOCSRConstraintJac();
+
+  std::cout << "done ConvertTOCSRConstraintJac" << std::endl;
+
   // // Set highest precision for cout
   std::cout << std::fixed << std::setprecision(17);
 
