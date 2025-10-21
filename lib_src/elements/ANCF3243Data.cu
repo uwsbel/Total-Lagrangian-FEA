@@ -297,10 +297,13 @@ void GPU_ANCF3243_Data::ConvertToCSRMass() {
   is_csr_setup = true;
 }
 
+// This function converts the TRANSPOSE of the constraint Jacobian matrix to CSR
+// format
 void GPU_ANCF3243_Data::ConvertTOCSRConstraintJac() {
-  int num_rows = n_constraint;
-  int num_cols = n_coef * 3;
-  int ld       = num_rows;
+  // TRANSPOSE: rows become columns, columns become rows
+  int num_rows = n_coef * 3;    // J^T has (n_coef*3) rows (was columns in J)
+  int num_cols = n_constraint;  // J^T has n_constraint cols (was rows in J)
+  int ld       = num_cols;      // Leading dimension for row-major
 
   int *d_cj_csr_offsets_temp;
   int *d_cj_csr_columns_temp;
@@ -308,7 +311,8 @@ void GPU_ANCF3243_Data::ConvertTOCSRConstraintJac() {
   int *d_cj_nnz_temp;
 
   // Device memory management
-  double *d_dense = d_constraint_jac;
+  double *d_dense =
+      d_constraint_jac;  // Original J matrix (n_constraint × n_coef*3)
   HANDLE_ERROR(cudaMalloc((void **)&d_cj_csr_offsets_temp,
                           (num_rows + 1) * sizeof(int)));
 
@@ -319,27 +323,28 @@ void GPU_ANCF3243_Data::ConvertTOCSRConstraintJac() {
   size_t bufferSize = 0;
   CHECK_CUSPARSE(cusparseCreate(&handle));
 
-  // Create dense matrix A
+  // Create dense matrix A as TRANSPOSE of J
+  // Original J is column-major (n_constraint × n_coef*3)
+  // We want J^T which is row-major (n_coef*3 × n_constraint)
+  // So we swap dimensions and use ROW order
   CHECK_CUSPARSE(cusparseCreateDnMat(&matA, num_rows, num_cols, ld, d_dense,
-                                     CUDA_R_64F, CUSPARSE_ORDER_COL));
-  // Create sparse matrix B in CSR format
+                                     CUDA_R_64F, CUSPARSE_ORDER_ROW));
+
+  // Create sparse matrix B in CSR format (for J^T)
   CHECK_CUSPARSE(cusparseCreateCsr(&matB, num_rows, num_cols, 0,
                                    d_cj_csr_offsets_temp, NULL, NULL,
                                    CUSPARSE_INDEX_32I, CUSPARSE_INDEX_32I,
                                    CUSPARSE_INDEX_BASE_ZERO, CUDA_R_64F));
-
-  std::cout << "tp 0" << std::endl;
 
   // allocate an external buffer if needed
   CHECK_CUSPARSE(cusparseDenseToSparse_bufferSize(
       handle, matA, matB, CUSPARSE_DENSETOSPARSE_ALG_DEFAULT, &bufferSize));
   HANDLE_ERROR(cudaMalloc(&dBuffer, bufferSize));
 
-  // execute Sparse to Dense conversion
+  // execute Dense to Sparse conversion
   CHECK_CUSPARSE(cusparseDenseToSparse_analysis(
       handle, matA, matB, CUSPARSE_DENSETOSPARSE_ALG_DEFAULT, dBuffer));
 
-  std::cout << "tp 1" << std::endl;
   // get number of non-zero elements
   int64_t num_rows_tmp, num_cols_tmp, nnz;
   CHECK_CUSPARSE(
@@ -354,12 +359,11 @@ void GPU_ANCF3243_Data::ConvertTOCSRConstraintJac() {
   int *h_csr_columns   = new int[nnz];
   double *h_csr_values = new double[nnz];
 
-  std::cout << "tp 2" << std::endl;
-
   // allocate CSR column indices and values
   HANDLE_ERROR(cudaMalloc((void **)&d_cj_csr_columns_temp, nnz * sizeof(int)));
   HANDLE_ERROR(
       cudaMalloc((void **)&d_cj_csr_values_temp, nnz * sizeof(double)));
+
   // reset offsets, column indices, and values pointers
   CHECK_CUSPARSE(cusparseCsrSetPointers(matB, d_cj_csr_offsets_temp,
                                         d_cj_csr_columns_temp,
@@ -398,22 +402,6 @@ void GPU_ANCF3243_Data::ConvertTOCSRConstraintJac() {
   CHECK_CUSPARSE(cusparseDestroy(handle));
   HANDLE_ERROR(cudaFree(dBuffer));
 
-  // print h_csr_offsets, h_csr_columns, h_csr_values for debugging
-  std::cout << "Constraint Jacobian CSR Offsets: ";
-  for (int i = 0; i < num_rows + 1; i++)
-    std::cout << h_csr_offsets[i] << " ";
-  std::cout << std::endl;
-
-  std::cout << "Constraint Jacobian CSR Columns: ";
-  for (int i = 0; i < nnz; i++)
-    std::cout << h_csr_columns[i] << " ";
-  std::cout << std::endl;
-
-  std::cout << "Constraint Jacobian CSR Values: ";
-  for (int i = 0; i < nnz; i++)
-    std::cout << h_csr_values[i] << " ";
-  std::cout << std::endl;
-
   delete[] h_csr_offsets;
   delete[] h_csr_columns;
   delete[] h_csr_values;
@@ -438,7 +426,7 @@ void GPU_ANCF3243_Data::ConvertTOCSRConstraintJac() {
 
   free(h_data_flash);
 
-  is_csr_setup = true;
+  is_cj_csr_setup = true;
 }
 
 void GPU_ANCF3243_Data::RetrieveMassMatrixToCPU(Eigen::MatrixXd &mass_matrix) {

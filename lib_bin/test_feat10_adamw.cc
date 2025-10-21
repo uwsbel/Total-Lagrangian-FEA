@@ -145,6 +145,14 @@ int main() {
 
   std::cout << "done ConvertToCSRMass" << std::endl;
 
+  gpu_t10_data.CalcConstraintData();
+
+  std::cout << "done CalcConstraintData" << std::endl;
+
+  gpu_t10_data.ConvertTOCSRConstraintJac();
+
+  std::cout << "done ConvertTOCSRConstraintJac" << std::endl;
+
   // calculate p
   gpu_t10_data.CalcP();
 

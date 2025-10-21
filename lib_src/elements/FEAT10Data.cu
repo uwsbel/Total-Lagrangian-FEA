@@ -378,6 +378,9 @@ void GPU_FEAT10_Data::ConvertToCSRMass() {
 
   is_csr_setup = true;
 }
+
+// This function converts the TRANSPOSE of the constraint Jacobian matrix to CSR
+// format
 void GPU_FEAT10_Data::ConvertTOCSRConstraintJac() {
   // TRANSPOSE: rows become columns, columns become rows
   int num_rows = n_coef * 3;    // J^T has (n_coef*3) rows (was columns in J)
@@ -528,7 +531,7 @@ void GPU_FEAT10_Data::ConvertTOCSRConstraintJac() {
 
   free(h_data_flash);
 
-  is_csr_setup = true;
+  is_cj_csr_setup = true;
 }
 
 void GPU_FEAT10_Data::RetrieveDetJToCPU(
