@@ -18,18 +18,6 @@
 // Definition of GPU_ANCF3443 and data access device functions
 #pragma once
 
-#ifndef HANDLE_ERROR_MACRO
-#define HANDLE_ERROR_MACRO
-static void HandleError(cudaError_t err, const char *file, int line) {
-  if (err != cudaSuccess) {
-    printf("%s in %s at line %d\n", cudaGetErrorString(err), file, line);
-    exit(EXIT_FAILURE);
-  }
-}
-
-#define HANDLE_ERROR(err) (HandleError(err, __FILE__, __LINE__))
-#endif
-
 //
 // define a SAP data strucutre
 struct GPU_ANCF3443_Data : public ElementBase {
@@ -586,10 +574,13 @@ struct GPU_ANCF3443_Data : public ElementBase {
 
     HANDLE_ERROR(cudaFree(d_element_connectivity));
     HANDLE_ERROR(cudaFree(d_node_values));
-    HANDLE_ERROR(cudaFree(d_csr_offsets));
-    HANDLE_ERROR(cudaFree(d_csr_columns));
-    HANDLE_ERROR(cudaFree(d_csr_values));
-    HANDLE_ERROR(cudaFree(d_nnz));
+
+    if (is_csr_setup) {
+      HANDLE_ERROR(cudaFree(d_csr_offsets));
+      HANDLE_ERROR(cudaFree(d_csr_columns));
+      HANDLE_ERROR(cudaFree(d_csr_values));
+      HANDLE_ERROR(cudaFree(d_nnz));
+    }
 
     HANDLE_ERROR(cudaFree(d_F));
     HANDLE_ERROR(cudaFree(d_P));
@@ -683,4 +674,5 @@ struct GPU_ANCF3443_Data : public ElementBase {
 
   bool is_setup             = false;
   bool is_constraints_setup = false;
+  bool is_csr_setup         = false;
 };

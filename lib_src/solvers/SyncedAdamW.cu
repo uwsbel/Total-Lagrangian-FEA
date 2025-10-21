@@ -486,10 +486,10 @@ __global__ void one_step_adamw_kernel(ElementBase *d_data,
           norm_constraint += constraint_val * constraint_val;
         }
         norm_constraint = sqrt(norm_constraint);
-        // printf("norm_constraint: %.17f\n", norm_constraint);
+        printf("norm_constraint: %.17f\n", norm_constraint);
 
         if (norm_constraint < d_adamw_solver->solver_outer_tol()) {
-          // printf("Converged constraint: %.17f\n", norm_constraint);
+          printf("Converged constraint: %.17f\n", norm_constraint);
           *d_adamw_solver->outer_flag() = 1;
         }
       }

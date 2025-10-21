@@ -176,7 +176,7 @@ __global__ void one_step_nesterov_kernel(
       double v_next = 0.0;
       double v_km1  = 0.0;
       double t      = 1.0;
-      double v_prev = 0.0;
+      // double v_prev = 0.0;
 
       if (tid == 0) {
         *d_nesterov_solver->prev_norm_g() = 0.0;
@@ -187,8 +187,8 @@ __global__ void one_step_nesterov_kernel(
 
       // Initialize for valid threads only
       if (tid < d_nesterov_solver->get_n_coef() * 3) {
-        v_prev = d_nesterov_solver->v_prev()(tid);
-        v_k    = d_nesterov_solver->v_guess()(tid);
+        // v_prev = d_nesterov_solver->v_prev()(tid);
+        v_k = d_nesterov_solver->v_guess()(tid);
         v_km1 =
             d_nesterov_solver->v_guess()(tid);  // zero momentum at first step
         t = 1.0;

@@ -243,10 +243,9 @@ void GPU_FEAT10_Data::CalcMassMatrix() {
 }
 
 void GPU_FEAT10_Data::ConvertToCSRMass() {
-  int num_rows   = n_coef;
-  int num_cols   = n_coef;
-  int ld         = num_cols;
-  int dense_size = ld * num_rows;
+  int num_rows = n_coef;
+  int num_cols = n_coef;
+  int ld       = num_cols;
 
   int *d_csr_offsets_temp;
   int *d_csr_columns_temp;
@@ -313,23 +312,6 @@ void GPU_FEAT10_Data::ConvertToCSRMass() {
   HANDLE_ERROR(cudaMemcpy(h_csr_values, d_csr_values_temp, nnz * sizeof(double),
                           cudaMemcpyDeviceToHost));
 
-  // print h_csr_offsets, h_csr_columns, h_csr_values
-  std::cout << "CSR Offsets:" << std::endl;
-  for (int i = 0; i <= num_rows; i++) {
-    std::cout << h_csr_offsets[i] << " ";
-  }
-  std::cout << std::endl;
-  std::cout << "CSR Columns:" << std::endl;
-  for (int i = 0; i < nnz; i++) {
-    std::cout << h_csr_columns[i] << " ";
-  }
-  std::cout << std::endl;
-  std::cout << "CSR Values:" << std::endl;
-  for (int i = 0; i < nnz; i++) {
-    std::cout << std::setprecision(6) << h_csr_values[i] << " ";
-  }
-  std::cout << std::endl;
-
   // copy all temp arrays to class members
   HANDLE_ERROR(cudaMalloc((void **)&d_csr_columns, nnz * sizeof(int)));
   HANDLE_ERROR(cudaMalloc((void **)&d_csr_values, nnz * sizeof(double)));
@@ -376,6 +358,8 @@ void GPU_FEAT10_Data::ConvertToCSRMass() {
                           cudaMemcpyHostToDevice));
 
   free(h_data_flash);
+
+  is_csr_setup = true;
 }
 
 void GPU_FEAT10_Data::RetrieveDetJToCPU(

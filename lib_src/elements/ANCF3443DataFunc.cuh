@@ -131,7 +131,8 @@ __device__ __forceinline__ void ancf3443_db_dzeta(double xi, double eta,
                                                   double *out) {
   double u = 0.5 * L * xi;
   double v = 0.5 * W * eta;
-  double w = 0.5 * H * zeta;
+  // NOTE: removed for performance and suppress warning
+  // double w = 0.5 * H * zeta;
 
   // db_dw as in your Python code
   out[0]  = 0.0;
