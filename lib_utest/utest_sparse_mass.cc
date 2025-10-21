@@ -83,7 +83,7 @@ TEST_F(TestSparseMass, FEA_T10_SparseMassMatrix) {
   }
 
   // print fixed nodes
-  std::cout << "Fixed nodes (z == 0):" << std::endl;
+  std::cout << "Fixed nodes (x == 0):" << std::endl;
   for (int i = 0; i < h_fixed_nodes.size(); ++i) {
     std::cout << h_fixed_nodes(i) << " ";
   }

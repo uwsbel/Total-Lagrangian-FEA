@@ -238,7 +238,7 @@ void GPU_FEAT10_Data::CalcInternalForce() {
 
 void GPU_FEAT10_Data::CalcConstraintData() {
   if (!is_constraints_setup) {
-    std::cerr << "constraint it not set up" << std::endl;
+    std::cerr << "constraint is not set up" << std::endl;
     return;
   }
   int total_threads     = n_constraint / 3;
