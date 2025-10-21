@@ -261,15 +261,19 @@ __global__ void one_step_adamw_kernel_impl(ElementType *d_data,
 
       grid.sync();
 
+      int n_constraints = d_adamw_solver->gpu_n_constraints();
+      for (int i = tid; i < n_constraints; i += grid.size()) {
+        double constraint_val = d_data->constraint()[i];
+        d_adamw_solver->lambda_guess()[i] +=
+            *d_adamw_solver->solver_rho() * d_adamw_solver->solver_time_step() *
+            constraint_val;
+      }
+      grid.sync();
+
+      unsigned long long t3 = clock64();
+
       // Dual variable update
       if (tid == 0) {
-        for (int i = 0; i < d_adamw_solver->gpu_n_constraints(); i++) {
-          double constraint_val = d_data->constraint()[i];
-          d_adamw_solver->lambda_guess()[i] +=
-              *d_adamw_solver->solver_rho() *
-              d_adamw_solver->solver_time_step() * constraint_val;
-        }
-
         double norm_constraint = 0.0;
         for (int i = 0; i < d_adamw_solver->gpu_n_constraints(); i++) {
           double constraint_val = d_data->constraint()[i];
