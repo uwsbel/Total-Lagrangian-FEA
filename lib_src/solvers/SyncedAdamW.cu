@@ -15,17 +15,20 @@ __device__ double solver_grad_L(int tid, ElementType *data,
                                 SyncedAdamWSolver *d_solver) {
   double res = 0.0;
 
-  int node_i = tid / 3;
-  int dof_i  = tid % 3;
+  const int node_i = tid / 3;
+  const int dof_i  = tid % 3;
 
   const int n_coef    = d_solver->get_n_coef();
   const double inv_dt = 1.0 / d_solver->solver_time_step();
 
-  // Mass matrix contribution
-  int *offsets   = data->csr_offsets();
-  int *columns   = data->csr_columns();
-  double *values = data->csr_values();
+  // Cache pointers once
+  const double *__restrict__ v_g    = d_solver->v_guess().data();
+  const double *__restrict__ v_p    = d_solver->v_prev().data();
+  const int *__restrict__ offsets   = data->csr_offsets();
+  const int *__restrict__ columns   = data->csr_columns();
+  const double *__restrict__ values = data->csr_values();
 
+  // Mass matrix contribution
   int row_start = offsets[node_i];
   int row_end   = offsets[node_i + 1];
 
@@ -33,7 +36,7 @@ __device__ double solver_grad_L(int tid, ElementType *data,
     int node_j     = columns[idx];
     double mass_ij = values[idx];
     int tid_j      = node_j * 3 + dof_i;
-    double v_diff  = d_solver->v_guess()[tid_j] - d_solver->v_prev()[tid_j];
+    double v_diff  = v_g[tid_j] - v_p[tid_j];
     res += mass_ij * v_diff * inv_dt;
   }
 
@@ -47,11 +50,13 @@ __device__ double solver_grad_L(int tid, ElementType *data,
   const int n_constraints = d_solver->gpu_n_constraints();
   const double rho_dt = *d_solver->solver_rho() * d_solver->solver_time_step();
 
+  const double *__restrict__ lam = d_solver->lambda_guess().data();
+  const double *__restrict__ con = data->constraint().data();
+
   for (int i = 0; i < n_constraints; i++) {
     double constraint_jac_val = data->constraint_jac()(i, tid);
-    double constraint_val     = data->constraint()[i];
-    res += constraint_jac_val *
-           (d_solver->lambda_guess()[i] + rho_dt * constraint_val);
+    double constraint_val     = con[i];
+    res += constraint_jac_val * (lam[i] + rho_dt * constraint_val);
   }
 
   return res;
