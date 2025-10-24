@@ -7,18 +7,20 @@
 #include "../elements/FEAT10Data.cuh"
 #include "SolverBase.h"
 
-// this is a true first order Nesterov method
+// this is a first order AdamW method
 // fully synced, and each inner iteration will compute the full gradient
 
-struct SyncedNesterovParams {
-  double alpha, rho, inner_tol, outer_tol;
+struct SyncedAdamWParams {
+  double lr, beta1, beta2, eps, weight_decay;
+  double inner_tol, outer_tol, rho;
   int max_outer, max_inner;
   double time_step;
+  int convergence_check_interval;
 };
 
-class SyncedNesterovSolver : public SolverBase {
+class SyncedAdamWSolver : public SolverBase {
  public:
-  SyncedNesterovSolver(ElementBase *data, int n_constraints)
+  SyncedAdamWSolver(ElementBase *data, int n_constraints)
       : n_coef_(data->get_n_coef()),
         n_beam_(data->get_n_beam()),
         n_constraints_(n_constraints) {
@@ -46,18 +48,12 @@ class SyncedNesterovSolver : public SolverBase {
       std::cerr << "Unknown element type!" << std::endl;
     }
 
-    if (d_data_ == nullptr) {
-      std::cerr << "d_data_ is null in SyncedNesterovSolver constructor"
-                << std::endl;
-    }
-
     cudaMalloc(&d_v_guess_, n_coef_ * 3 * sizeof(double));
     cudaMalloc(&d_v_prev_, n_coef_ * 3 * sizeof(double));
     cudaMalloc(&d_v_k_, n_coef_ * 3 * sizeof(double));
     cudaMalloc(&d_v_next_, n_coef_ * 3 * sizeof(double));
     cudaMalloc(&d_lambda_guess_, n_constraints_ * sizeof(double));
     cudaMalloc(&d_g_, n_coef_ * 3 * sizeof(double));
-    cudaMalloc(&d_prev_norm_g_, sizeof(double));
     cudaMalloc(&d_norm_g_, sizeof(double));
     cudaMalloc(&d_inner_flag_, sizeof(int));
     cudaMalloc(&d_outer_flag_, sizeof(int));
@@ -68,22 +64,28 @@ class SyncedNesterovSolver : public SolverBase {
     cudaMalloc(&d_max_inner_, sizeof(int));
     cudaMalloc(&d_time_step_, sizeof(double));
     cudaMalloc(&d_solver_rho_, sizeof(double));
+    cudaMalloc(&d_convergence_check_interval_, sizeof(int));
 
-    cudaMalloc(&d_nesterov_solver_, sizeof(SyncedNesterovSolver));
+    cudaMalloc(&d_adamw_solver_, sizeof(SyncedAdamWSolver));
+
+    cudaMalloc(&d_lr_, sizeof(double));
+    cudaMalloc(&d_beta1_, sizeof(double));
+    cudaMalloc(&d_beta2_, sizeof(double));
+    cudaMalloc(&d_eps_, sizeof(double));
+    cudaMalloc(&d_weight_decay_, sizeof(double));
 
     cudaMalloc(&d_x12_prev, n_coef_ * sizeof(double));
     cudaMalloc(&d_y12_prev, n_coef_ * sizeof(double));
     cudaMalloc(&d_z12_prev, n_coef_ * sizeof(double));
   }
 
-  ~SyncedNesterovSolver() {
+  ~SyncedAdamWSolver() {
     cudaFree(d_v_guess_);
     cudaFree(d_v_prev_);
     cudaFree(d_v_k_);
     cudaFree(d_v_next_);
     cudaFree(d_lambda_guess_);
     cudaFree(d_g_);
-    cudaFree(d_prev_norm_g_);
     cudaFree(d_norm_g_);
     cudaFree(d_inner_flag_);
     cudaFree(d_outer_flag_);
@@ -94,8 +96,15 @@ class SyncedNesterovSolver : public SolverBase {
     cudaFree(d_max_inner_);
     cudaFree(d_time_step_);
     cudaFree(d_solver_rho_);
+    cudaFree(d_convergence_check_interval_);
 
-    cudaFree(d_nesterov_solver_);
+    cudaFree(d_lr_);
+    cudaFree(d_beta1_);
+    cudaFree(d_beta2_);
+    cudaFree(d_eps_);
+    cudaFree(d_weight_decay_);
+
+    cudaFree(d_adamw_solver_);
 
     cudaFree(d_x12_prev);
     cudaFree(d_y12_prev);
@@ -103,8 +112,15 @@ class SyncedNesterovSolver : public SolverBase {
   }
 
   void SetParameters(void *params) override {
-    SyncedNesterovParams *p = static_cast<SyncedNesterovParams *>(params);
-    cudaMemcpy(d_alpha_, &p->alpha, sizeof(double), cudaMemcpyHostToDevice);
+    SyncedAdamWParams *p = static_cast<SyncedAdamWParams *>(params);
+
+    cudaMemcpy(d_lr_, &p->lr, sizeof(double), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_beta1_, &p->beta1, sizeof(double), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_beta2_, &p->beta2, sizeof(double), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_eps_, &p->eps, sizeof(double), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_weight_decay_, &p->weight_decay, sizeof(double),
+               cudaMemcpyHostToDevice);
+
     cudaMemcpy(d_inner_tol_, &p->inner_tol, sizeof(double),
                cudaMemcpyHostToDevice);
     cudaMemcpy(d_outer_tol_, &p->outer_tol, sizeof(double),
@@ -116,6 +132,8 @@ class SyncedNesterovSolver : public SolverBase {
     cudaMemcpy(d_time_step_, &p->time_step, sizeof(double),
                cudaMemcpyHostToDevice);
     cudaMemcpy(d_solver_rho_, &p->rho, sizeof(double), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_convergence_check_interval_, &p->convergence_check_interval,
+               sizeof(int), cudaMemcpyHostToDevice);
 
     cudaMemset(d_v_guess_, 0, n_coef_ * 3 * sizeof(double));
     cudaMemset(d_v_prev_, 0, n_coef_ * 3 * sizeof(double));
@@ -134,8 +152,7 @@ class SyncedNesterovSolver : public SolverBase {
     cudaMemset(d_lambda_guess_, 0, n_constraints_ * sizeof(double));
     cudaMemset(d_g_, 0, n_coef_ * 3 * sizeof(double));
 
-    HANDLE_ERROR(cudaMemcpy(d_nesterov_solver_, this,
-                            sizeof(SyncedNesterovSolver),
+    HANDLE_ERROR(cudaMemcpy(d_adamw_solver_, this, sizeof(SyncedAdamWSolver),
                             cudaMemcpyHostToDevice));
   }
 
@@ -170,9 +187,6 @@ class SyncedNesterovSolver : public SolverBase {
     return n_shape_;
   }
 
-  __device__ double *prev_norm_g() {
-    return d_prev_norm_g_;
-  }
   __device__ double *norm_g() {
     return d_norm_g_;
   }
@@ -203,6 +217,25 @@ class SyncedNesterovSolver : public SolverBase {
   __device__ double solver_time_step() const {
     return *d_time_step_;
   }
+  __device__ double solver_lr() const {
+    return *d_lr_;
+  }
+  __device__ double solver_beta1() const {
+    return *d_beta1_;
+  }
+  __device__ double solver_beta2() const {
+    return *d_beta2_;
+  }
+  __device__ double solver_eps() const {
+    return *d_eps_;
+  }
+  __device__ double solver_weight_decay() const {
+    return *d_weight_decay_;
+  }
+
+  __device__ int solver_convergence_check_interval() const {
+    return *d_convergence_check_interval_;
+  }
 
   __device__ Eigen::Map<Eigen::VectorXd> x12_prev() {
     return Eigen::Map<Eigen::VectorXd>(d_x12_prev, n_coef_);
@@ -222,16 +255,16 @@ class SyncedNesterovSolver : public SolverBase {
     return n_beam_;
   }
 
-  void OneStepNesterov();
+  void OneStepAdamW();
 
   void Solve() override {
-    OneStepNesterov();
+    OneStepAdamW();
   }
 
  private:
   ElementType type_;
   ElementBase *d_data_;
-  SyncedNesterovSolver *d_nesterov_solver_;
+  SyncedAdamWSolver *d_adamw_solver_;
   int n_total_qp_, n_shape_;
   int n_coef_, n_beam_, n_constraints_;
 
@@ -239,8 +272,14 @@ class SyncedNesterovSolver : public SolverBase {
 
   double *d_v_guess_, *d_v_prev_, *d_v_k_, *d_v_next_;
   double *d_lambda_guess_, *d_g_;
-  double *d_prev_norm_g_, *d_norm_g_;
+  double *d_norm_g_;
   int *d_inner_flag_, *d_outer_flag_;
+
+  double *d_lr_, *d_beta1_, *d_beta2_, *d_eps_, *d_weight_decay_;
+
   double *d_alpha_, *d_inner_tol_, *d_outer_tol_, *d_time_step_, *d_solver_rho_;
+
+  int *d_convergence_check_interval_;
+
   int *d_max_inner_, *d_max_outer_;
 };

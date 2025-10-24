@@ -1,5 +1,2 @@
 bazel-*
 .vscode
-
-*.pyc
-__pycache__/
