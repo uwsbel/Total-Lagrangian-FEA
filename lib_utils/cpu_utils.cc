@@ -582,4 +582,106 @@ int FEAT10_read_elements(const std::string &filename,
   return n_elements;
 }
 
+// MeshGenerator implementation
+MeshGenerator::MeshGenerator(double length, double width, double height, 
+                             double start_x, int n_beams)
+    : length_(length), width_(width), height_(height), start_x_(start_x), n_beams_(n_beams) {
+  if (n_beams < 1) {
+    throw std::invalid_argument("Number of beams must be >= 1");
+  }
+  if (length <= 0) {
+    throw std::invalid_argument("Beam length must be > 0");
+  }
+}
+
+void MeshGenerator::generate_coordinates() {
+  // Generate node positions along x-axis
+  std::vector<double> node_x;
+  
+  // First node (start of first beam)
+  node_x.push_back(start_x_ - length_ / 2.0);
+  
+  // Add nodes for each beam
+  for (int i = 0; i < n_beams_; i++) {
+    double beam_center = start_x_ + i * length_;
+    node_x.push_back(beam_center + length_ / 2.0);
+  }
+  
+  int n_nodes = node_x.size();
+  total_dofs_ = 4 * n_nodes;
+  
+  // Resize coordinate arrays
+  x_coords_.resize(total_dofs_);
+  y_coords_.resize(total_dofs_);
+  z_coords_.resize(total_dofs_);
+  
+  // Define the pattern for each node (4 DOFs per node)
+  // Pattern: [x, dx/du, dx/dv, dx/dw] for each coordinate
+  std::vector<double> x_pattern = {1.0, 1.0, 0.0, 0.0};
+  std::vector<double> y_pattern = {1.0, 0.0, 1.0, 0.0};
+  std::vector<double> z_pattern = {0.0, 0.0, 0.0, 1.0};
+  
+  // Fill the coordinate arrays
+  for (int i = 0; i < n_nodes; i++) {
+    int idx = 4 * i;
+    
+    // X coordinates
+    x_coords_[idx] = node_x[i];
+    for (int j = 1; j < 4; j++) {
+      x_coords_[idx + j] = x_pattern[j];
+    }
+    
+    // Y coordinates
+    for (int j = 0; j < 4; j++) {
+      y_coords_[idx + j] = y_pattern[j];
+    }
+    
+    // Z coordinates
+    for (int j = 0; j < 4; j++) {
+      z_coords_[idx + j] = z_pattern[j];
+    }
+  }
+  
+  // Generate DOF ranges for each beam
+  dof_ranges_.clear();
+  for (int i = 0; i < n_beams_; i++) {
+    int start_dof = i * 4;
+    int end_dof = start_dof + 7;
+    dof_ranges_.push_back({start_dof, end_dof});
+  }
+}
+
+void MeshGenerator::get_coordinates(Eigen::VectorXd& x, Eigen::VectorXd& y, Eigen::VectorXd& z) {
+  x.resize(total_dofs_);
+  y.resize(total_dofs_);
+  z.resize(total_dofs_);
+  
+  for (int i = 0; i < total_dofs_; i++) {
+    x(i) = x_coords_[i];
+    y(i) = y_coords_[i];
+    z(i) = z_coords_[i];
+  }
+}
+
+void MeshGenerator::get_dof_ranges(Eigen::VectorXi& start, Eigen::VectorXi& end) {
+  start.resize(n_beams_);
+  end.resize(n_beams_);
+  
+  for (int i = 0; i < n_beams_; i++) {
+    start(i) = dof_ranges_[i].first;
+    end(i) = dof_ranges_[i].second;
+  }
+}
+
+int MeshGenerator::get_total_dofs() const {
+  return total_dofs_;
+}
+
+std::pair<int, int> MeshGenerator::get_beam_dof_range(int beam_id) const {
+  if (beam_id < 0 || beam_id >= n_beams_) {
+    throw std::invalid_argument("Invalid beam_id");
+  }
+  return dof_ranges_[beam_id];
+}
+
 }  // namespace ANCFCPUUtils

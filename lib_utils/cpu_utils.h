@@ -95,4 +95,63 @@ int FEAT10_read_nodes(const std::string &filename, Eigen::MatrixXd &nodes);
 int FEAT10_read_elements(const std::string &filename,
                          Eigen::MatrixXi &elements);
 
+/**
+ * MeshGenerator class for generating beam mesh coordinates and DOF mappings
+ */
+class MeshGenerator {
+public:
+    /**
+     * Constructor for beam mesh generator
+     * @param length Beam length along x-axis
+     * @param width Beam width
+     * @param height Beam height
+     * @param start_x Starting x position of first beam
+     * @param n_beams Number of beam elements
+     */
+    MeshGenerator(double length, double width, double height, 
+                  double start_x, int n_beams);
+    
+    /**
+     * Generate nodal coordinates for all beams
+     */
+    void generate_coordinates();
+    
+    /**
+     * Get generated coordinates
+     * @param x Output x coordinates
+     * @param y Output y coordinates  
+     * @param z Output z coordinates
+     */
+    void get_coordinates(Eigen::VectorXd& x, Eigen::VectorXd& y, Eigen::VectorXd& z);
+    
+    /**
+     * Get DOF ranges for all beams
+     * @param start Output start indices for each beam's DOFs
+     * @param end Output end indices for each beam's DOFs
+     */
+    void get_dof_ranges(Eigen::VectorXi& start, Eigen::VectorXi& end);
+    
+    /**
+     * Get total number of DOFs
+     * @return Total number of DOFs
+     */
+    int get_total_dofs() const;
+    
+    /**
+     * Get DOF range for a specific beam
+     * @param beam_id Beam index
+     * @return Pair of (start_dof, end_dof)
+     */
+    std::pair<int, int> get_beam_dof_range(int beam_id) const;
+
+private:
+    double length_, width_, height_;
+    double start_x_;
+    int n_beams_;
+    
+    std::vector<double> x_coords_, y_coords_, z_coords_;
+    std::vector<std::pair<int, int>> dof_ranges_;
+    int total_dofs_;
+};
+
 }  // namespace ANCFCPUUtils
