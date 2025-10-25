@@ -14,6 +14,16 @@ cc_library(
     visibility = ["//visibility:public"],
 )
 
+# mesh utilities
+cc_library(
+    name = "mesh_utils",
+    srcs = ["lib_utils/mesh_utils.cc"],
+    hdrs = ["lib_utils/mesh_utils.h"],
+    copts = ["--std=c++17"],
+    deps = ["@eigen//:eigen"],
+    visibility = ["//visibility:public"],
+)
+
 # csv utilities
 cc_library(
     name = "csv_utils",
@@ -199,6 +209,7 @@ cc_binary(
     deps = [
         ":ANCF3243Data",
         ":cpu_utils",
+        ":mesh_utils",
         ":solvers_syncednesterov",
         ":solvers_syncedadamw",
         "@eigen//:eigen",
