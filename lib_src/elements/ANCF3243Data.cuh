@@ -229,13 +229,10 @@ struct GPU_ANCF3243_Data : public ElementBase {
 
   // ================================
 
-  __device__ Eigen::Map<Eigen::VectorXi> const offset_start() const {
-    return Eigen::Map<Eigen::VectorXi>(d_offset_start, n_beam);
+  __device__ int element_node(int elem, int local_node_idx) const {
+    return d_element_connectivity[elem * 2 + local_node_idx];
   }
 
-  __device__ Eigen::Map<Eigen::VectorXi> const offset_end() const {
-    return Eigen::Map<Eigen::VectorXi>(d_offset_end, n_beam);
-  }
 
   __device__ double L() const {
     return *d_L;
@@ -329,8 +326,9 @@ struct GPU_ANCF3243_Data : public ElementBase {
   }
 
   // Constructor
-  GPU_ANCF3243_Data(int num_beams) : n_beam(num_beams) {
-    n_coef = Quadrature::N_SHAPE_3243 + 4 * (n_beam - 1);
+  GPU_ANCF3243_Data(int num_nodes, int num_elements) : n_nodes(num_nodes), n_elements(num_elements) {
+    n_beam = num_elements;  // Initialize n_beam with n_elements
+    n_coef = 4 * n_nodes;  // Non-overlapping DOFs: 4 DOFs per node
     type   = TYPE_3243;
   }
 
@@ -364,8 +362,7 @@ struct GPU_ANCF3243_Data : public ElementBase {
     HANDLE_ERROR(cudaMalloc(&d_y12, n_coef * sizeof(double)));
     HANDLE_ERROR(cudaMalloc(&d_z12, n_coef * sizeof(double)));
 
-    HANDLE_ERROR(cudaMalloc(&d_offset_start, n_beam * sizeof(int)));
-    HANDLE_ERROR(cudaMalloc(&d_offset_end, n_beam * sizeof(int)));
+    HANDLE_ERROR(cudaMalloc(&d_element_connectivity, n_elements * 2 * sizeof(int)));
 
     HANDLE_ERROR(cudaMalloc(&d_node_values, n_coef * n_coef * sizeof(double)));
 
@@ -401,8 +398,7 @@ struct GPU_ANCF3243_Data : public ElementBase {
              const Eigen::VectorXd &weight_eta,
              const Eigen::VectorXd &weight_zeta, const Eigen::VectorXd &h_x12,
              const Eigen::VectorXd &h_y12, const Eigen::VectorXd &h_z12,
-             const Eigen::VectorXi &h_offset_start,
-             const Eigen::VectorXi &h_offset_end) {
+             const Eigen::Matrix<int, Eigen::Dynamic, 2, Eigen::RowMajor> &h_element_connectivity) {
     if (is_setup) {
       std::cerr << "GPU_ANCF3243_Data is already set up." << std::endl;
       return;
@@ -452,10 +448,8 @@ struct GPU_ANCF3243_Data : public ElementBase {
     HANDLE_ERROR(cudaMemcpy(d_z12, h_z12.data(), n_coef * sizeof(double),
                             cudaMemcpyHostToDevice));
 
-    HANDLE_ERROR(cudaMemcpy(d_offset_start, h_offset_start.data(),
-                            n_beam * sizeof(int), cudaMemcpyHostToDevice));
-    HANDLE_ERROR(cudaMemcpy(d_offset_end, h_offset_end.data(),
-                            n_beam * sizeof(int), cudaMemcpyHostToDevice));
+    HANDLE_ERROR(cudaMemcpy(d_element_connectivity, h_element_connectivity.data(),
+                            n_elements * 2 * sizeof(int), cudaMemcpyHostToDevice));
 
     HANDLE_ERROR(
         cudaMemset(d_node_values, 0, n_coef * n_coef * sizeof(double)));
@@ -546,8 +540,7 @@ struct GPU_ANCF3243_Data : public ElementBase {
     HANDLE_ERROR(cudaFree(d_y12));
     HANDLE_ERROR(cudaFree(d_z12));
 
-    HANDLE_ERROR(cudaFree(d_offset_start));
-    HANDLE_ERROR(cudaFree(d_offset_end));
+    HANDLE_ERROR(cudaFree(d_element_connectivity));
 
     HANDLE_ERROR(cudaFree(d_node_values));
 
@@ -623,6 +616,8 @@ struct GPU_ANCF3243_Data : public ElementBase {
 
   GPU_ANCF3243_Data *d_data;  // Storing GPU copy of SAPGPUData
 
+  int n_nodes;
+  int n_elements;
   int n_beam;
   int n_coef;
   int n_constraint;
@@ -636,7 +631,7 @@ struct GPU_ANCF3243_Data : public ElementBase {
   double *d_x12_jac, *d_y12_jac, *d_z12_jac;
   double *d_x12, *d_y12, *d_z12;
 
-  int *d_offset_start, *d_offset_end;
+  int *d_element_connectivity;  // n_elements × 2 array of node IDs
 
   double *d_node_values;
   int *d_csr_offsets, *d_csr_columns;

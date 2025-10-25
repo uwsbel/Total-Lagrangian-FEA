@@ -54,6 +54,46 @@ __global__ void mass_matrix_qp_kernel(GPU_ANCF3243_Data *d_data) {
   if (elem >= d_data->gpu_n_beam())
     return;
 
+  // local indices
+  int i_local =
+      item_local / Quadrature::N_SHAPE_3243;  // 0–7 (row)
+  int j_local =
+      item_local % Quadrature::N_SHAPE_3243;  // 0–7 (col)
+
+  // ===============================================================
+  // --- New: local→global DOF mapping using element_connectivity ---
+  // Each element has 2 nodes × 4 DOFs = 8 shape functions
+  // local index 0–3 → node 0, dof 0–3
+  // local index 4–7 → node 1, dof 0–3
+  // ===============================================================
+
+  const int node_i_local = (i_local < 4) ? 0 : 1;
+  const int node_j_local = (j_local < 4) ? 0 : 1;
+  const int dof_i_local  = i_local % 4;
+  const int dof_j_local  = j_local % 4;
+
+  const int node_i_global = d_data->element_node(elem, node_i_local);
+  const int node_j_global = d_data->element_node(elem, node_j_local);
+
+  // Flattened global DOF indices (4 DOFs per node)
+  const int i_global = node_i_global * 4 + dof_i_local;
+  const int j_global = node_j_global * 4 + dof_j_local;
+
+  // Get element nodes using connectivity  
+  int node0 = d_data->element_node(elem, 0);
+  int node1 = d_data->element_node(elem, 1);
+
+  // Create custom Eigen::Map that handles both nodes
+  Eigen::Map<Eigen::VectorXd> x_loc = d_data->x12(elem);
+  Eigen::Map<Eigen::VectorXd> y_loc = d_data->y12(elem);  
+  Eigen::Map<Eigen::VectorXd> z_loc = d_data->z12(elem);
+
+  // Precompute constants outside the loop
+  double rho = d_data->rho0();
+  double L = d_data->L();
+  double W = d_data->W();
+  double H = d_data->H();
+
   for (int qp_local = 0; qp_local < n_qp_per_elem; qp_local++) {
     // Decode qp_local into (ixi, ieta, izeta)
     int ixi   = qp_local / (Quadrature::N_QP_2 * Quadrature::N_QP_2);
@@ -66,41 +106,24 @@ __global__ void mass_matrix_qp_kernel(GPU_ANCF3243_Data *d_data) {
     double weight = d_data->weight_xi_m()(ixi) * d_data->weight_eta()(ieta) *
                     d_data->weight_zeta()(izeta);
 
-    // Get element's node offset
-    int node_offset = d_data->offset_start()(elem);
-
-    // Get local nodal coordinates for this element
-    Eigen::Map<Eigen::VectorXd> x_loc = d_data->x12(elem);
-    Eigen::Map<Eigen::VectorXd> y_loc = d_data->y12(elem);
-    Eigen::Map<Eigen::VectorXd> z_loc = d_data->z12(elem);
-
-    // Compute shape function at this QP
+    // Compute shape function vector (8 entries = 2 nodes × 4 DOFs)
     double b[8];
-    ancf3243_b_vec_xi(xi, eta, zeta, d_data->L(), d_data->W(), d_data->H(), b);
-    // ancf3243_b_vec_xi(xi, eta, zeta, 2.0, 1.0, 1.0, b);
+    ancf3243_b_vec_xi(xi, eta, zeta, L, W, H, b);
 
-    // Compute s = B_inv @ b
+    // Compute s = B_inv * b
     double s[8];
     ancf3243_mat_vec_mul8(d_data->B_inv(), b, s);
 
     // Compute Jacobian determinant
     double J[9];
     ancf3243_calc_det_J_xi(xi, eta, zeta, d_data->B_inv(), x_loc, y_loc, z_loc,
-                           d_data->L(), d_data->W(), d_data->H(), J);
+                           L, W, H, J);
     double detJ = ancf3243_det3x3(J);
 
-    // For each local node, output (global_node, value)
-    int i_local =
-        item_local / Quadrature::N_SHAPE_3243;  // Local node index (0-7)
-    int j_local = item_local %
-                  Quadrature::N_SHAPE_3243;  // Local shape function index (0-7)
-    int i_global = d_data->offset_start()(elem) + i_local;  // Global node index
-    int j_global =
-        d_data->offset_start()(elem) + j_local;  // Global shape function index
-
-    atomicAdd(d_data->node_values(i_global, j_global),
-              d_data->rho0() * s[i_local] * s[j_local] * weight * detJ);
+    // Accumulate contribution
+    atomicAdd(d_data->node_values(i_global, j_global), rho * s[i_local] * s[j_local] * weight * detJ);
   }
+
 }
 
 __global__ void calc_p_kernel(GPU_ANCF3243_Data *d_data) {

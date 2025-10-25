@@ -219,7 +219,7 @@ __device__ __forceinline__ void compute_p(int elem_idx, int qp_idx,
 __device__ __forceinline__ void compute_internal_force(
     int elem_idx, int node_idx, GPU_ANCF3243_Data *d_data) {
   double f_i[3] = {0};
-  int node_base = d_data->offset_start()(elem_idx);
+  int node_base = elem_idx * 4;
   double geom   = (d_data->L() * d_data->W() * d_data->H()) / 8.0;
 
   // clang-format off
