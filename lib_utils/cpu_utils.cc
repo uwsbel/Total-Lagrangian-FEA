@@ -582,5 +582,4 @@ int FEAT10_read_elements(const std::string &filename,
   return n_elements;
 }
 
-
 }  // namespace ANCFCPUUtils

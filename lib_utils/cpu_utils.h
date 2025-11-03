@@ -95,5 +95,4 @@ int FEAT10_read_nodes(const std::string &filename, Eigen::MatrixXd &nodes);
 int FEAT10_read_elements(const std::string &filename,
                          Eigen::MatrixXi &elements);
 
-
 }  // namespace ANCFCPUUtils
