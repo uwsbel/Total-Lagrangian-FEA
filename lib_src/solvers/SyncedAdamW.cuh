@@ -11,7 +11,7 @@
 // fully synced, and each inner iteration will compute the full gradient
 
 struct SyncedAdamWParams {
-  double lr, beta1, beta2, eps, weight_decay;
+  double lr, beta1, beta2, eps, weight_decay, lr_decay;
   double inner_tol, outer_tol, rho;
   int max_outer, max_inner;
   double time_step;
@@ -73,6 +73,7 @@ class SyncedAdamWSolver : public SolverBase {
     cudaMalloc(&d_beta2_, sizeof(double));
     cudaMalloc(&d_eps_, sizeof(double));
     cudaMalloc(&d_weight_decay_, sizeof(double));
+    cudaMalloc(&d_lr_decay_, sizeof(double));
 
     cudaMalloc(&d_x12_prev, n_coef_ * sizeof(double));
     cudaMalloc(&d_y12_prev, n_coef_ * sizeof(double));
@@ -103,6 +104,7 @@ class SyncedAdamWSolver : public SolverBase {
     cudaFree(d_beta2_);
     cudaFree(d_eps_);
     cudaFree(d_weight_decay_);
+    cudaFree(d_lr_decay_);
 
     cudaFree(d_adamw_solver_);
 
@@ -119,6 +121,8 @@ class SyncedAdamWSolver : public SolverBase {
     cudaMemcpy(d_beta2_, &p->beta2, sizeof(double), cudaMemcpyHostToDevice);
     cudaMemcpy(d_eps_, &p->eps, sizeof(double), cudaMemcpyHostToDevice);
     cudaMemcpy(d_weight_decay_, &p->weight_decay, sizeof(double),
+               cudaMemcpyHostToDevice);
+    cudaMemcpy(d_lr_decay_, &p->lr_decay, sizeof(double),
                cudaMemcpyHostToDevice);
 
     cudaMemcpy(d_inner_tol_, &p->inner_tol, sizeof(double),
@@ -232,6 +236,9 @@ class SyncedAdamWSolver : public SolverBase {
   __device__ double solver_weight_decay() const {
     return *d_weight_decay_;
   }
+  __device__ double solver_lr_decay() const {
+    return *d_lr_decay_;
+  }
 
   __device__ int solver_convergence_check_interval() const {
     return *d_convergence_check_interval_;
@@ -275,7 +282,7 @@ class SyncedAdamWSolver : public SolverBase {
   double *d_norm_g_;
   int *d_inner_flag_, *d_outer_flag_;
 
-  double *d_lr_, *d_beta1_, *d_beta2_, *d_eps_, *d_weight_decay_;
+  double *d_lr_, *d_beta1_, *d_beta2_, *d_eps_, *d_weight_decay_, *d_lr_decay_;
 
   double *d_alpha_, *d_inner_tol_, *d_outer_tol_, *d_time_step_, *d_solver_rho_;
 

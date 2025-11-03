@@ -115,6 +115,7 @@ __global__ void one_step_adamw_kernel_impl(ElementType *d_data,
       double beta2        = d_adamw_solver->solver_beta2();
       double eps          = d_adamw_solver->solver_eps();
       double weight_decay = d_adamw_solver->solver_weight_decay();
+      double lr_decay     = d_adamw_solver->solver_lr_decay();
       int conv_check_interval =
           d_adamw_solver->solver_convergence_check_interval();
 
@@ -143,7 +144,7 @@ __global__ void one_step_adamw_kernel_impl(ElementType *d_data,
           if (tid < d_adamw_solver->get_n_coef() * 3) {
             double g_tid       = d_adamw_solver->g()(tid);
             double v_guess_tid = d_adamw_solver->v_guess()(tid);
-            lr                 = lr * 0.995;
+            lr                 = lr * lr_decay;
             t += 1;
 
             m_t          = beta1 * m_t + (1 - beta1) * g_tid;
