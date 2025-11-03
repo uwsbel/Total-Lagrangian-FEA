@@ -119,7 +119,7 @@ int main() {
     std::cout << std::endl;
   }
 
-  /*
+  
   gpu_3243_data.ConvertToCSRMass();
 
   std::cout << "done ConvertToCSRMass" << std::endl;
@@ -184,6 +184,7 @@ int main() {
     }
     std::cout << std::endl;
   }
+  /*
 
   SyncedAdamWParams params = {2e-4, 0.9,  0.999, 1e-8, 1e-4, 1e-1,
                               1e-6, 1e14, 5,     500,  1e-3, 10};
