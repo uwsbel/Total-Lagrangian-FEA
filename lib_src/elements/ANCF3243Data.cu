@@ -80,13 +80,8 @@ __global__ void mass_matrix_qp_kernel(GPU_ANCF3243_Data *d_data) {
   const int j_global = node_j_global * 4 + dof_j_local;
 
   // Get element nodes using connectivity  
-  int node0 = d_data->element_node(elem, 0);
-  int node1 = d_data->element_node(elem, 1);
 
   // Create custom Eigen::Map that handles both nodes
-  Eigen::Map<Eigen::VectorXd> x_loc = d_data->x12(elem);
-  Eigen::Map<Eigen::VectorXd> y_loc = d_data->y12(elem);  
-  Eigen::Map<Eigen::VectorXd> z_loc = d_data->z12(elem);
 
   // Precompute constants outside the loop
   double rho = d_data->rho0();
