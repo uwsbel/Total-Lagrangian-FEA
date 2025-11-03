@@ -180,24 +180,6 @@ cc_binary(
 )
 
 cc_binary(
-    name = "test_ancf3243_adamw",
-    srcs = ["lib_bin/test_ancf3243_adamw.cc"],
-    copts = ["--std=c++17"],
-    linkopts = [
-        "-L/usr/local/cuda/lib64",
-        "-lcusparse",
-        "-lcudart",
-    ],
-    deps = [
-        ":ANCF3243Data",
-        ":cpu_utils",
-        ":solvers_syncednesterov",
-        ":solvers_syncedadamw",
-        "@eigen//:eigen",
-    ],
-)
-
-cc_binary(
     name = "test_ancf3243_adamw_mesh",
     srcs = ["lib_bin/test_ancf3243_adamw_mesh.cc"],
     copts = ["--std=c++17"],
