@@ -1,6 +1,8 @@
 #include <cooperative_groups.h>
 
+#include <fstream>
 #include <iomanip>
+#include <iostream>
 
 #include "FEAT10Data.cuh"
 #include "FEAT10DataFunc.cuh"
@@ -659,4 +661,49 @@ void GPU_FEAT10_Data::SetNodalFixed(const Eigen::VectorXi &fixed_nodes) {
                           cudaMemcpyHostToDevice));
 
   is_constraints_setup = true;
+}
+
+void GPU_FEAT10_Data::RetrieveConnectivityToCPU(Eigen::MatrixXi &connectivity) {
+  connectivity.resize(n_elem, Quadrature::N_NODE_T10_10);
+  HANDLE_ERROR(cudaMemcpy(connectivity.data(), d_element_connectivity,
+                          n_elem * Quadrature::N_NODE_T10_10 * sizeof(int),
+                          cudaMemcpyDeviceToHost));
+}
+
+void GPU_FEAT10_Data::WriteOutputVTK(const std::string &filename) {
+  Eigen::VectorXd x12, y12, z12;
+  this->RetrievePositionToCPU(x12, y12, z12);
+
+  // Retrieve connectivity
+  Eigen::MatrixXi connectivity;
+  this->RetrieveConnectivityToCPU(connectivity);
+
+  std::ofstream out(filename);
+  out << "# vtk DataFile Version 3.0\n";
+  out << "T10 mesh output\n";
+  out << "ASCII\n";
+  out << "DATASET UNSTRUCTURED_GRID\n";
+
+  // Write points
+  out << "POINTS " << x12.size() << " float\n";
+  for (int i = 0; i < x12.size(); ++i) {
+    out << x12(i) << " " << y12(i) << " " << z12(i) << "\n";
+  }
+
+  // Write cells (elements)
+  out << "CELLS " << connectivity.rows() << " " << connectivity.rows() * 11
+      << "\n";
+  for (int i = 0; i < connectivity.rows(); ++i) {
+    out << "10 ";
+    for (int j = 0; j < 10; ++j)
+      out << connectivity(i, j) << " ";
+    out << "\n";
+  }
+
+  // Write cell types (24 = VTK_QUADRATIC_TETRA)
+  out << "CELL_TYPES " << connectivity.rows() << "\n";
+  for (int i = 0; i < connectivity.rows(); ++i)
+    out << "24\n";
+
+  out.close();
 }

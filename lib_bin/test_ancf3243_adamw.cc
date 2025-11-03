@@ -22,12 +22,12 @@ int main() {
   const double rho0 = 2700;  // Density
 
   // Create 1D horizontal grid mesh (3 elements, 4 nodes)
-  ANCFCPUUtils::GridMeshGenerator grid_gen(3*L, 0.0, L, true, false);
+  ANCFCPUUtils::GridMeshGenerator grid_gen(3 * L, 0.0, L, true, false);
   grid_gen.generate_mesh();
-  
-  int n_nodes = grid_gen.get_num_nodes();
+
+  int n_nodes    = grid_gen.get_num_nodes();
   int n_elements = grid_gen.get_num_elements();
-  
+
   std::cout << "Number of nodes: " << n_nodes << std::endl;
   std::cout << "Number of elements: " << n_elements << std::endl;
   std::cout << "Total DOFs: " << 4 * n_nodes << std::endl;
@@ -38,8 +38,7 @@ int main() {
 
   // Compute B_inv on CPU
   Eigen::MatrixXd h_B_inv(Quadrature::N_SHAPE_3243, Quadrature::N_SHAPE_3243);
-  ANCFCPUUtils::ANCF3243_B12_matrix(L, W, H, h_B_inv,
-                                    Quadrature::N_SHAPE_3243);
+  ANCFCPUUtils::ANCF3243_B12_matrix(L, W, H, h_B_inv, Quadrature::N_SHAPE_3243);
 
   // Generate nodal coordinates using GridMeshGenerator
   Eigen::VectorXd h_x12(gpu_3243_data.get_n_coef());
@@ -73,11 +72,12 @@ int main() {
   // Get element connectivity - using GridMeshGenerator
   Eigen::MatrixXi h_element_connectivity;
   grid_gen.get_element_connectivity(h_element_connectivity);
-  
+
   // Debug: print element connectivity
   std::cout << "Element connectivity:" << std::endl;
   for (int i = 0; i < h_element_connectivity.rows(); i++) {
-    std::cout << "Element " << i << ": [" << h_element_connectivity(i, 0) << ", " << h_element_connectivity(i, 1) << "]" << std::endl;
+    std::cout << "Element " << i << ": [" << h_element_connectivity(i, 0)
+              << ", " << h_element_connectivity(i, 1) << "]" << std::endl;
   }
 
   // ======================================================================
@@ -114,12 +114,12 @@ int main() {
   std::cout << "mass matrix:" << std::endl;
   for (int i = 0; i < mass_matrix.rows(); i++) {
     for (int j = 0; j < mass_matrix.cols(); j++) {
-      std::cout << std::setw(10) << std::setprecision(3) << mass_matrix(i, j) << " ";
+      std::cout << std::setw(10) << std::setprecision(3) << mass_matrix(i, j)
+                << " ";
     }
     std::cout << std::endl;
   }
 
-  
   gpu_3243_data.ConvertToCSRMass();
 
   std::cout << "done ConvertToCSRMass" << std::endl;
@@ -185,8 +185,7 @@ int main() {
     std::cout << std::endl;
   }
 
-
-  SyncedAdamWParams params = {2e-4, 0.9,  0.999, 1e-8, 1e-4, 1e-1,
+  SyncedAdamWParams params = {2e-4, 0.9,  0.999, 1e-8, 1e-4, 0.995, 1e-1,
                               1e-6, 1e14, 5,     500,  1e-3, 10};
 
   // for now, n_constraints needs to be explicitly defined

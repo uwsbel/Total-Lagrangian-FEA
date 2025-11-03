@@ -192,7 +192,7 @@ int main() {
     std::cout << std::endl;
   }
 
-  SyncedAdamWParams params = {2e-4, 0.9,  0.999, 1e-8, 1e-4, 1e-1,
+  SyncedAdamWParams params = {2e-4, 0.9,  0.999, 1e-8, 1e-4, 0.995, 1e-1,
                               1e-6, 1e14, 5,     500,  1e-3, 10};
   SyncedAdamWSolver solver(&gpu_3443_data, gpu_3443_data.get_n_constraint());
   solver.Setup();

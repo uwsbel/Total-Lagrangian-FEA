@@ -317,6 +317,10 @@ struct GPU_FEAT10_Data : public ElementBase {
 
   void RetrieveDetJToCPU(std::vector<std::vector<double>> &detJ);
 
+  void RetrieveConnectivityToCPU(Eigen::MatrixXi &connectivity);
+
+  void WriteOutputVTK(const std::string &filename);
+
   // Constructor
   GPU_FEAT10_Data(int num_elements, int num_nodes)
       : n_elem(num_elements), n_coef(num_nodes) {
