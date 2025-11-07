@@ -71,6 +71,10 @@ class SyncedNewtonSolver : public SolverBase {
     cudaMalloc(&d_x12_prev, n_coef_ * sizeof(double));
     cudaMalloc(&d_y12_prev, n_coef_ * sizeof(double));
     cudaMalloc(&d_z12_prev, n_coef_ * sizeof(double));
+
+    cudaMalloc(&d_delta_v_, n_coef_ * 3 * sizeof(double));
+    cudaMalloc(&d_r_, n_coef_ * 3 * sizeof(double));
+    cudaMalloc(&d_p_, n_coef_ * 3 * sizeof(double));
   }
 
   ~SyncedNewtonSolver() {
@@ -94,6 +98,10 @@ class SyncedNewtonSolver : public SolverBase {
     cudaFree(d_x12_prev);
     cudaFree(d_y12_prev);
     cudaFree(d_z12_prev);
+
+    cudaFree(d_delta_v_);
+    cudaFree(d_r_);
+    cudaFree(d_p_);
   }
 
   void SetParameters(void *params) override {
@@ -109,6 +117,10 @@ class SyncedNewtonSolver : public SolverBase {
     cudaMemcpy(d_time_step_, &p->time_step, sizeof(double),
                cudaMemcpyHostToDevice);
     cudaMemcpy(d_solver_rho_, &p->rho, sizeof(double), cudaMemcpyHostToDevice);
+
+    cudaMemset(d_delta_v_, 0, n_coef_ * 3 * sizeof(double));
+    cudaMemset(d_r_, 0, n_coef_ * 3 * sizeof(double));
+    cudaMemset(d_p_, 0, n_coef_ * 3 * sizeof(double));
 
     cudaMemset(d_v_guess_, 0, n_coef_ * 3 * sizeof(double));
     cudaMemset(d_v_prev_, 0, n_coef_ * 3 * sizeof(double));
@@ -126,8 +138,7 @@ class SyncedNewtonSolver : public SolverBase {
     cudaMemset(d_g_, 0, n_coef_ * 3 * sizeof(double));
     cudaMemset(d_dv_, 0, n_coef_ * 3 * sizeof(double));
 
-    HANDLE_ERROR(cudaMemcpy(d_newton_solver_, this,
-                            sizeof(SyncedNewtonSolver),
+    HANDLE_ERROR(cudaMemcpy(d_newton_solver_, this, sizeof(SyncedNewtonSolver),
                             cudaMemcpyHostToDevice));
   }
 
@@ -196,6 +207,15 @@ class SyncedNewtonSolver : public SolverBase {
   __device__ Eigen::Map<Eigen::VectorXd> z12_prev() {
     return Eigen::Map<Eigen::VectorXd>(d_z12_prev, n_coef_);
   }
+  __device__ Eigen::Map<Eigen::VectorXd> delta_v() {
+    return Eigen::Map<Eigen::VectorXd>(d_delta_v_, 3 * n_coef_);
+  }
+  __device__ Eigen::Map<Eigen::VectorXd> r() {
+    return Eigen::Map<Eigen::VectorXd>(d_r_, 3 * n_coef_);
+  }
+  __device__ Eigen::Map<Eigen::VectorXd> p() {
+    return Eigen::Map<Eigen::VectorXd>(d_p_, 3 * n_coef_);
+  }
 #endif
 
   __host__ __device__ int get_n_coef() const {
@@ -226,4 +246,5 @@ class SyncedNewtonSolver : public SolverBase {
   int *d_inner_flag_, *d_outer_flag_;
   double *d_inner_tol_, *d_outer_tol_, *d_time_step_, *d_solver_rho_;
   int *d_max_inner_, *d_max_outer_;
+  double *d_delta_v_, *d_r_, *d_p_;
 };
