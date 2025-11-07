@@ -127,7 +127,26 @@ cuda_library(
     visibility = ["//visibility:public"],
 )
 
-
+cuda_library(
+    name = "solvers_syncednewton",
+    srcs = [
+        "lib_src/solvers/SyncedNewton.cu",
+    ],
+    hdrs = [
+        "lib_src/solvers/SolverBase.h",
+        "lib_src/solvers/SyncedNewton.cuh",
+    ],
+    copts = ["--std=c++17", "-O3", "--use_fast_math", "--extra-device-vectorization"],
+    deps = [
+        ":ANCF3243Data",
+        ":ANCF3443Data",
+        ":FEAT10Data",
+        ":cuda_utils",
+        ":cpu_utils",
+        "@eigen//:eigen",
+    ],
+    visibility = ["//visibility:public"],
+)
 
 # ========================================
 
@@ -147,6 +166,7 @@ cc_binary(
         ":cpu_utils",
         ":solvers_syncednesterov",
         ":solvers_syncedadamw",
+        ":solvers_syncednewton",
         "@eigen//:eigen",
     ],
 )
@@ -165,6 +185,7 @@ cc_binary(
         ":cpu_utils",
         ":solvers_syncednesterov",
         ":solvers_syncedadamw",
+        ":solvers_syncednewton",
         "@eigen//:eigen",
     ],
 )
@@ -183,6 +204,7 @@ cc_binary(
         ":cpu_utils",
         ":solvers_syncednesterov",
         ":solvers_syncedadamw",
+        ":solvers_syncednewton",
         "@eigen//:eigen",
     ],
 )
@@ -201,6 +223,7 @@ cc_binary(
         ":cpu_utils",
         ":solvers_syncednesterov",
         ":solvers_syncedadamw",
+        ":solvers_syncednewton",
         "@eigen//:eigen",
     ],
 )
@@ -219,6 +242,7 @@ cc_binary(
         ":cpu_utils",
         ":solvers_syncednesterov",
         ":solvers_syncedadamw",
+        ":solvers_syncednewton",
         "@eigen//:eigen",
     ],
 )
@@ -237,6 +261,7 @@ cc_binary(
         ":cpu_utils",
         ":solvers_syncednesterov",
         ":solvers_syncedadamw",
+        ":solvers_syncednewton",
         "@eigen//:eigen",
     ],
 )
@@ -256,6 +281,7 @@ cc_binary(
         ":cpu_utils",
         ":solvers_syncednesterov",
         ":solvers_syncedadamw",
+        ":solvers_syncednewton",
         "@eigen//:eigen",
     ],
 )
@@ -275,6 +301,7 @@ cc_binary(
         ":cpu_utils",
         ":solvers_syncednesterov",
         ":solvers_syncedadamw",
+        ":solvers_syncednewton",
         "@eigen//:eigen",
     ],
 )
@@ -293,6 +320,7 @@ cc_binary(
         ":cpu_utils",
         ":solvers_syncednesterov",
         ":solvers_syncedadamw",
+        ":solvers_syncednewton",
         "@eigen//:eigen",
     ],
 )
@@ -378,6 +406,7 @@ cc_test(
         "@googletest//:gtest_main",
         ":solvers_syncednesterov",
         ":solvers_syncedadamw",
+        ":solvers_syncednewton",
         ":csv_utils",
     ],
 )
