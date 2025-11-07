@@ -10,7 +10,6 @@
 
 namespace cg = cooperative_groups;
 
-// Templated solver_grad_L - same as AdamW/Nesterov
 template <typename ElementType>
 __device__ double solver_grad_L(int tid, ElementType *data,
                                 SyncedNewtonSolver *d_solver) {
@@ -43,7 +42,7 @@ __device__ double solver_grad_L(int tid, ElementType *data,
 
   // Mechanical force contribution: - (-f_int + f_ext) = f_int - f_ext
   res -= (-data->f_int()(tid));  // Add f_int
-  res -= data->f_ext()(tid);      // Subtract f_ext
+  res -= data->f_ext()(tid);     // Subtract f_ext
 
   const int n_constraints = d_solver->gpu_n_constraints();
 
@@ -69,7 +68,8 @@ __device__ double solver_grad_L(int tid, ElementType *data,
       const double constraint_val     = con[constraint_idx];
 
       // Add constraint contribution: h * J^T * (lambda + rho*c)
-      res += dt * constraint_jac_val * (lam[constraint_idx] + rho * constraint_val);
+      res += dt * constraint_jac_val *
+             (lam[constraint_idx] + rho * constraint_val);
     }
   }
 
@@ -78,27 +78,214 @@ __device__ double solver_grad_L(int tid, ElementType *data,
 
 // Templated Newton kernel - STARTER CODE (implement Newton method here)
 template <typename ElementType>
-__global__ void one_step_newton_kernel_impl(ElementType *d_data,
-                                            SyncedNewtonSolver *d_newton_solver) {
+__global__ void one_step_newton_kernel_impl(
+    ElementType *d_data, SyncedNewtonSolver *d_newton_solver) {
   cg::grid_group grid = cg::this_grid();
   int tid             = blockIdx.x * blockDim.x + threadIdx.x;
 
-  // TODO: Implement Newton solver
-  // 1. Save previous positions
-  // 2. Outer loop for ALM iterations
-  // 3. Inner loop for Newton iterations
-  //    - Compute gradient
-  //    - Solve linear system H * dv = -g
-  //    - Update velocity
-  // 4. Update dual variables (lambda)
-  // 5. Check convergence
+  // Save previous positions
+  if (tid < d_newton_solver->get_n_coef()) {
+    d_newton_solver->x12_prev()(tid) = d_data->x12()(tid);
+    d_newton_solver->y12_prev()(tid) = d_data->y12()(tid);
+    d_newton_solver->z12_prev()(tid) = d_data->z12()(tid);
+  }
+
+  grid.sync();
 
   if (tid == 0) {
-    printf("Newton solver: starter code - not yet implemented\n");
+    *d_newton_solver->inner_flag() = 0;
+    *d_newton_solver->outer_flag() = 0;
+  }
+
+  grid.sync();
+
+  for (int outer_iter = 0; outer_iter < d_newton_solver->solver_max_outer();
+       outer_iter++) {
+    if (*d_newton_solver->outer_flag() == 0) {
+      // Initialize per-thread variables
+
+      if (tid == 0) {
+        *d_newton_solver->norm_g() = 0.0;
+      }
+
+      grid.sync();
+
+      if (tid < d_newton_solver->get_n_coef() * 3) {
+        d_newton_solver->g()(tid) = 0.0;
+      }
+
+      grid.sync();
+      // first run to calculate initial gradient
+      // Compute P (stress)
+      if (tid <
+          d_newton_solver->get_n_beam() * d_newton_solver->gpu_n_total_qp()) {
+        for (int idx = tid; idx < d_newton_solver->get_n_beam() *
+                                      d_newton_solver->gpu_n_total_qp();
+             idx += grid.size()) {
+          int elem_idx = idx / d_newton_solver->gpu_n_total_qp();
+          int qp_idx   = idx % d_newton_solver->gpu_n_total_qp();
+          compute_p(elem_idx, qp_idx, d_data);
+        }
+      }
+
+      grid.sync();
+
+      // Clear internal force
+      if (tid < d_newton_solver->get_n_coef() * 3) {
+        clear_internal_force(d_data);
+      }
+
+      grid.sync();
+
+      // Compute internal force
+      if (tid <
+          d_newton_solver->get_n_beam() * d_newton_solver->gpu_n_shape()) {
+        for (int idx = tid; idx < d_newton_solver->get_n_beam() *
+                                      d_newton_solver->gpu_n_shape();
+             idx += grid.size()) {
+          int elem_idx = idx / d_newton_solver->gpu_n_shape();
+          int node_idx = idx % d_newton_solver->gpu_n_shape();
+          compute_internal_force(elem_idx, node_idx, d_data);
+        }
+      }
+
+      grid.sync();
+
+      // Compute constraints
+      if (tid < d_newton_solver->gpu_n_constraints() / 3) {
+        compute_constraint_data(d_data);
+      }
+
+      grid.sync();
+
+      // Compute gradient
+      if (tid < d_newton_solver->get_n_coef() * 3) {
+        double g                  = solver_grad_L(tid, d_data, d_newton_solver);
+        d_newton_solver->g()[tid] = g;
+      }
+
+      grid.sync();
+
+      // initialize delta_v (delta_v = 0), r = -g, p = r
+      if (tid < d_newton_solver->get_n_coef() * 3) {
+        d_newton_solver->delta_v()[tid] = 0.0;
+        d_newton_solver->r()[tid]       = -d_newton_solver->g()[tid];
+        d_newton_solver->p()[tid]       = d_newton_solver->r()[tid];
+      }
+
+      grid.sync();
+
+      // this is newton inner loop
+      // TODO: implement CG based hessian storage free here
+      for (int inner_iter = 0; inner_iter < d_newton_solver->solver_max_inner();
+           inner_iter++) {
+        grid.sync();
+
+        // KEY STEP: Matrix free hessian vector multiplication
+        // Hp = H * p
+
+        // compute optimal step size alpha
+        // r_dot_r = dot(r,r)
+        // p_dot_Hp = dot(p, Hp)
+        // alpha = r_dot_r / p_dot_Hp
+
+        // update solution and residual
+        // delta_v = delta_v + alpha * p
+        // r = r - alpha * Hp
+
+        // check convergence:
+        // if (norm(r) < d_newton_solver->solver_inner_tol()) {
+        //   break;
+        // }
+
+        // compute new search direction
+        // r_new_dot_r_new = dot(r,r)
+        // beta = r_new_dot_r_new / r_dot_r
+        // p = r + beta * p
+      }
+
+      // Update v_prev
+      if (tid < d_newton_solver->get_n_coef() * 3) {
+        d_newton_solver->v_prev()[tid] = d_newton_solver->v_guess()[tid];
+      }
+
+      grid.sync();
+
+      // Update positions
+      if (tid < d_newton_solver->get_n_coef()) {
+        d_data->x12()(tid) = d_newton_solver->x12_prev()(tid) +
+                             d_newton_solver->v_guess()(tid * 3 + 0) *
+                                 d_newton_solver->solver_time_step();
+        d_data->y12()(tid) = d_newton_solver->y12_prev()(tid) +
+                             d_newton_solver->v_guess()(tid * 3 + 1) *
+                                 d_newton_solver->solver_time_step();
+        d_data->z12()(tid) = d_newton_solver->z12_prev()(tid) +
+                             d_newton_solver->v_guess()(tid * 3 + 2) *
+                                 d_newton_solver->solver_time_step();
+      }
+
+      grid.sync();
+
+      // Compute constraints at new position
+      if (tid < d_newton_solver->gpu_n_constraints() / 3) {
+        compute_constraint_data(d_data);
+      }
+
+      grid.sync();
+
+      // dual variable update
+      int n_constraints = d_newton_solver->gpu_n_constraints();
+      for (int i = tid; i < n_constraints; i += grid.size()) {
+        double constraint_val = d_data->constraint()[i];
+        d_newton_solver->lambda_guess()[i] +=
+            *d_newton_solver->solver_rho() *
+            d_newton_solver->solver_time_step() * constraint_val;
+      }
+      grid.sync();
+
+      if (tid == 0) {
+        // check constraint convergence
+        double norm_constraint = 0.0;
+        for (int i = 0; i < d_newton_solver->gpu_n_constraints(); i++) {
+          double constraint_val = d_data->constraint()[i];
+          norm_constraint += constraint_val * constraint_val;
+        }
+        norm_constraint = sqrt(norm_constraint);
+        printf("norm_constraint: %.17f\n", norm_constraint);
+
+        if (norm_constraint < d_newton_solver->solver_outer_tol()) {
+          printf("Converged constraint: %.17f\n", norm_constraint);
+          *d_newton_solver->outer_flag() = 1;
+        }
+      }
+
+      grid.sync();
+    }
+  }
+
+  // Final position update
+  if (tid < d_newton_solver->get_n_coef()) {
+    d_data->x12()(tid) = d_newton_solver->x12_prev()(tid) +
+                         d_newton_solver->v_guess()(tid * 3 + 0) *
+                             d_newton_solver->solver_time_step();
+    d_data->y12()(tid) = d_newton_solver->y12_prev()(tid) +
+                         d_newton_solver->v_guess()(tid * 3 + 1) *
+                             d_newton_solver->solver_time_step();
+    d_data->z12()(tid) = d_newton_solver->z12_prev()(tid) +
+                         d_newton_solver->v_guess()(tid * 3 + 2) *
+                             d_newton_solver->solver_time_step();
   }
 
   grid.sync();
 }
+
+// Explicit instantiations
+template __global__ void one_step_newton_kernel_impl<GPU_ANCF3243_Data>(
+    GPU_ANCF3243_Data *, SyncedNewtonSolver *);
+template __global__ void one_step_newton_kernel_impl<GPU_ANCF3443_Data>(
+    GPU_ANCF3443_Data *, SyncedNewtonSolver *);
+template __global__ void one_step_newton_kernel_impl<GPU_FEAT10_Data>(
+    GPU_FEAT10_Data *, SyncedNewtonSolver *);
 
 // Wrapper function to call the appropriate kernel based on element type
 void SyncedNewtonSolver::OneStepNewton() {
