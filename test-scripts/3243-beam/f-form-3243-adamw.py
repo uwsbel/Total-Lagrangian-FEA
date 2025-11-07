@@ -576,7 +576,7 @@ for step in range(Nt):
 
                 J = constraint_jacobian(qA)
                 constr_violation = constraint(qA)
-                return g + J.T @ (lam + rho * h * constr_violation)
+                return g + h*(J.T @ (lam + rho * constr_violation))
 
             # === AdamW parameters ===
             lr = 2e-4
@@ -618,7 +618,7 @@ for step in range(Nt):
             v = v_current
             qA = q_prev + h * v
             constr_violation = constraint(qA)
-            lam += rho * h * constr_violation
+            lam += rho * constr_violation
 
             print(
                 f">>>>> End of OUTER STEP #{outer_iter}; ||c|| = {np.linalg.norm(constr_violation):.2e}")

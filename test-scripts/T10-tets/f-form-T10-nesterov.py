@@ -401,7 +401,7 @@ if __name__ == "__main__":
                 g_mech = (M @ (v_loc - v_prev)) / h - (-f_int_dyn.flatten() + f_ext)
                 J = constraint_jacobian(qA)
                 cA = constraint(qA)
-                return g_mech + J.T @ (lam + rho_bb*h*cA)
+                return g_mech + h*(J.T @ (lam + rho_bb*cA))
 
             v_k   = v.copy()
             v_km1 = v.copy()
@@ -432,7 +432,7 @@ if __name__ == "__main__":
             v = v_k
             qA = q_prev + h*v
             cA = constraint(qA)
-            lam += rho_bb*h*cA
+            lam += rho_bb*cA
             print(f">>>>> OUTER {outer_iter}: ||c||={np.linalg.norm(cA):.3e}")
 
         return v, lam
