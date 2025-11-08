@@ -287,3 +287,16 @@ __device__ __forceinline__ void clear_internal_force(
     d_data->f_int()[thread_idx] = 0.0;
   }
 }
+
+// Add at the end of the file, after clear_internal_force()
+
+__device__ __forceinline__ void compute_hessian_p(
+    int elem_idx, int qp_idx, GPU_ANCF3243_Data *d_data,
+    const double *p,  // Input: search direction (3*n_coef)
+    double *Hp,
+    double h) {  // Output: Hessian-vector product (3*n_coef)
+
+  // TODO: Implement Hessian-vector product for ANCF3243 elements
+  // Element has 8 nodes × 3 DOFs = 24 DOFs per element
+  // For now, this is a placeholder stub
+}

@@ -1,6 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from tet_mesh_reader import read_node, read_ele
+import scipy.sparse.linalg
 
 # ----------------------------
 # Material
@@ -302,8 +303,14 @@ def newton_inner(v0, q_prev, v_prev, M, f_int_func, f_ext, h,
         Kt = tet10_tangent_svk_mesh(X_nodes, x, X_elem, pre_mesh, lam, mu)
         J  = (M / h) + h * Kt + (h**2) * (T.T @ (rho_bb * T))  # ALM curvature
 
-        # Solve and update
-        dv = np.linalg.solve(J, -R)
+        # Solve and update (using Conjugate Gradient)
+        cg_iter = [0]
+        def cg_callback(xk):
+            cg_iter[0] += 1
+        dv, info = scipy.sparse.linalg.cg(J, -R, tol=1e-10, maxiter=1000, callback=cg_callback)
+        print(f"    CG iterations: {cg_iter[0]}")
+        if info < 0:
+            print(f"Warning: CG failed with info={info}")
         v += dv
 
         if np.linalg.norm(dv) < tol_step*(1+np.linalg.norm(v)):
