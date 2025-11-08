@@ -75,6 +75,15 @@ class SyncedNewtonSolver : public SolverBase {
     cudaMalloc(&d_delta_v_, n_coef_ * 3 * sizeof(double));
     cudaMalloc(&d_r_, n_coef_ * 3 * sizeof(double));
     cudaMalloc(&d_p_, n_coef_ * 3 * sizeof(double));
+    cudaMalloc(&d_Hp_, n_coef_ * 3 * sizeof(double));
+    cudaMalloc(&d_r_dot_r_, sizeof(double));
+    cudaMalloc(&d_alpha_cg_, sizeof(double));
+    cudaMalloc(&d_beta_cg_, sizeof(double));
+
+    // Add missing CG workspace scalars
+    cudaMalloc(&d_p_dot_Hp_, sizeof(double));
+    cudaMalloc(&d_norm_r_, sizeof(double));
+    cudaMalloc(&d_r_new_dot_r_new_, sizeof(double));
   }
 
   ~SyncedNewtonSolver() {
@@ -102,6 +111,15 @@ class SyncedNewtonSolver : public SolverBase {
     cudaFree(d_delta_v_);
     cudaFree(d_r_);
     cudaFree(d_p_);
+    cudaFree(d_Hp_);
+    cudaFree(d_r_dot_r_);
+    cudaFree(d_alpha_cg_);
+    cudaFree(d_beta_cg_);
+
+    // Free missing CG workspace scalars
+    cudaFree(d_p_dot_Hp_);
+    cudaFree(d_norm_r_);
+    cudaFree(d_r_new_dot_r_new_);
   }
 
   void SetParameters(void *params) override {
@@ -137,6 +155,15 @@ class SyncedNewtonSolver : public SolverBase {
     cudaMemset(d_lambda_guess_, 0, n_constraints_ * sizeof(double));
     cudaMemset(d_g_, 0, n_coef_ * 3 * sizeof(double));
     cudaMemset(d_dv_, 0, n_coef_ * 3 * sizeof(double));
+    cudaMemset(d_Hp_, 0, n_coef_ * 3 * sizeof(double));
+    cudaMemset(d_r_dot_r_, 0, sizeof(double));
+    cudaMemset(d_alpha_cg_, 0, sizeof(double));
+    cudaMemset(d_beta_cg_, 0, sizeof(double));
+
+    // Initialize missing CG workspace scalars
+    cudaMemset(d_p_dot_Hp_, 0, sizeof(double));
+    cudaMemset(d_norm_r_, 0, sizeof(double));
+    cudaMemset(d_r_new_dot_r_new_, 0, sizeof(double));
 
     HANDLE_ERROR(cudaMemcpy(d_newton_solver_, this, sizeof(SyncedNewtonSolver),
                             cudaMemcpyHostToDevice));
@@ -158,6 +185,9 @@ class SyncedNewtonSolver : public SolverBase {
   }
   __device__ Eigen::Map<Eigen::VectorXd> dv() {
     return Eigen::Map<Eigen::VectorXd>(d_dv_, 3 * n_coef_);
+  }
+  __device__ Eigen::Map<Eigen::VectorXd> Hp() {
+    return Eigen::Map<Eigen::VectorXd>(d_Hp_, 3 * n_coef_);
   }
 
   __device__ int gpu_n_constraints() {
@@ -216,6 +246,26 @@ class SyncedNewtonSolver : public SolverBase {
   __device__ Eigen::Map<Eigen::VectorXd> p() {
     return Eigen::Map<Eigen::VectorXd>(d_p_, 3 * n_coef_);
   }
+  __device__ double *r_dot_r() {
+    return d_r_dot_r_;
+  }
+  __device__ double *alpha_cg() {
+    return d_alpha_cg_;
+  }
+  __device__ double *beta_cg() {
+    return d_beta_cg_;
+  }
+
+  // Add missing CG accessor functions
+  __device__ double *p_dot_Hp() {
+    return d_p_dot_Hp_;
+  }
+  __device__ double *norm_r() {
+    return d_norm_r_;
+  }
+  __device__ double *r_new_dot_r_new() {
+    return d_r_new_dot_r_new_;
+  }
 #endif
 
   __host__ __device__ int get_n_coef() const {
@@ -247,4 +297,12 @@ class SyncedNewtonSolver : public SolverBase {
   double *d_inner_tol_, *d_outer_tol_, *d_time_step_, *d_solver_rho_;
   int *d_max_inner_, *d_max_outer_;
   double *d_delta_v_, *d_r_, *d_p_;
+  double *d_Hp_;                     // Hessian-vector product
+  double *d_r_dot_r_;                // Scalar for dot product storage
+  double *d_alpha_cg_, *d_beta_cg_;  // CG scalars
+
+  // Add missing CG workspace scalars
+  double *d_p_dot_Hp_;         // For p·Hp dot product
+  double *d_norm_r_;           // For residual norm
+  double *d_r_new_dot_r_new_;  // For updated residual dot product
 };

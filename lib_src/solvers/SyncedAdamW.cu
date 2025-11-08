@@ -43,7 +43,7 @@ __device__ double solver_grad_L(int tid, ElementType *data,
 
   // Mechanical force contribution: - (-f_int + f_ext) = f_int - f_ext
   res -= (-data->f_int()(tid));  // Add f_int
-  res -= data->f_ext()(tid);      // Subtract f_ext
+  res -= data->f_ext()(tid);     // Subtract f_ext
 
   const int n_constraints = d_solver->gpu_n_constraints();
 
@@ -70,7 +70,8 @@ __device__ double solver_grad_L(int tid, ElementType *data,
       const double constraint_val = con[constraint_idx];
 
       // Add constraint contribution: h * J^T * (lambda + rho*c)
-      res += dt * constraint_jac_val * (lam[constraint_idx] + rho * constraint_val);
+      res += dt * constraint_jac_val *
+             (lam[constraint_idx] + rho * constraint_val);
     }
   }
 
