@@ -10,6 +10,97 @@
 
 namespace cg = cooperative_groups;
 
+
+// =====================
+// Device function to perform Cholesky factorization
+__device__ void CholeskyFactorizationFunc(Eigen::Map<Eigen::MatrixXd> M,
+                                          Eigen::Map<Eigen::MatrixXd> L,
+                                           int thread_idx, int n) {
+
+    cg::grid_group grid = cg::this_grid();
+
+    // Rank of this thread across the WHOLE grid, 0..grid.size()-1
+    int j         = thread_idx;
+    int j_up = grid.size() - 1;            // "index of the last thread"
+
+    for (int i = 0; i <= j_up; ++i) {
+      if (j < n && i <= j && i == j) {
+        double sum = 0.0;
+        for (int k = 0; k < i; ++k) {
+          sum += L(i, k) * L(i, k);
+        }
+        L(i, i) = sqrt(M(i, i) - sum);
+      }
+
+      grid.sync();
+
+      if (j < n && i <= j && j > i) {
+        double sum = 0.0;
+        for (int k = 0; k < i; ++k) {
+          sum += L(j, k) * L(i, k);
+        }
+        L(j, i) = (M(j, i) - sum) / L(i, i);
+      }
+
+      grid.sync();
+    }
+  
+}
+
+__device__ void CholeskySolveForwardFunc(Eigen::Map<Eigen::MatrixXd> L,
+                                         Eigen::Map<Eigen::VectorXd> b,  // Changed from MatrixXd
+                                         Eigen::Map<Eigen::VectorXd> y,  // Changed from MatrixXd
+                                         int thread_idx, size_t n) {
+  cg::grid_group grid = cg::this_grid();
+
+  int j         = thread_idx;
+  int j_up = grid.size() - 1;            // "index of the last thread"
+
+  // Forward substitution to solve L * y = b
+  double sum = 0.0;
+  for (int i = 0; i <= j_up; ++i) {
+    if (j < n && i <= j && i == j) {
+      y(j) = (b(j) - sum) / L(j, j);  // Changed from y(j, 0) and b(j)
+    }
+    grid.sync();
+
+    if (j < n && i <= j && i < j) {
+      sum += L(j, i) * y(i);  // Changed from y(i, 0)
+    }
+
+    grid.sync();
+  }
+}
+
+// Device function to perform backward substitution: L^T * x = y
+__device__ void CholeskySolveBackwardFunc(Eigen::Map<Eigen::MatrixXd> L,
+                                          Eigen::Map<Eigen::VectorXd> y,  // Changed from MatrixXd
+                                          Eigen::Map<Eigen::VectorXd> x,  // Changed from MatrixXd
+                                          int thread_idx, size_t n) {
+  cg::grid_group grid = cg::this_grid();
+
+  int j = thread_idx;
+  int j_down = 0;  // We iterate from n-1 down to 0
+
+  // Backward substitution to solve L^T * x = y
+  double sum = 0.0;
+  for (int i = n - 1; i >= j_down; --i) {
+    // Thread i computes x(i)
+    if (j < n && i >= j && i == j) {
+      x(j) = (y(j) - sum) / L(j, j);  // Changed from x(j, 0) and y(j, 0)
+    }
+    grid.sync();
+
+    // Threads j < i accumulate sum for x(j): sum += L(i, j) * x(i)
+    if (j < n && i >= j && i > j) {
+      sum += L(i, j) * x(i);  // Changed from x(i, 0)
+    }
+
+    grid.sync();
+  }
+}
+
+
 template <typename ElementType>
 __device__ double solver_grad_L(int tid, ElementType *data,
                                 SyncedNewtonSolver *d_solver) {
@@ -223,170 +314,140 @@ __global__ void one_step_newton_kernel_impl(
           if (tid < d_newton_solver->get_n_coef() * 3) {
             d_newton_solver->delta_v()[tid] = 0.0;
             d_newton_solver->r()[tid]       = -d_newton_solver->g()[tid];
-            d_newton_solver->p()[tid]       = d_newton_solver->r()[tid];
           }
           grid.sync();
 
-          // ========== INNER LOOP: CG iterations (solve H*dv=-g) ==========
-          for (int cg_iter = 0; cg_iter < 200; cg_iter++) {
-            // 0) Hp = 0
-            if (tid < d_newton_solver->get_n_coef() * 3) {
-              d_newton_solver->Hp()[tid] = 0.0;
-            }
-            grid.sync();
-
-            // 1) Hp = H * p  (RECOMPUTE every iteration)
-            // Tangent: h*Kt*p (geometry is frozen for this Newton step)
-            if (tid < d_newton_solver->get_n_beam() *
-                          d_newton_solver->gpu_n_total_qp()) {
-              for (int idx = tid; idx < d_newton_solver->get_n_beam() *
-                                            d_newton_solver->gpu_n_total_qp();
-                   idx += grid.size()) {
-                int elem_idx = idx / d_newton_solver->gpu_n_total_qp();
-                int qp_idx   = idx % d_newton_solver->gpu_n_total_qp();
-                compute_hessian_p(elem_idx, qp_idx, d_data,
-                                  d_newton_solver->p().data(),
-                                  d_newton_solver->Hp().data(),
-                                  d_newton_solver->solver_time_step());
-              }
-            }
-            grid.sync();
-
-            // Mass: (M/h)*p
-            double h = d_newton_solver->solver_time_step();
-            if (tid < d_newton_solver->get_n_coef()) {
-              int row_start = d_data->csr_offsets()[tid];
-              int row_end   = d_data->csr_offsets()[tid + 1];
-              for (int dof = 0; dof < 3; dof++) {
-                int row_dof_idx = tid * 3 + dof;
-                double mass_p   = 0.0;
-                for (int idx = row_start; idx < row_end; idx++) {
-                  int col_node    = d_data->csr_columns()[idx];
-                  double mass_val = d_data->csr_values()[idx];
-                  int col_dof_idx = col_node * 3 + dof;
-                  mass_p += mass_val * d_newton_solver->p()[col_dof_idx];
-                }
-                d_newton_solver->Hp()[row_dof_idx] += mass_p / h;
-              }
-            }
-            grid.sync();
-
-            // Constraint: h^2 J^T rho J p
-            if (d_newton_solver->gpu_n_constraints() > 0) {
-              double rho = *d_newton_solver->solver_rho();
-              if (tid < d_newton_solver->gpu_n_constraints()) {
-                int row_start = d_data->cj_csr_offsets()[tid];
-                int row_end   = d_data->cj_csr_offsets()[tid + 1];
-                double Jp_i   = 0.0;
-                for (int idx = row_start; idx < row_end; idx++) {
-                  int col        = d_data->cj_csr_columns()[idx];
-                  double jac_val = d_data->cj_csr_values()[idx];
-                  Jp_i += jac_val * d_newton_solver->p()[col];
-                }
-                for (int idx = row_start; idx < row_end; idx++) {
-                  int col        = d_data->cj_csr_columns()[idx];
-                  double jac_val = d_data->cj_csr_values()[idx];
-                  atomicAdd(&d_newton_solver->Hp()[col],
-                            h * h * jac_val * rho * Jp_i);
-                }
-              }
-            }
-            grid.sync();
-
-            // 2) Dot products for alpha
-            if (tid == 0) {
-              *d_newton_solver->r_dot_r()  = 0.0;
-              *d_newton_solver->p_dot_Hp() = 0.0;
-            }
-            grid.sync();
-
-            if (tid < d_newton_solver->get_n_coef() * 3) {
-              double r_val  = d_newton_solver->r()[tid];
-              double p_val  = d_newton_solver->p()[tid];
-              double Hp_val = d_newton_solver->Hp()[tid];
-              atomicAdd(d_newton_solver->r_dot_r(), r_val * r_val);
-              atomicAdd(d_newton_solver->p_dot_Hp(), p_val * Hp_val);
-            }
-            grid.sync();
-
-            if (tid == 0) {
-              double denom = *d_newton_solver->p_dot_Hp();
-              if (denom <= 0.0) {
-                printf("CG breakdown: p^T H p = %e (non-SPD?)\n", denom);
-                *d_newton_solver->alpha_cg() = 0.0;
-              } else {
-                *d_newton_solver->alpha_cg() =
-                    (*d_newton_solver->r_dot_r()) / denom;
-              }
-            }
-            grid.sync();
-
-            // 3) Update delta_v, r
-            if (tid < d_newton_solver->get_n_coef() * 3) {
-              double alpha = *d_newton_solver->alpha_cg();
-              d_newton_solver->delta_v()[tid] +=
-                  alpha * d_newton_solver->p()[tid];
-              d_newton_solver->r()[tid] -= alpha * d_newton_solver->Hp()[tid];
-            }
-            grid.sync();
-
-            // 4) Convergence (relative)
-            if (tid == 0)
-              *d_newton_solver->norm_r() = 0.0;
-            grid.sync();
-
-            if (tid < d_newton_solver->get_n_coef() * 3) {
-              double r_val = d_newton_solver->r()[tid];
-              atomicAdd(d_newton_solver->norm_r(), r_val * r_val);
-            }
-            grid.sync();
-
-            bool stop = false;
-            if (tid == 0) {
-              double r2 = *d_newton_solver->norm_r();
-              
-              // Store r0 on first CG iteration using r_new_dot_r_new buffer
-              if (cg_iter == 0) {
-                *d_newton_solver->r_new_dot_r_new() = r2;
-              }
-              double r0 = *d_newton_solver->r_new_dot_r_new();  // Read stored r0
-              
-              if (cg_iter % 5 == 0) {
-                printf("      CG iter %d: ||r|| = %.6e (rel=%.3e)\n", cg_iter,
-                       sqrt(r2), sqrt(r2 / (r0 + 1e-30)));
-              }
-              stop = (r2 / (r0 + 1e-30) < 1e-12) || (sqrt(r2) < 1e-12);
-            }
-            grid.sync();
-            if (stop)
-              break;
-
-            // 5) beta and 6) p update
-            if (tid == 0)
-              *d_newton_solver->r_new_dot_r_new() = 0.0;
-            grid.sync();
-
-            if (tid < d_newton_solver->get_n_coef() * 3) {
-              double r_val = d_newton_solver->r()[tid];
-              atomicAdd(d_newton_solver->r_new_dot_r_new(), r_val * r_val);
-            }
-            grid.sync();
-
-            if (tid == 0) {
-              double r_new                = *d_newton_solver->r_new_dot_r_new();
-              double r_old                = *d_newton_solver->r_dot_r();
-              *d_newton_solver->beta_cg() = r_new / (r_old + 1e-30);
-            }
-            grid.sync();
-
-            if (tid < d_newton_solver->get_n_coef() * 3) {
-              double beta = *d_newton_solver->beta_cg();
-              d_newton_solver->p()[tid] =
-                  d_newton_solver->r()[tid] + beta * d_newton_solver->p()[tid];
-            }
-            grid.sync();
+          // ===== ASSEMBLE FULL HESSIAN: H = (M/h) + h*Kt + h^2*J^T*rho*J =====
+          
+          // Step 1: Clear Hessian matrix
+          int n_dofs = 3 * d_newton_solver->get_n_coef();
+          for (int idx = tid; idx < n_dofs * n_dofs; idx += grid.size()) {
+            d_newton_solver->H().data()[idx] = 0.0;
           }
-          // ========== END CG LOOP ==========
+          grid.sync();
+
+          // Step 2: Assemble tangent stiffness contribution: h * Kt
+          if (tid < d_newton_solver->get_n_beam() *
+                        d_newton_solver->gpu_n_total_qp()) {
+            for (int idx = tid; idx < d_newton_solver->get_n_beam() *
+                                          d_newton_solver->gpu_n_total_qp();
+                 idx += grid.size()) {
+              int elem_idx = idx / d_newton_solver->gpu_n_total_qp();
+              int qp_idx   = idx % d_newton_solver->gpu_n_total_qp();
+              compute_hessian_assemble(elem_idx, qp_idx, d_data,
+                        d_newton_solver->H(),
+                        d_newton_solver->solver_time_step());
+            }
+          }
+          grid.sync();
+
+          // Step 3: Add mass matrix contribution: M/h (diagonal 3x3 blocks)
+          const double inv_h = 1.0 / d_newton_solver->solver_time_step();
+          if (tid < d_newton_solver->get_n_coef()) {
+            const int node_i = tid;
+            const int *__restrict__ offsets = d_data->csr_offsets();
+            const int *__restrict__ columns = d_data->csr_columns();
+            const double *__restrict__ values = d_data->csr_values();
+
+            int row_start = offsets[node_i];
+            int row_end   = offsets[node_i + 1];
+
+            for (int idx = row_start; idx < row_end; idx++) {
+              int node_j = columns[idx];
+              double mass_ij = values[idx];
+
+              // Add (mass_ij / h) * I_3x3 to H
+              // For each DOF (x, y, z)
+              for (int dof = 0; dof < 3; dof++) {
+                int global_row = 3 * node_i + dof;
+                int global_col = 3 * node_j + dof;
+                atomicAdd(&d_newton_solver->H()(global_row, global_col), 
+                         mass_ij * inv_h);
+              }
+            }
+          }
+          grid.sync();
+
+          // Step 4: Add constraint Hessian contribution: h^2 * J^T * rho * J
+          const int n_constraints = d_newton_solver->gpu_n_constraints();
+          if (n_constraints > 0) {
+            const double h = d_newton_solver->solver_time_step();
+            const double rho = *d_newton_solver->solver_rho();
+            const double factor = h * h * rho;
+
+            // CSR format for J^T (transpose of constraint Jacobian)
+            const int *__restrict__ cjT_offsets = d_data->cj_csr_offsets();
+            const int *__restrict__ cjT_columns = d_data->cj_csr_columns();
+            const double *__restrict__ cjT_values = d_data->cj_csr_values();
+
+            // Compute h^2 * rho * J^T * J (rank-1 contributions per constraint)
+            // J is sparse with identity structure for fixed nodes
+            // For each constraint c_idx, J has one entry per DOF
+            // J^T @ (rho * J) gives outer product of constraint Jacobian columns
+            
+            // Parallel over constraints
+            for (int c_idx = tid; c_idx < n_constraints; c_idx += grid.size()) {
+              // Find all DOFs affected by this constraint (non-zeros in J[c_idx, :])
+              // For identity-like constraints, each constraint affects exactly one DOF
+              // But we need to compute J^T[:, c_idx] @ J[c_idx, :]
+              
+              // Find which DOFs have non-zero entries in this constraint row
+              // We need to iterate over all DOFs and check cjT (which stores J^T)
+              for (int dof_i = 0; dof_i < n_dofs; dof_i++) {
+                // Check if J[c_idx, dof_i] != 0
+                // In CSR for J^T: cjT stores columns of J^T (rows of J)
+                int col_start_i = cjT_offsets[dof_i];
+                int col_end_i = cjT_offsets[dof_i + 1];
+                
+                double J_c_i = 0.0;
+                for (int idx_i = col_start_i; idx_i < col_end_i; idx_i++) {
+                  if (cjT_columns[idx_i] == c_idx) {
+                    J_c_i = cjT_values[idx_i];
+                    break;
+                  }
+                }
+                
+                if (J_c_i != 0.0) {
+                  // Now find all dof_j where J[c_idx, dof_j] != 0
+                  for (int dof_j = 0; dof_j < n_dofs; dof_j++) {
+                    int col_start_j = cjT_offsets[dof_j];
+                    int col_end_j = cjT_offsets[dof_j + 1];
+                    
+                    double J_c_j = 0.0;
+                    for (int idx_j = col_start_j; idx_j < col_end_j; idx_j++) {
+                      if (cjT_columns[idx_j] == c_idx) {
+                        J_c_j = cjT_values[idx_j];
+                        break;
+                      }
+                    }
+                    
+                    if (J_c_j != 0.0) {
+                      // Add h^2 * rho * J[c_idx, dof_i] * J[c_idx, dof_j] to H[dof_i, dof_j]
+                      atomicAdd(&d_newton_solver->H()(dof_i, dof_j), 
+                               factor * J_c_i * J_c_j);
+                    }
+                  }
+                }
+              }
+            }
+          }
+          grid.sync();
+
+          // ========== INNER LOOP: Solve Linear System (solve H*dv=-g) ==========
+          // Cholesky solve
+          CholeskyFactorizationFunc(d_newton_solver->H(),
+                                     d_newton_solver->L(), tid,
+                                     n_dofs);
+          grid.sync();
+          // Forward substitution: L * y = -g
+          CholeskySolveForwardFunc(d_newton_solver->L(),d_newton_solver->r(),
+                                   d_newton_solver->y(), tid, n_dofs);
+          grid.sync();
+          // Backward substitution
+          CholeskySolveBackwardFunc(d_newton_solver->L(), d_newton_solver->y(),
+                                    d_newton_solver->delta_v(), tid, n_dofs);
+          grid.sync();
+          // ========== END INNER LOOP ==========
 
           // Apply Newton step: v += delta_v
           if (tid < d_newton_solver->get_n_coef() * 3) {
@@ -454,11 +515,17 @@ template __global__ void one_step_newton_kernel_impl<GPU_FEAT10_Data>(
 
 // Wrapper function to call the appropriate kernel based on element type
 void SyncedNewtonSolver::OneStepNewton() {
+  cudaEvent_t start, stop;
+  HANDLE_ERROR(cudaEventCreate(&start));
+  HANDLE_ERROR(cudaEventCreate(&stop));
+
   int numBlocks           = (n_coef_ * 3 + 255) / 256;
   int threadsPerBlock     = 256;
   void *kernelArgs_3243[] = {(void *)&d_data_, (void *)&d_newton_solver_};
   void *kernelArgs_3443[] = {(void *)&d_data_, (void *)&d_newton_solver_};
   void *kernelArgs_T10[]  = {(void *)&d_data_, (void *)&d_newton_solver_};
+
+  HANDLE_ERROR(cudaEventRecord(start));
 
   if (type_ == TYPE_3243) {
     cudaLaunchCooperativeKernel(
@@ -474,5 +541,15 @@ void SyncedNewtonSolver::OneStepNewton() {
         threadsPerBlock, kernelArgs_T10);
   }
 
+  HANDLE_ERROR(cudaEventRecord(stop));
   HANDLE_ERROR(cudaDeviceSynchronize());
+
+  float milliseconds = 0;
+  HANDLE_ERROR(cudaEventElapsedTime(&milliseconds, start, stop));
+
+  std::cout << "OneStepNewton kernel time: " << milliseconds << " ms"
+            << std::endl;
+
+  HANDLE_ERROR(cudaEventDestroy(start));
+  HANDLE_ERROR(cudaEventDestroy(stop));
 }

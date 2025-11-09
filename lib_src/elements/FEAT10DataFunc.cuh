@@ -256,30 +256,23 @@ __device__ __forceinline__ void compute_constraint_data(
   }
 }
 
-// Replace the existing compute_hessian_p function (lines 259-309)
 
-__device__ __forceinline__ void compute_hessian_p(
+__device__ __forceinline__ void compute_hessian_assemble(
     int elem_idx, int qp_idx, GPU_FEAT10_Data* d_data,
-    const double* p,  // Input: search direction (3*n_coef)
-    double* Hp,
-    double h) {  // Output: Hessian-vector product (3*n_coef)
+    Eigen::Map<Eigen::MatrixXd> H_global,  // Eigen Map to global Hessian (n_dofs x n_dofs)
+    double h){            // time-step scaling: we scatter h * K_elem into H_global
 
   // clang-format off
+
+  // Get n_dofs from the map dimensions
+  int n_dofs = H_global.rows();  // or H_global.cols() (square matrix)
+
+
   // Get element connectivity
   int global_node_indices[10];
   #pragma unroll
   for (int node = 0; node < 10; node++) {
     global_node_indices[node] = d_data->element_connectivity()(elem_idx, node);
-  }
-
-  // Extract element p vector (gather from global p)
-  double p_elem[30];  // 10 nodes × 3 DOFs
-  #pragma unroll
-  for (int node = 0; node < 10; node++) {
-    int global_node      = global_node_indices[node];
-    p_elem[3 * node + 0] = p[3 * global_node + 0];
-    p_elem[3 * node + 1] = p[3 * global_node + 1];
-    p_elem[3 * node + 2] = p[3 * global_node + 2];
   }
 
   // Get current nodal positions for this element
@@ -292,22 +285,22 @@ __device__ __forceinline__ void compute_hessian_p(
     x_nodes[node][2]    = d_data->z12()(global_node_idx);
   }
 
-  // Get precomputed shape function gradients H (grad_N)
-  double H[10][3];  // H[a] = grad_N[a] = h_a
+  // Get precomputed shape function gradients grad_N (rename to avoid H clash)
+  double grad_N[10][3];
   #pragma unroll
   for (int a = 0; a < 10; a++) {
-    H[a][0] = d_data->grad_N_ref(elem_idx, qp_idx)(a, 0);
-    H[a][1] = d_data->grad_N_ref(elem_idx, qp_idx)(a, 1);
-    H[a][2] = d_data->grad_N_ref(elem_idx, qp_idx)(a, 2);
+    grad_N[a][0] = d_data->grad_N_ref(elem_idx, qp_idx)(a, 0);
+    grad_N[a][1] = d_data->grad_N_ref(elem_idx, qp_idx)(a, 1);
+    grad_N[a][2] = d_data->grad_N_ref(elem_idx, qp_idx)(a, 2);
   }
 
-  // Compute deformation gradient F = sum_a (x_a ⊗ h_a^T)
+  // Compute deformation gradient F = sum_a (x_a ⊗ grad_N[a]^T)
   double F[3][3] = {{0.0}};
   #pragma unroll
   for (int a = 0; a < 10; a++) {
     for (int i = 0; i < 3; i++) {
       for (int j = 0; j < 3; j++) {
-        F[i][j] += x_nodes[a][i] * H[a][j];
+        F[i][j] += x_nodes[a][i] * grad_N[a][j];
       }
     }
   }
@@ -329,7 +322,7 @@ __device__ __forceinline__ void compute_hessian_p(
   double trC = C[0][0] + C[1][1] + C[2][2];
   double trE = 0.5 * (trC - 3.0);
 
-  // Compute F * F^T
+  // Compute F * F^T (FFT)
   double FFT[3][3] = {{0.0}};
   #pragma unroll
   for (int i = 0; i < 3; i++) {
@@ -342,7 +335,7 @@ __device__ __forceinline__ void compute_hessian_p(
     }
   }
 
-  // Precompute F*h for all nodes: Fh[i] = F @ H[i]
+  // Precompute F*h for all nodes: Fh[i] = F @ grad_N[i]
   double Fh[10][3];
   #pragma unroll
   for (int i = 0; i < 10; i++) {
@@ -351,51 +344,44 @@ __device__ __forceinline__ void compute_hessian_p(
       Fh[i][row] = 0.0;
       #pragma unroll
       for (int col = 0; col < 3; col++) {
-        Fh[i][row] += F[row][col] * H[i][col];
+        Fh[i][row] += F[row][col] * grad_N[i][col];
       }
     }
   }
 
-  // Get material parameters and volume element
+  // Material and quadrature
   double lambda = d_data->lambda();
   double mu     = d_data->mu();
   double detJ   = d_data->detJ_ref(elem_idx, qp_idx);
   double wq     = d_data->tet5pt_weights(qp_idx);
   double dV     = detJ * wq;
 
-  // Initialize output Hp_elem
-  double Hp_elem[30] = {0.0};
+  // Local element tangent K_elem (30 x 30), initialize to zero
+  double K_elem[30][30];
+  #pragma unroll
+  for (int ii = 0; ii < 30; ii++) {
+    #pragma unroll
+    for (int jj = 0; jj < 30; jj++) {
+      K_elem[ii][jj] = 0.0;
+    }
+  }
 
-  // Compute Hp_elem = K * p_elem using matrix-free approach
-  // Loop over all (i,j) pairs and compute K_ij contribution
+  // Build 3x3 blocks K_ij and store into K_elem
   #pragma unroll
   for (int i = 0; i < 10; i++) {
-    // Extract p_j as 3-vector for node j (will loop over j)
-    double Hp_i[3] = {0.0, 0.0, 0.0};  // Accumulator for node i
-
     #pragma unroll
     for (int j = 0; j < 10; j++) {
-      // Get p_j (3-vector)
-      double p_j[3];
-      p_j[0] = p_elem[3 * j + 0];
-      p_j[1] = p_elem[3 * j + 1];
-      p_j[2] = p_elem[3 * j + 2];
+      // compute hij and Fhj_dot_Fhi scalars
+      double hij = grad_N[j][0] * grad_N[i][0] +
+                   grad_N[j][1] * grad_N[i][1] +
+                   grad_N[j][2] * grad_N[i][2];
 
-      // Compute scalar: hij = (h_j)^T · h_i
-      double hij = H[j][0] * H[i][0] + H[j][1] * H[i][1] + H[j][2] * H[i][2];
-
-      // Compute scalar: Fhj_dot_Fhi = (Fh_j)^T · (Fh_i)
       double Fhj_dot_Fhi =
         Fh[j][0] * Fh[i][0] + Fh[j][1] * Fh[i][1] + Fh[j][2] * Fh[i][2];
 
-      // Compute K_ij * p_j (3x3 matrix-vector product)
-      // K_ij = (A + B + C1 + D + Etrm + Ftrm) * dV
-
-      double K_ij_p_j[3];
+      // for block (i,j) fill 3x3
       #pragma unroll
       for (int d = 0; d < 3; d++) {
-        K_ij_p_j[d] = 0.0;
-
         #pragma unroll
         for (int e = 0; e < 3; e++) {
           // A = λ (Fh_i)(Fh_j)^T
@@ -416,35 +402,37 @@ __device__ __forceinline__ void compute_hessian_p(
           // Ftrm = −μ (h_j^T h_i) I
           double Ftrm_de = -mu * hij * (d == e ? 1.0 : 0.0);
 
-          // Sum all contributions
-          double K_ij_de =
-            (A_de + B_de + C1_de + D_de + Etrm_de + Ftrm_de) * dV;
+          double K_ij_de = (A_de + B_de + C1_de + D_de + Etrm_de + Ftrm_de) * dV;
 
-          K_ij_p_j[d] += K_ij_de * p_j[e];
+          int row = 3 * i + d;
+          int col = 3 * j + e;
+          K_elem[row][col] = K_ij_de;
         }
       }
-
-      // Accumulate into Hp_i
-      Hp_i[0] += K_ij_p_j[0];
-      Hp_i[1] += K_ij_p_j[1];
-      Hp_i[2] += K_ij_p_j[2];
     }
-
-    // Store result for node i
-    Hp_elem[3 * i + 0] = Hp_i[0];
-    Hp_elem[3 * i + 1] = Hp_i[1];
-    Hp_elem[3 * i + 2] = Hp_i[2];
   }
 
-  // Scatter to global Hp (MUST use atomicAdd for thread safety)
+  // Scatter using Eigen Map syntax
   #pragma unroll
-  for (int node = 0; node < 10; node++) {
-    int global_node = global_node_indices[node];
+  for (int local_row_node = 0; local_row_node < 10; local_row_node++) {
+    int global_node_row = global_node_indices[local_row_node];
     #pragma unroll
-    for (int dof = 0; dof < 3; dof++) {
-      int global_dof = 3 * global_node + dof;
-      int local_dof  = 3 * node + dof;
-      atomicAdd(&Hp[global_dof], h * Hp_elem[local_dof]);
+    for (int r_dof = 0; r_dof < 3; r_dof++) {
+      int global_row = 3 * global_node_row + r_dof;
+      int local_row = 3 * local_row_node + r_dof;
+
+      #pragma unroll
+      for (int local_col_node = 0; local_col_node < 10; local_col_node++) {
+        int global_node_col = global_node_indices[local_col_node];
+        #pragma unroll
+        for (int c_dof = 0; c_dof < 3; c_dof++) {
+          int global_col = 3 * global_node_col + c_dof;
+          int local_col = 3 * local_col_node + c_dof;
+
+          // Use Eigen Map to atomically add (access underlying data pointer)
+          atomicAdd(&H_global(global_row, global_col), h * K_elem[local_row][local_col]);
+        }
+      }
     }
   }
   // clang-format on

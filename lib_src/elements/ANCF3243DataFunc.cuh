@@ -299,10 +299,9 @@ __device__ __forceinline__ void clear_internal_force(
 
 // Add at the end of the file, after clear_internal_force()
 
-__device__ __forceinline__ void compute_hessian_p(
-    int elem_idx, int qp_idx, GPU_ANCF3243_Data *d_data,
-    const double *p,  // Input: search direction (3*n_coef)
-    double *Hp,
+__device__ __forceinline__ void compute_hessian_assemble(
+    int elem_idx, int qp_idx, GPU_ANCF3243_Data* d_data,
+    Eigen::Map<Eigen::MatrixXd> H_global,  // Eigen Map to global Hessian (n_dofs x n_dofs)
     double h) {  // Output: Hessian-vector product (3*n_coef)
 
   // TODO: Implement Hessian-vector product for ANCF3243 elements
