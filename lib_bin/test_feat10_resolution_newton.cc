@@ -231,7 +231,7 @@ int main() {
   // Vector to store x position of node 353 at each step
   std::vector<double> node_x_history;
 
-  for (int i = 0; i < 2; i++) {
+  for (int i = 0; i < 50; i++) {
     solver.Solve();
 
     // Retrieve current positions

@@ -4,13 +4,25 @@ from tet_mesh_reader import read_node, read_ele
 import scipy.sparse.linalg
 
 # ----------------------------
-# Material
+# Material 0
+# ----------------------------
+# ~10 MPa, ν=0.25 (far from 0.5); note foam-like compressibility
+# E_mat = 1.0e7      # Pa
+# nu    = 0.25
+# mu    = E_mat / (2*(1+nu))                  # 4.0e6 Pa
+# lam   = E_mat*nu/((1+nu)*(1-2*nu))          # 4.0e6 Pa  (equals mu when ν=0.25)
+# rho0  = 400.0      # kg/m^3  (typical mid-density foam)
+
+
+# ----------------------------
+# Material 1
 # ----------------------------
 E_mat = 7e8
 nu = 0.33
 mu = E_mat / (2*(1+nu))
 lam = E_mat*nu/((1+nu)*(1-2*nu))
 rho0 = 2700.0
+
 
 # ----------------------------
 # Quadrature (5-point Keast)
@@ -303,14 +315,15 @@ def newton_inner(v0, q_prev, v_prev, M, f_int_func, f_ext, h,
         Kt = tet10_tangent_svk_mesh(X_nodes, x, X_elem, pre_mesh, lam, mu)
         J  = (M / h) + h * Kt + (h**2) * (T.T @ (rho_bb * T))  # ALM curvature
 
-        # Solve and update (using Conjugate Gradient)
-        cg_iter = [0]
-        def cg_callback(xk):
-            cg_iter[0] += 1
-        dv, info = scipy.sparse.linalg.cg(J, -R, tol=1e-10, maxiter=1000, callback=cg_callback)
-        print(f"    CG iterations: {cg_iter[0]}")
-        if info < 0:
-            print(f"Warning: CG failed with info={info}")
+        # Solve and update (using Cholesky factorization)
+        try:
+            L = np.linalg.cholesky(J)
+            y = np.linalg.solve(L, -R)
+            dv = np.linalg.solve(L.T, y)
+            print(f"    Cholesky solve successful")
+        except np.linalg.LinAlgError:
+            print(f"    Warning: Cholesky failed (matrix not positive definite), falling back to direct solve")
+            dv = np.linalg.solve(J, -R)
         v += dv
 
         if np.linalg.norm(dv) < tol_step*(1+np.linalg.norm(v)):
