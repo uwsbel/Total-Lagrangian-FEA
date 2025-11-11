@@ -430,4 +430,31 @@ cc_test(
         ":csv_utils",
     ],
 )
+
+cc_test(
+    name = "utest_feat10_cudss",
+    srcs = ["lib_utest/utest_feat10_cudss.cc"],
+    copts = ["--std=c++17"],
+    linkopts = [
+        "-L/usr/local/cuda/lib64",
+        "-lcusparse",
+        "-lcudart",                
+    ],
+    data = glob([
+        "data/utest/**/*",
+        "data/meshes/**",
+    ]),
+    deps = [
+        ":FEAT10Data",
+        ":cpu_utils",
+        "@eigen//:eigen",
+        "@googletest//:gtest_main",
+        ":solvers_syncednesterov",
+        ":solvers_syncedadamw",
+        ":solvers_syncednewton",
+        ":csv_utils",
+    ],
+)
+
+
 # ========================================

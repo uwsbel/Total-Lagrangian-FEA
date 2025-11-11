@@ -1,7 +1,7 @@
 #include <cuda_runtime.h>
+#include <gtest/gtest.h>
 
 #include <Eigen/Dense>
-#include <fstream>
 #include <iomanip>
 #include <iostream>
 
@@ -16,7 +16,19 @@ const double rho0 = 2700;  // Density
 
 enum MESH_RESOLUTION { RES_0, RES_2, RES_4 };
 
-int main() {
+// Test fixture class for ANCF tests
+class cudss_test : public ::testing::Test {
+ protected:
+  void SetUp() override {
+    // Setup code that runs before each test
+  }
+
+  void TearDown() override {
+    // Cleanup code that runs after each test
+  }
+};
+
+TEST(cudss_test, cudss_feat10) {
   // Read mesh data
   Eigen::MatrixXd nodes;
   Eigen::MatrixXi elements;
@@ -231,61 +243,5 @@ int main() {
   // Vector to store x position of node 353 at each step
   std::vector<double> node_x_history;
 
-  for (int i = 0; i < 50; i++) {
-    solver.Solve();
-
-    // Retrieve current positions
-    Eigen::VectorXd x12_current, y12_current, z12_current;
-    gpu_t10_data.RetrievePositionToCPU(x12_current, y12_current, z12_current);
-
-    if (plot_target_node < x12_current.size()) {
-      node_x_history.push_back(x12_current(plot_target_node));
-      std::cout << "Step " << i << ": node " << plot_target_node
-                << " x = " << x12_current(plot_target_node) << std::endl;
-    }
-  }
-
-  // Write to CSV file
-  std::ofstream csv_file("node_x_history.csv");
-  csv_file << std::fixed << std::setprecision(17);
-  csv_file << "step,x_position\n";
-  for (size_t i = 0; i < node_x_history.size(); i++) {
-    csv_file << i << "," << node_x_history[i] << "\n";
-  }
-  csv_file.close();
-  std::cout << "Wrote node " << plot_target_node
-            << " x-position history to node_x_history.csv" << std::endl;
-
-  // // Set highest precision for cout
-  std::cout << std::fixed << std::setprecision(17);
-
-  Eigen::VectorXd x12, y12, z12;
-  gpu_t10_data.RetrievePositionToCPU(x12, y12, z12);
-
-  std::cout << "x12:" << std::endl;
-  for (int i = 0; i < x12.size(); i++) {
-    std::cout << x12(i) << " ";
-  }
-
-  std::cout << std::endl;
-
-  std::cout << "y12:" << std::endl;
-  for (int i = 0; i < y12.size(); i++) {
-    std::cout << y12(i) << " ";
-  }
-
-  std::cout << std::endl;
-
-  std::cout << "z12:" << std::endl;
-  for (int i = 0; i < z12.size(); i++) {
-    std::cout << z12(i) << " ";
-  }
-
-  std::cout << std::endl;
-
-  gpu_t10_data.Destroy();
-
-  std::cout << "gpu_t10_data destroyed" << std::endl;
-
-  return 0;
+  solver.SolveCuDSS();
 }
