@@ -259,8 +259,14 @@ class SyncedNewtonSolver : public SolverBase {
 
   void OneStepNewton();
 
+  void OneStepNewtonCuDSS();
+
   void Solve() override {
     OneStepNewton();
+  }
+
+  void SolveCuDSS() {
+    OneStepNewtonCuDSS();
   }
 
  private:
@@ -279,9 +285,9 @@ class SyncedNewtonSolver : public SolverBase {
   double *d_inner_tol_, *d_outer_tol_, *d_time_step_, *d_solver_rho_;
   int *d_max_inner_, *d_max_outer_;
   double *d_delta_v_, *d_r_;
-  double *d_H_;                     // Hessian-vector product
-  double *d_L_;                     // Cholesky factorization L
-  double *d_y_;                     // Cholesky factorization y
+  double *d_H_;                      // Hessian-vector product
+  double *d_L_;                      // Cholesky factorization L
+  double *d_y_;                      // Cholesky factorization y
   double *d_r_dot_r_;                // Scalar for dot product storage
   double *d_alpha_cg_, *d_beta_cg_;  // CG scalars
 };

@@ -10,51 +10,49 @@
 
 namespace cg = cooperative_groups;
 
-
 // =====================
 // Device function to perform Cholesky factorization
 __device__ void CholeskyFactorizationFunc(Eigen::Map<Eigen::MatrixXd> M,
                                           Eigen::Map<Eigen::MatrixXd> L,
-                                           int thread_idx, int n) {
-
-    cg::grid_group grid = cg::this_grid();
-
-    // Rank of this thread across the WHOLE grid, 0..grid.size()-1
-    int j         = thread_idx;
-    int j_up = grid.size() - 1;            // "index of the last thread"
-
-    for (int i = 0; i <= j_up; ++i) {
-      if (j < n && i <= j && i == j) {
-        double sum = 0.0;
-        for (int k = 0; k < i; ++k) {
-          sum += L(i, k) * L(i, k);
-        }
-        L(i, i) = sqrt(M(i, i) - sum);
-      }
-
-      grid.sync();
-
-      if (j < n && i <= j && j > i) {
-        double sum = 0.0;
-        for (int k = 0; k < i; ++k) {
-          sum += L(j, k) * L(i, k);
-        }
-        L(j, i) = (M(j, i) - sum) / L(i, i);
-      }
-
-      grid.sync();
-    }
-  
-}
-
-__device__ void CholeskySolveForwardFunc(Eigen::Map<Eigen::MatrixXd> L,
-                                         Eigen::Map<Eigen::VectorXd> b,  // Changed from MatrixXd
-                                         Eigen::Map<Eigen::VectorXd> y,  // Changed from MatrixXd
-                                         int thread_idx, size_t n) {
+                                          int thread_idx, int n) {
   cg::grid_group grid = cg::this_grid();
 
-  int j         = thread_idx;
-  int j_up = grid.size() - 1;            // "index of the last thread"
+  // Rank of this thread across the WHOLE grid, 0..grid.size()-1
+  int j    = thread_idx;
+  int j_up = grid.size() - 1;  // "index of the last thread"
+
+  for (int i = 0; i <= j_up; ++i) {
+    if (j < n && i <= j && i == j) {
+      double sum = 0.0;
+      for (int k = 0; k < i; ++k) {
+        sum += L(i, k) * L(i, k);
+      }
+      L(i, i) = sqrt(M(i, i) - sum);
+    }
+
+    grid.sync();
+
+    if (j < n && i <= j && j > i) {
+      double sum = 0.0;
+      for (int k = 0; k < i; ++k) {
+        sum += L(j, k) * L(i, k);
+      }
+      L(j, i) = (M(j, i) - sum) / L(i, i);
+    }
+
+    grid.sync();
+  }
+}
+
+__device__ void CholeskySolveForwardFunc(
+    Eigen::Map<Eigen::MatrixXd> L,
+    Eigen::Map<Eigen::VectorXd> b,  // Changed from MatrixXd
+    Eigen::Map<Eigen::VectorXd> y,  // Changed from MatrixXd
+    int thread_idx, size_t n) {
+  cg::grid_group grid = cg::this_grid();
+
+  int j    = thread_idx;
+  int j_up = grid.size() - 1;  // "index of the last thread"
 
   // Forward substitution to solve L * y = b
   double sum = 0.0;
@@ -73,13 +71,14 @@ __device__ void CholeskySolveForwardFunc(Eigen::Map<Eigen::MatrixXd> L,
 }
 
 // Device function to perform backward substitution: L^T * x = y
-__device__ void CholeskySolveBackwardFunc(Eigen::Map<Eigen::MatrixXd> L,
-                                          Eigen::Map<Eigen::VectorXd> y,  // Changed from MatrixXd
-                                          Eigen::Map<Eigen::VectorXd> x,  // Changed from MatrixXd
-                                          int thread_idx, size_t n) {
+__device__ void CholeskySolveBackwardFunc(
+    Eigen::Map<Eigen::MatrixXd> L,
+    Eigen::Map<Eigen::VectorXd> y,  // Changed from MatrixXd
+    Eigen::Map<Eigen::VectorXd> x,  // Changed from MatrixXd
+    int thread_idx, size_t n) {
   cg::grid_group grid = cg::this_grid();
 
-  int j = thread_idx;
+  int j      = thread_idx;
   int j_down = 0;  // We iterate from n-1 down to 0
 
   // Backward substitution to solve L^T * x = y
@@ -99,7 +98,6 @@ __device__ void CholeskySolveBackwardFunc(Eigen::Map<Eigen::MatrixXd> L,
     grid.sync();
   }
 }
-
 
 template <typename ElementType>
 __device__ double solver_grad_L(int tid, ElementType *data,
@@ -318,7 +316,7 @@ __global__ void one_step_newton_kernel_impl(
           grid.sync();
 
           // ===== ASSEMBLE FULL HESSIAN: H = (M/h) + h*Kt + h^2*J^T*rho*J =====
-          
+
           // Step 1: Clear Hessian matrix
           int n_dofs = 3 * d_newton_solver->get_n_coef();
           for (int idx = tid; idx < n_dofs * n_dofs; idx += grid.size()) {
@@ -335,8 +333,8 @@ __global__ void one_step_newton_kernel_impl(
               int elem_idx = idx / d_newton_solver->gpu_n_total_qp();
               int qp_idx   = idx % d_newton_solver->gpu_n_total_qp();
               compute_hessian_assemble(elem_idx, qp_idx, d_data,
-                        d_newton_solver->H(),
-                        d_newton_solver->solver_time_step());
+                                       d_newton_solver->H(),
+                                       d_newton_solver->solver_time_step());
             }
           }
           grid.sync();
@@ -344,16 +342,16 @@ __global__ void one_step_newton_kernel_impl(
           // Step 3: Add mass matrix contribution: M/h (diagonal 3x3 blocks)
           const double inv_h = 1.0 / d_newton_solver->solver_time_step();
           if (tid < d_newton_solver->get_n_coef()) {
-            const int node_i = tid;
-            const int *__restrict__ offsets = d_data->csr_offsets();
-            const int *__restrict__ columns = d_data->csr_columns();
+            const int node_i                  = tid;
+            const int *__restrict__ offsets   = d_data->csr_offsets();
+            const int *__restrict__ columns   = d_data->csr_columns();
             const double *__restrict__ values = d_data->csr_values();
 
             int row_start = offsets[node_i];
             int row_end   = offsets[node_i + 1];
 
             for (int idx = row_start; idx < row_end; idx++) {
-              int node_j = columns[idx];
+              int node_j     = columns[idx];
               double mass_ij = values[idx];
 
               // Add (mass_ij / h) * I_3x3 to H
@@ -361,8 +359,8 @@ __global__ void one_step_newton_kernel_impl(
               for (int dof = 0; dof < 3; dof++) {
                 int global_row = 3 * node_i + dof;
                 int global_col = 3 * node_j + dof;
-                atomicAdd(&d_newton_solver->H()(global_row, global_col), 
-                         mass_ij * inv_h);
+                atomicAdd(&d_newton_solver->H()(global_row, global_col),
+                          mass_ij * inv_h);
               }
             }
           }
@@ -371,34 +369,37 @@ __global__ void one_step_newton_kernel_impl(
           // Step 4: Add constraint Hessian contribution: h^2 * J^T * rho * J
           const int n_constraints = d_newton_solver->gpu_n_constraints();
           if (n_constraints > 0) {
-            const double h = d_newton_solver->solver_time_step();
-            const double rho = *d_newton_solver->solver_rho();
+            const double h      = d_newton_solver->solver_time_step();
+            const double rho    = *d_newton_solver->solver_rho();
             const double factor = h * h * rho;
 
             // CSR format for J^T (transpose of constraint Jacobian)
-            const int *__restrict__ cjT_offsets = d_data->cj_csr_offsets();
-            const int *__restrict__ cjT_columns = d_data->cj_csr_columns();
+            const int *__restrict__ cjT_offsets   = d_data->cj_csr_offsets();
+            const int *__restrict__ cjT_columns   = d_data->cj_csr_columns();
             const double *__restrict__ cjT_values = d_data->cj_csr_values();
 
             // Compute h^2 * rho * J^T * J (rank-1 contributions per constraint)
             // J is sparse with identity structure for fixed nodes
             // For each constraint c_idx, J has one entry per DOF
-            // J^T @ (rho * J) gives outer product of constraint Jacobian columns
-            
+            // J^T @ (rho * J) gives outer product of constraint Jacobian
+            // columns
+
             // Parallel over constraints
             for (int c_idx = tid; c_idx < n_constraints; c_idx += grid.size()) {
-              // Find all DOFs affected by this constraint (non-zeros in J[c_idx, :])
-              // For identity-like constraints, each constraint affects exactly one DOF
-              // But we need to compute J^T[:, c_idx] @ J[c_idx, :]
-              
+              // Find all DOFs affected by this constraint (non-zeros in
+              // J[c_idx, :]) For identity-like constraints, each constraint
+              // affects exactly one DOF But we need to compute J^T[:, c_idx] @
+              // J[c_idx, :]
+
               // Find which DOFs have non-zero entries in this constraint row
-              // We need to iterate over all DOFs and check cjT (which stores J^T)
+              // We need to iterate over all DOFs and check cjT (which stores
+              // J^T)
               for (int dof_i = 0; dof_i < n_dofs; dof_i++) {
                 // Check if J[c_idx, dof_i] != 0
                 // In CSR for J^T: cjT stores columns of J^T (rows of J)
                 int col_start_i = cjT_offsets[dof_i];
-                int col_end_i = cjT_offsets[dof_i + 1];
-                
+                int col_end_i   = cjT_offsets[dof_i + 1];
+
                 double J_c_i = 0.0;
                 for (int idx_i = col_start_i; idx_i < col_end_i; idx_i++) {
                   if (cjT_columns[idx_i] == c_idx) {
@@ -406,13 +407,13 @@ __global__ void one_step_newton_kernel_impl(
                     break;
                   }
                 }
-                
+
                 if (J_c_i != 0.0) {
                   // Now find all dof_j where J[c_idx, dof_j] != 0
                   for (int dof_j = 0; dof_j < n_dofs; dof_j++) {
                     int col_start_j = cjT_offsets[dof_j];
-                    int col_end_j = cjT_offsets[dof_j + 1];
-                    
+                    int col_end_j   = cjT_offsets[dof_j + 1];
+
                     double J_c_j = 0.0;
                     for (int idx_j = col_start_j; idx_j < col_end_j; idx_j++) {
                       if (cjT_columns[idx_j] == c_idx) {
@@ -420,11 +421,12 @@ __global__ void one_step_newton_kernel_impl(
                         break;
                       }
                     }
-                    
+
                     if (J_c_j != 0.0) {
-                      // Add h^2 * rho * J[c_idx, dof_i] * J[c_idx, dof_j] to H[dof_i, dof_j]
-                      atomicAdd(&d_newton_solver->H()(dof_i, dof_j), 
-                               factor * J_c_i * J_c_j);
+                      // Add h^2 * rho * J[c_idx, dof_i] * J[c_idx, dof_j] to
+                      // H[dof_i, dof_j]
+                      atomicAdd(&d_newton_solver->H()(dof_i, dof_j),
+                                factor * J_c_i * J_c_j);
                     }
                   }
                 }
@@ -433,14 +435,13 @@ __global__ void one_step_newton_kernel_impl(
           }
           grid.sync();
 
-          // ========== INNER LOOP: Solve Linear System (solve H*dv=-g) ==========
-          // Cholesky solve
-          CholeskyFactorizationFunc(d_newton_solver->H(),
-                                     d_newton_solver->L(), tid,
-                                     n_dofs);
+          // ========== INNER LOOP: Solve Linear System (solve H*dv=-g)
+          // ========== Cholesky solve
+          CholeskyFactorizationFunc(d_newton_solver->H(), d_newton_solver->L(),
+                                    tid, n_dofs);
           grid.sync();
           // Forward substitution: L * y = -g
-          CholeskySolveForwardFunc(d_newton_solver->L(),d_newton_solver->r(),
+          CholeskySolveForwardFunc(d_newton_solver->L(), d_newton_solver->r(),
                                    d_newton_solver->y(), tid, n_dofs);
           grid.sync();
           // Backward substitution
@@ -548,6 +549,121 @@ void SyncedNewtonSolver::OneStepNewton() {
   HANDLE_ERROR(cudaEventElapsedTime(&milliseconds, start, stop));
 
   std::cout << "OneStepNewton kernel time: " << milliseconds << " ms"
+            << std::endl;
+
+  HANDLE_ERROR(cudaEventDestroy(start));
+  HANDLE_ERROR(cudaEventDestroy(stop));
+}
+
+// ===============================================
+// experimental cusparse and cudss one step newton
+// ===============================================
+
+// Templated Newton kernel - CORRECTED STRUCTURE
+__global__ void cudss_solve_compute_p(GPU_FEAT10_Data *d_data,
+                                      SyncedNewtonSolver *d_newton_solver) {
+  int tid = blockIdx.x * blockDim.x + threadIdx.x;
+
+  if (tid < d_newton_solver->get_n_beam() * d_newton_solver->gpu_n_total_qp()) {
+    int idx      = tid;
+    int elem_idx = idx / d_newton_solver->gpu_n_total_qp();
+    int qp_idx   = idx % d_newton_solver->gpu_n_total_qp();
+    compute_p(elem_idx, qp_idx, d_data);
+  }
+}
+
+__global__ void cudss_solve_clear_internal_force(GPU_FEAT10_Data *d_data) {
+  int tid = blockIdx.x * blockDim.x + threadIdx.x;
+
+  if (tid < d_data->n_coef * 3) {
+    clear_internal_force(d_data);
+  }
+}
+
+__global__ void cudss_solve_compute_internal_force(
+    GPU_FEAT10_Data *d_data, SyncedNewtonSolver *d_newton_solver) {
+  int tid = blockIdx.x * blockDim.x + threadIdx.x;
+
+  if (tid < d_newton_solver->get_n_beam() * d_newton_solver->gpu_n_shape()) {
+    int idx      = tid;
+    int elem_idx = idx / d_newton_solver->gpu_n_shape();
+    int node_idx = idx % d_newton_solver->gpu_n_shape();
+    compute_internal_force(elem_idx, node_idx, d_data);
+  }
+}
+
+__global__ void cudss_solve_constraints_eval(
+    GPU_FEAT10_Data *d_data, SyncedNewtonSolver *d_newton_solver) {
+  int tid = blockIdx.x * blockDim.x + threadIdx.x;
+
+  if (tid < d_newton_solver->gpu_n_constraints() / 3) {
+    compute_constraint_data(d_data);
+  }
+}
+
+__global__ void cudss_solve_compute_grad_l(
+    GPU_FEAT10_Data *d_data, SyncedNewtonSolver *d_newton_solver) {
+  int tid = blockIdx.x * blockDim.x + threadIdx.x;
+
+  if (tid < d_newton_solver->get_n_coef() * 3) {
+    double g                  = solver_grad_L(tid, d_data, d_newton_solver);
+    d_newton_solver->g()[tid] = g;
+  }
+
+  if (tid == 0) {
+    double norm_g_check = 0.0;
+    for (int i = 0; i < 3 * d_newton_solver->get_n_coef(); i++) {
+      norm_g_check += d_newton_solver->g()[i] * d_newton_solver->g()[i];
+    }
+    printf("    ||g|| just computed = %.6e\n", sqrt(norm_g_check));
+  }
+}
+
+// Wrapper function to call the appropriate kernel based on element type
+void SyncedNewtonSolver::OneStepNewtonCuDSS() {
+  cudaEvent_t start, stop;
+  HANDLE_ERROR(cudaEventCreate(&start));
+  HANDLE_ERROR(cudaEventCreate(&stop));
+
+  int threadsPerBlock                = 256;
+  int numBlocks_compute_p            = (n_beam_ * n_total_qp_ + 255) / 256;
+  int numBlocks_clear_internal_force = (n_coef_ * 3 + 255) / 256;
+  int numBlocks_internal_force       = (n_beam_ * n_shape_ + 255) / 256;
+  int numBlocks_grad_l               = (n_coef_ * 3 + 255) / 256;
+  int numBlocks_constraints_eval     = (n_constraints_ / 3 + 255) / 256;
+
+  HANDLE_ERROR(cudaEventRecord(start));
+
+  // Normal kernel launch (no cooperative groups)
+  cudss_solve_compute_p<<<numBlocks_compute_p, threadsPerBlock>>>(
+      static_cast<GPU_FEAT10_Data *>(d_data_), d_newton_solver_);
+
+  cudss_solve_clear_internal_force<<<numBlocks_clear_internal_force,
+                                     threadsPerBlock>>>(
+      static_cast<GPU_FEAT10_Data *>(d_data_));
+  cudss_solve_compute_internal_force<<<numBlocks_internal_force,
+                                       threadsPerBlock>>>(
+      static_cast<GPU_FEAT10_Data *>(d_data_), d_newton_solver_);
+
+  cudss_solve_constraints_eval<<<numBlocks_constraints_eval, threadsPerBlock>>>(
+      static_cast<GPU_FEAT10_Data *>(d_data_), d_newton_solver_);
+  cudss_solve_compute_grad_l<<<numBlocks_grad_l, threadsPerBlock>>>(
+      static_cast<GPU_FEAT10_Data *>(d_data_), d_newton_solver_);
+
+  // initialize
+  // clear hessian
+  // hessian assemble tangent
+  // hessian assemble mass constrib
+  // hessian assemble constraint
+  // solve
+
+  HANDLE_ERROR(cudaDeviceSynchronize());
+  float milliseconds = 0;
+  HANDLE_ERROR(cudaEventRecord(stop));
+  HANDLE_ERROR(cudaDeviceSynchronize());
+  HANDLE_ERROR(cudaEventElapsedTime(&milliseconds, start, stop));
+
+  std::cout << "OneStepNewtonC kernel time: " << milliseconds << " ms"
             << std::endl;
 
   HANDLE_ERROR(cudaEventDestroy(start));
