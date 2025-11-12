@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cuda_runtime.h>
+#include <cudss.h>
 #include <cusparse.h>
 
 #include <cstdio>
@@ -28,4 +29,17 @@ static inline void HandleError(cudaError_t err, const char *file, int line) {
       exit(EXIT_FAILURE);                                                      \
     }                                                                          \
   }
+#endif
+
+#ifndef CHECK_CUDSS_MACRO
+#define CHECK_CUDSS_MACRO
+#define CUDSS_OK(call)                                              \
+  do {                                                              \
+    cudssStatus_t status = call;                                    \
+    if (status != CUDSS_STATUS_SUCCESS) {                           \
+      std::cerr << "cuDSS error at " << __FILE__ << ":" << __LINE__ \
+                << std::endl;                                       \
+      exit(1);                                                      \
+    }                                                               \
+  } while (0)
 #endif

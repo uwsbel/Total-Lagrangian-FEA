@@ -23,7 +23,7 @@ int main() {
   int plot_target_node;
   int n_nodes, n_elems;
 
-  MESH_RESOLUTION resolution = RES_2;
+  MESH_RESOLUTION resolution = RES_0;
 
   if (resolution == RES_0) {
     n_nodes = ANCFCPUUtils::FEAT10_read_nodes(
@@ -232,8 +232,8 @@ int main() {
   std::vector<double> node_x_history;
 
   for (int i = 0; i < 50; i++) {
-    solver.Solve();
-
+    // solver.Solve();
+    solver.SolveCuDSS();
     // Retrieve current positions
     Eigen::VectorXd x12_current, y12_current, z12_current;
     gpu_t10_data.RetrievePositionToCPU(x12_current, y12_current, z12_current);

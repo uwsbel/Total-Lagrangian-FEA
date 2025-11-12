@@ -80,6 +80,16 @@ class SyncedNewtonSolver : public SolverBase {
     cudaMalloc(&d_r_dot_r_, sizeof(double));
     cudaMalloc(&d_alpha_cg_, sizeof(double));
     cudaMalloc(&d_beta_cg_, sizeof(double));
+
+    // If data is a T10 and constraint is setup, copy over the constraint ptr
+    if (type_ == TYPE_T10) {
+      if (static_cast<GPU_FEAT10_Data *>(data)->Get_Is_Constraint_Setup()) {
+        d_constraint_ptr_ =
+            static_cast<GPU_FEAT10_Data *>(data)->Get_Constraint_Ptr();
+      } else {
+        d_constraint_ptr_ = nullptr;
+      }
+    }
   }
 
   ~SyncedNewtonSolver() {
@@ -116,6 +126,13 @@ class SyncedNewtonSolver : public SolverBase {
 
   void SetParameters(void *params) override {
     SyncedNewtonParams *p = static_cast<SyncedNewtonParams *>(params);
+
+    h_inner_tol_ = p->inner_tol;
+    h_outer_tol_ = p->outer_tol;
+
+    h_max_outer_ = p->max_outer;
+    h_max_inner_ = p->max_inner;
+
     cudaMemcpy(d_inner_tol_, &p->inner_tol, sizeof(double),
                cudaMemcpyHostToDevice);
     cudaMemcpy(d_outer_tol_, &p->outer_tol, sizeof(double),
@@ -283,6 +300,8 @@ class SyncedNewtonSolver : public SolverBase {
   double *d_norm_g_;
   int *d_inner_flag_, *d_outer_flag_;
   double *d_inner_tol_, *d_outer_tol_, *d_time_step_, *d_solver_rho_;
+  double h_inner_tol_, h_outer_tol_;
+  int h_max_outer_, h_max_inner_;
   int *d_max_inner_, *d_max_outer_;
   double *d_delta_v_, *d_r_;
   double *d_H_;                      // Hessian-vector product
@@ -290,4 +309,6 @@ class SyncedNewtonSolver : public SolverBase {
   double *d_y_;                      // Cholesky factorization y
   double *d_r_dot_r_;                // Scalar for dot product storage
   double *d_alpha_cg_, *d_beta_cg_;  // CG scalars
+
+  double *d_constraint_ptr_;
 };

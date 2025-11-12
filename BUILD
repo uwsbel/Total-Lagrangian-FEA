@@ -137,6 +137,7 @@ cuda_library(
         "lib_src/solvers/SyncedNewton.cuh",
     ],
     copts = ["--std=c++17", "-O3", "--use_fast_math", "--extra-device-vectorization"],
+    linkopts = ["-lcusolver", "-lcublas", "-lcusparse", "-lcudss"],  # Add -lcudss here
     deps = [
         ":ANCF3243Data",
         ":ANCF3443Data",
@@ -274,6 +275,8 @@ cc_binary(
         "-L/usr/local/cuda/lib64",
         "-lcusparse",
         "-lcudart",
+        "-lcudss",  
+        "-lcublas",
     ],
     deps = [
         ":FEAT10Data",
@@ -438,7 +441,9 @@ cc_test(
     linkopts = [
         "-L/usr/local/cuda/lib64",
         "-lcusparse",
-        "-lcudart",                
+        "-lcudart",
+        "-lcudss",
+        "-lcublas",
     ],
     data = glob([
         "data/utest/**/*",

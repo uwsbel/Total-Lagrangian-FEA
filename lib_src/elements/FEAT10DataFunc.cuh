@@ -256,11 +256,11 @@ __device__ __forceinline__ void compute_constraint_data(
   }
 }
 
-
 __device__ __forceinline__ void compute_hessian_assemble(
     int elem_idx, int qp_idx, GPU_FEAT10_Data* d_data,
-    Eigen::Map<Eigen::MatrixXd> H_global,  // Eigen Map to global Hessian (n_dofs x n_dofs)
-    double h){            // time-step scaling: we scatter h * K_elem into H_global
+    Eigen::Map<Eigen::MatrixXd>
+        H_global,  // Eigen Map to global Hessian (n_dofs x n_dofs)
+    double h) {    // time-step scaling: we scatter h * K_elem into H_global
 
   // clang-format off
 
