@@ -517,6 +517,14 @@ struct GPU_FEAT10_Data : public ElementBase {
     }
   }
 
+  double *Get_Constraint_Ptr() {
+    return d_constraint;
+  }
+
+  bool Get_Is_Constraint_Setup() {
+    return is_constraints_setup;
+  }
+
   GPU_FEAT10_Data *d_data;  // Storing GPU copy of SAPGPUData
 
   int n_elem;

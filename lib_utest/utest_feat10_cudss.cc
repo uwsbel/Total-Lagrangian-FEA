@@ -35,7 +35,7 @@ TEST(cudss_test, cudss_feat10) {
   int plot_target_node;
   int n_nodes, n_elems;
 
-  MESH_RESOLUTION resolution = RES_2;
+  MESH_RESOLUTION resolution = RES_4;
 
   if (resolution == RES_0) {
     n_nodes = ANCFCPUUtils::FEAT10_read_nodes(
@@ -243,5 +243,17 @@ TEST(cudss_test, cudss_feat10) {
   // Vector to store x position of node 353 at each step
   std::vector<double> node_x_history;
 
-  solver.SolveCuDSS();
+  for (int i = 0; i < 50; i++) {
+    solver.SolveCuDSS();
+
+    // Retrieve current positions
+    Eigen::VectorXd x12_current, y12_current, z12_current;
+    gpu_t10_data.RetrievePositionToCPU(x12_current, y12_current, z12_current);
+
+    if (plot_target_node < x12_current.size()) {
+      node_x_history.push_back(x12_current(plot_target_node));
+      std::cout << "Step " << i << ": node " << plot_target_node
+                << " x = " << x12_current(plot_target_node) << std::endl;
+    }
+  }
 }

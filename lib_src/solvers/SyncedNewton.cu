@@ -1,4 +1,5 @@
 #include <cooperative_groups.h>
+#include <cublas_v2.h>  // Add this line for cuBLAS
 
 #include "../elements/ANCF3243Data.cuh"
 #include "../elements/ANCF3243DataFunc.cuh"
@@ -559,7 +560,17 @@ void SyncedNewtonSolver::OneStepNewton() {
 // experimental cusparse and cudss one step newton
 // ===============================================
 
-// Templated Newton kernel - CORRECTED STRUCTURE
+__global__ void cudss_solve_update_pos_prev(
+    GPU_FEAT10_Data *d_data, SyncedNewtonSolver *d_newton_solver) {
+  int tid = blockIdx.x * blockDim.x + threadIdx.x;
+
+  if (tid < d_newton_solver->get_n_coef()) {
+    d_newton_solver->x12_prev()(tid) = d_data->x12()(tid);
+    d_newton_solver->y12_prev()(tid) = d_data->y12()(tid);
+    d_newton_solver->z12_prev()(tid) = d_data->z12()(tid);
+  }
+}
+
 __global__ void cudss_solve_compute_p(GPU_FEAT10_Data *d_data,
                                       SyncedNewtonSolver *d_newton_solver) {
   int tid = blockIdx.x * blockDim.x + threadIdx.x;
@@ -601,6 +612,18 @@ __global__ void cudss_solve_constraints_eval(
   }
 }
 
+__global__ void cudss_solve_update_dual_var(
+    GPU_FEAT10_Data *d_data, SyncedNewtonSolver *d_newton_solver) {
+  int tid = blockIdx.x * blockDim.x + threadIdx.x;
+
+  int n_constraints = d_newton_solver->gpu_n_constraints();
+  if (tid < n_constraints) {
+    double constraint_val = d_data->constraint()[tid];
+    d_newton_solver->lambda_guess()[tid] +=
+        *d_newton_solver->solver_rho() * constraint_val;
+  }
+}
+
 __global__ void cudss_solve_compute_grad_l(
     GPU_FEAT10_Data *d_data, SyncedNewtonSolver *d_newton_solver) {
   int tid = blockIdx.x * blockDim.x + threadIdx.x;
@@ -609,14 +632,198 @@ __global__ void cudss_solve_compute_grad_l(
     double g                  = solver_grad_L(tid, d_data, d_newton_solver);
     d_newton_solver->g()[tid] = g;
   }
+}
 
-  if (tid == 0) {
-    double norm_g_check = 0.0;
-    for (int i = 0; i < 3 * d_newton_solver->get_n_coef(); i++) {
-      norm_g_check += d_newton_solver->g()[i] * d_newton_solver->g()[i];
-    }
-    printf("    ||g|| just computed = %.6e\n", sqrt(norm_g_check));
+__global__ void cudss_solve_initialize_prehess(
+    GPU_FEAT10_Data *d_data, SyncedNewtonSolver *d_newton_solver) {
+  int tid = blockIdx.x * blockDim.x + threadIdx.x;
+  if (tid < d_newton_solver->get_n_coef() * 3) {
+    d_newton_solver->delta_v()[tid] = 0.0;
+    d_newton_solver->r()[tid]       = -d_newton_solver->g()[tid];
   }
+}
+
+__global__ void cudss_solve_clear_hessian(GPU_FEAT10_Data *d_data,
+                                          SyncedNewtonSolver *d_newton_solver) {
+  int tid    = blockIdx.x * blockDim.x + threadIdx.x;
+  int n_dofs = 3 * d_newton_solver->get_n_coef();
+  if (tid < n_dofs * n_dofs) {
+    d_newton_solver->H().data()[tid] = 0.0;
+  }
+}
+
+__global__ void cudss_solve_hess_tangent_assemble(
+    GPU_FEAT10_Data *d_data, SyncedNewtonSolver *d_newton_solver) {
+  int tid = blockIdx.x * blockDim.x + threadIdx.x;
+  if (tid < d_newton_solver->get_n_beam() * d_newton_solver->gpu_n_total_qp()) {
+    int idx      = tid;
+    int elem_idx = idx / d_newton_solver->gpu_n_total_qp();
+    int qp_idx   = idx % d_newton_solver->gpu_n_total_qp();
+    compute_hessian_assemble(elem_idx, qp_idx, d_data, d_newton_solver->H(),
+                             d_newton_solver->solver_time_step());
+  }
+}
+
+__global__ void cudss_solve_mass_contrib_assemble(
+    GPU_FEAT10_Data *d_data, SyncedNewtonSolver *d_newton_solver) {
+  int tid = blockIdx.x * blockDim.x + threadIdx.x;
+
+  const double inv_h = 1.0 / d_newton_solver->solver_time_step();
+  if (tid < d_newton_solver->get_n_coef()) {
+    const int node_i                  = tid;
+    const int *__restrict__ offsets   = d_data->csr_offsets();
+    const int *__restrict__ columns   = d_data->csr_columns();
+    const double *__restrict__ values = d_data->csr_values();
+
+    int row_start = offsets[node_i];
+    int row_end   = offsets[node_i + 1];
+
+    for (int idx = row_start; idx < row_end; idx++) {
+      int node_j     = columns[idx];
+      double mass_ij = values[idx];
+
+      // Add (mass_ij / h) * I_3x3 to H
+      // For each DOF (x, y, z)
+      for (int dof = 0; dof < 3; dof++) {
+        int global_row = 3 * node_i + dof;
+        int global_col = 3 * node_j + dof;
+        atomicAdd(&d_newton_solver->H()(global_row, global_col),
+                  mass_ij * inv_h);
+      }
+    }
+  }
+}
+
+__global__ void cudss_solve_constraint_contrib_assemble(
+    GPU_FEAT10_Data *d_data, SyncedNewtonSolver *d_newton_solver) {
+  int tid = blockIdx.x * blockDim.x + threadIdx.x;
+
+  const int n_constraints = d_newton_solver->gpu_n_constraints();
+  if (n_constraints > 0) {
+    const double h      = d_newton_solver->solver_time_step();
+    const double rho    = *d_newton_solver->solver_rho();
+    const double factor = h * h * rho;
+
+    // CSR format for J^T (transpose of constraint Jacobian)
+    const int *__restrict__ cjT_offsets   = d_data->cj_csr_offsets();
+    const int *__restrict__ cjT_columns   = d_data->cj_csr_columns();
+    const double *__restrict__ cjT_values = d_data->cj_csr_values();
+
+    // Compute h^2 * rho * J^T * J (rank-1 contributions per constraint)
+    // J is sparse with identity structure for fixed nodes
+    // For each constraint c_idx, J has one entry per DOF
+    // J^T @ (rho * J) gives outer product of constraint Jacobian
+    // columns
+
+    // Parallel over constraints
+    if (tid < n_constraints) {
+      int c_idx  = tid;
+      int n_dofs = 3 * d_newton_solver->get_n_coef();
+      // Find all DOFs affected by this constraint (non-zeros in
+      // J[c_idx, :]) For identity-like constraints, each constraint
+      // affects exactly one DOF But we need to compute J^T[:, c_idx] @
+      // J[c_idx, :]
+
+      // Find which DOFs have non-zero entries in this constraint row
+      // We need to iterate over all DOFs and check cjT (which stores
+      // J^T)
+      for (int dof_i = 0; dof_i < n_dofs; dof_i++) {
+        // Check if J[c_idx, dof_i] != 0
+        // In CSR for J^T: cjT stores columns of J^T (rows of J)
+        int col_start_i = cjT_offsets[dof_i];
+        int col_end_i   = cjT_offsets[dof_i + 1];
+
+        double J_c_i = 0.0;
+        for (int idx_i = col_start_i; idx_i < col_end_i; idx_i++) {
+          if (cjT_columns[idx_i] == c_idx) {
+            J_c_i = cjT_values[idx_i];
+            break;
+          }
+        }
+
+        if (J_c_i != 0.0) {
+          // Now find all dof_j where J[c_idx, dof_j] != 0
+          for (int dof_j = 0; dof_j < n_dofs; dof_j++) {
+            int col_start_j = cjT_offsets[dof_j];
+            int col_end_j   = cjT_offsets[dof_j + 1];
+
+            double J_c_j = 0.0;
+            for (int idx_j = col_start_j; idx_j < col_end_j; idx_j++) {
+              if (cjT_columns[idx_j] == c_idx) {
+                J_c_j = cjT_values[idx_j];
+                break;
+              }
+            }
+
+            if (J_c_j != 0.0) {
+              // Add h^2 * rho * J[c_idx, dof_i] * J[c_idx, dof_j] to
+              // H[dof_i, dof_j]
+              atomicAdd(&d_newton_solver->H()(dof_i, dof_j),
+                        factor * J_c_i * J_c_j);
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+__global__ void cudss_solve_update_pos(SyncedNewtonSolver *d_newton_solver,
+                                       GPU_FEAT10_Data *d_data) {
+  int tid = blockIdx.x * blockDim.x + threadIdx.x;
+  if (tid < d_newton_solver->get_n_coef()) {
+    d_data->x12()(tid) = d_newton_solver->x12_prev()(tid) +
+                         d_newton_solver->v_guess()(tid * 3 + 0) *
+                             d_newton_solver->solver_time_step();
+    d_data->y12()(tid) = d_newton_solver->y12_prev()(tid) +
+                         d_newton_solver->v_guess()(tid * 3 + 1) *
+                             d_newton_solver->solver_time_step();
+    d_data->z12()(tid) = d_newton_solver->z12_prev()(tid) +
+                         d_newton_solver->v_guess()(tid * 3 + 2) *
+                             d_newton_solver->solver_time_step();
+  }
+}
+
+__global__ void cudss_solve_update_v_guess(
+    SyncedNewtonSolver *d_newton_solver) {
+  int tid = blockIdx.x * blockDim.x + threadIdx.x;
+  if (tid < d_newton_solver->get_n_coef() * 3) {
+    d_newton_solver->v_guess()[tid] += d_newton_solver->delta_v()[tid];
+  }
+}
+
+__global__ void cudss_solve_update_v_prev(
+    SyncedNewtonSolver *d_newton_solver) {
+  int tid = blockIdx.x * blockDim.x + threadIdx.x;
+  if (tid < d_newton_solver->get_n_coef() * 3) {
+    d_newton_solver->v_prev()[tid] = d_newton_solver->v_guess()[tid];
+  }
+}
+
+__host__ double compute_l2_norm_cublas(double *d_vec, int n_dofs,
+                                       cudaStream_t stream = 0) {
+  cublasHandle_t handle;
+  cublasCreate(&handle);
+  cublasSetStream(handle, stream);
+
+  // Device-pointer mode avoids an implicit sync/copy
+  cublasSetPointerMode(handle, CUBLAS_POINTER_MODE_DEVICE);
+
+  double *d_norm = nullptr;
+  HANDLE_ERROR(cudaMalloc(&d_norm, sizeof(double)));
+
+  // Compute ||g||_2 into d_norm (async on stream)
+  cublasDnrm2(handle, n_dofs, d_vec, 1, d_norm);
+
+  double h_norm;
+  HANDLE_ERROR(cudaMemcpyAsync(&h_norm, d_norm, sizeof(double),
+                               cudaMemcpyDeviceToHost, stream));
+  HANDLE_ERROR(cudaStreamSynchronize(stream));
+
+  HANDLE_ERROR(cudaFree(d_norm));
+  cublasDestroy(handle);
+
+  return h_norm;
 }
 
 // Wrapper function to call the appropriate kernel based on element type
@@ -625,37 +832,234 @@ void SyncedNewtonSolver::OneStepNewtonCuDSS() {
   HANDLE_ERROR(cudaEventCreate(&start));
   HANDLE_ERROR(cudaEventCreate(&stop));
 
-  int threadsPerBlock                = 256;
-  int numBlocks_compute_p            = (n_beam_ * n_total_qp_ + 255) / 256;
-  int numBlocks_clear_internal_force = (n_coef_ * 3 + 255) / 256;
-  int numBlocks_internal_force       = (n_beam_ * n_shape_ + 255) / 256;
-  int numBlocks_grad_l               = (n_coef_ * 3 + 255) / 256;
-  int numBlocks_constraints_eval     = (n_constraints_ / 3 + 255) / 256;
+  int threadsPerBlock                 = 256;
+  int numBlocks_compute_p             = (n_beam_ * n_total_qp_ + 255) / 256;
+  int numBlocks_clear_internal_force  = (n_coef_ * 3 + 255) / 256;
+  int numBlocks_internal_force        = (n_beam_ * n_shape_ + 255) / 256;
+  int numBlocks_grad_l                = (n_coef_ * 3 + 255) / 256;
+  int numBlocks_constraints_eval      = (n_constraints_ / 3 + 255) / 256;
+  int numBlocks_initialize_prehess    = (n_coef_ * 3 + 255) / 256;
+  int numBlocks_clear_hessian         = (3 * n_coef_ * 3 * n_coef_ + 255) / 256;
+  int numBlocks_hess_tangent_assemble = (n_beam_ * n_total_qp_ + 255) / 256;
+  int numBlocks_hess_mass_assemble    = (n_coef_ + 255) / 256;
+  int numBlocks_hess_constraint_assemble = (n_constraints_ + 255) / 256;
+  int numBlocks_update_v_guess           = (n_coef_ * 3 + 255) / 256;
+  int numBlocks_update_pos               = (n_coef_ + 255) / 256;
+  int numBlocks_update_pos_prev          = (n_coef_ + 255) / 256;
+  int numBlocks_update_dual_var          = (n_constraints_ + 255) / 256;
+  int numBlocks_update_prev_v         = (n_coef_ * 3 + 255) / 256;
 
   HANDLE_ERROR(cudaEventRecord(start));
 
-  // Normal kernel launch (no cooperative groups)
-  cudss_solve_compute_p<<<numBlocks_compute_p, threadsPerBlock>>>(
-      static_cast<GPU_FEAT10_Data *>(d_data_), d_newton_solver_);
+  cudss_solve_update_pos_prev<<<numBlocks_update_pos_prev, threadsPerBlock>>>(
+    static_cast<GPU_FEAT10_Data *>(d_data_), d_newton_solver_);
 
-  cudss_solve_clear_internal_force<<<numBlocks_clear_internal_force,
+  for (int outer_iter = 0; outer_iter < h_max_outer_; ++outer_iter) {
+    std::cout << "Outer iter " << outer_iter << std::endl;
+
+    for (int newton_iter = 0; newton_iter < h_max_inner_; ++newton_iter) {
+      std::cout << "  Newton iter " << newton_iter << std::endl;
+
+      // Normal kernel launch (no cooperative groups)
+      cudss_solve_compute_p<<<numBlocks_compute_p, threadsPerBlock>>>(
+          static_cast<GPU_FEAT10_Data *>(d_data_), d_newton_solver_);
+
+      cudss_solve_clear_internal_force<<<numBlocks_clear_internal_force,
+                                         threadsPerBlock>>>(
+          static_cast<GPU_FEAT10_Data *>(d_data_));
+      cudss_solve_compute_internal_force<<<numBlocks_internal_force,
+                                           threadsPerBlock>>>(
+          static_cast<GPU_FEAT10_Data *>(d_data_), d_newton_solver_);
+
+      cudss_solve_constraints_eval<<<numBlocks_constraints_eval,
                                      threadsPerBlock>>>(
-      static_cast<GPU_FEAT10_Data *>(d_data_));
-  cudss_solve_compute_internal_force<<<numBlocks_internal_force,
+          static_cast<GPU_FEAT10_Data *>(d_data_), d_newton_solver_);
+      cudss_solve_compute_grad_l<<<numBlocks_grad_l, threadsPerBlock>>>(
+          static_cast<GPU_FEAT10_Data *>(d_data_), d_newton_solver_);
+
+      cudss_solve_initialize_prehess<<<numBlocks_initialize_prehess,
                                        threadsPerBlock>>>(
-      static_cast<GPU_FEAT10_Data *>(d_data_), d_newton_solver_);
+          static_cast<GPU_FEAT10_Data *>(d_data_), d_newton_solver_);
 
-  cudss_solve_constraints_eval<<<numBlocks_constraints_eval, threadsPerBlock>>>(
-      static_cast<GPU_FEAT10_Data *>(d_data_), d_newton_solver_);
-  cudss_solve_compute_grad_l<<<numBlocks_grad_l, threadsPerBlock>>>(
-      static_cast<GPU_FEAT10_Data *>(d_data_), d_newton_solver_);
+      cudss_solve_clear_hessian<<<numBlocks_clear_hessian, threadsPerBlock>>>(
+          static_cast<GPU_FEAT10_Data *>(d_data_), d_newton_solver_);
+      cudss_solve_hess_tangent_assemble<<<numBlocks_hess_tangent_assemble,
+                                          threadsPerBlock>>>(
+          static_cast<GPU_FEAT10_Data *>(d_data_), d_newton_solver_);
+      cudss_solve_mass_contrib_assemble<<<numBlocks_hess_mass_assemble,
+                                          threadsPerBlock>>>(
+          static_cast<GPU_FEAT10_Data *>(d_data_), d_newton_solver_);
+      cudss_solve_constraint_contrib_assemble<<<
+          numBlocks_hess_constraint_assemble, threadsPerBlock>>>(
+          static_cast<GPU_FEAT10_Data *>(d_data_), d_newton_solver_);
 
-  // initialize
-  // clear hessian
-  // hessian assemble tangent
-  // hessian assemble mass constrib
-  // hessian assemble constraint
-  // solve
+      // solve using cuSPARSE + cuDSS
+
+      // Get Hessian matrix pointer and dimensions
+      int n_dofs  = 3 * n_coef_;
+      double *d_H = d_H_;        // Dense Hessian matrix (n_dofs × n_dofs)
+      double *d_b = d_r_;        // RHS vector (already negated gradient)
+      double *d_x = d_delta_v_;  // Solution vector
+
+      // 1) Create cuSPARSE handle
+      cusparseHandle_t hSp;
+      CHECK_CUSPARSE(cusparseCreate(&hSp));
+
+      // 2) Create dense matrix descriptor for H
+      cusparseDnMatDescr_t dnH;
+      CHECK_CUSPARSE(cusparseCreateDnMat(&dnH, n_dofs, n_dofs, n_dofs, d_H,
+                                         CUDA_R_64F, CUSPARSE_ORDER_ROW));
+
+      // 3) Create COO sparse matrix descriptor
+      cusparseSpMatDescr_t spCOO;
+      CHECK_CUSPARSE(cusparseCreateCoo(&spCOO, n_dofs, n_dofs, /*nnz*/ 0,
+                                       /*rowInd*/ nullptr, /*colInd*/ nullptr,
+                                       /*vals*/ nullptr, CUSPARSE_INDEX_32I,
+                                       CUSPARSE_INDEX_BASE_ZERO, CUDA_R_64F));
+
+      // 4) Get buffer size for dense-to-sparse conversion
+      size_t d2sBufSz = 0;
+      void *d2sBuf    = nullptr;
+      CHECK_CUSPARSE(cusparseDenseToSparse_bufferSize(
+          hSp, dnH, spCOO, CUSPARSE_DENSETOSPARSE_ALG_DEFAULT, &d2sBufSz));
+      HANDLE_ERROR(cudaMalloc(&d2sBuf, d2sBufSz));
+
+      // 5) Analyze structure
+      CHECK_CUSPARSE(cusparseDenseToSparse_analysis(
+          hSp, dnH, spCOO, CUSPARSE_DENSETOSPARSE_ALG_DEFAULT, d2sBuf));
+
+      // 6) Get nnz count
+      int64_t rows64, cols64, nnz64;
+      CHECK_CUSPARSE(cusparseSpMatGetSize(spCOO, &rows64, &cols64, &nnz64));
+      const int nrows = int(rows64), ncols = int(cols64), nnz = int(nnz64);
+
+      // 7) Allocate COO arrays
+      int *d_cooRow = nullptr, *d_cooCol = nullptr;
+      double *d_cooVal = nullptr;
+      HANDLE_ERROR(cudaMalloc(&d_cooRow, nnz * sizeof(int)));
+      HANDLE_ERROR(cudaMalloc(&d_cooCol, nnz * sizeof(int)));
+      HANDLE_ERROR(cudaMalloc(&d_cooVal, nnz * sizeof(double)));
+      CHECK_CUSPARSE(
+          cusparseCooSetPointers(spCOO, d_cooRow, d_cooCol, d_cooVal));
+
+      // 8) Convert dense to COO
+      CHECK_CUSPARSE(cusparseDenseToSparse_convert(
+          hSp, dnH, spCOO, CUSPARSE_DENSETOSPARSE_ALG_DEFAULT, d2sBuf));
+
+      // 9) Convert COO row indices to CSR row offsets
+      int *d_csrOffsets = nullptr;
+      HANDLE_ERROR(cudaMalloc(&d_csrOffsets, (nrows + 1) * sizeof(int)));
+      CHECK_CUSPARSE(cusparseXcoo2csr(hSp, d_cooRow, nnz, nrows, d_csrOffsets,
+                                      CUSPARSE_INDEX_BASE_ZERO));
+
+      // Reuse COO arrays for CSR
+      int *d_csrCols    = d_cooCol;
+      double *d_csrVals = d_cooVal;
+
+      // 10) Create cuDSS handle and config
+      cudssHandle_t h_dss;
+      CUDSS_OK(cudssCreate(&h_dss));
+      cudssConfig_t cfg_dss;
+      CUDSS_OK(cudssConfigCreate(&cfg_dss));
+      cudssData_t data_dss;
+      CUDSS_OK(cudssDataCreate(h_dss, &data_dss));
+
+      // 11) Create CSR matrix for cuDSS
+      cudssMatrix_t dssA;
+      CUDSS_OK(cudssMatrixCreateCsr(&dssA, nrows, ncols, nnz,
+                                    /*rowStart*/ d_csrOffsets,
+                                    /*rowEnd*/ nullptr,  // 3-array CSR
+                                    /*colInds*/ d_csrCols,
+                                    /*values*/ d_csrVals, CUDA_R_32I,
+                                    CUDA_R_64F, CUDSS_MTYPE_SPD,
+                                    CUDSS_MVIEW_FULL, CUDSS_BASE_ZERO));
+
+      // 12) Create dense vectors for RHS and solution
+      cudssMatrix_t dssB, dssX;
+      CUDSS_OK(cudssMatrixCreateDn(&dssB, n_dofs, 1, n_dofs, d_b, CUDA_R_64F,
+                                   CUDSS_LAYOUT_COL_MAJOR));
+      CUDSS_OK(cudssMatrixCreateDn(&dssX, n_dofs, 1, n_dofs, d_x, CUDA_R_64F,
+                                   CUDSS_LAYOUT_COL_MAJOR));
+
+      // 13) Analysis phase
+      CUDSS_OK(cudssExecute(h_dss, CUDSS_PHASE_ANALYSIS, cfg_dss, data_dss,
+                            dssA, dssX, dssB));
+
+      // 14) Factorization phase
+      CUDSS_OK(cudssExecute(h_dss, CUDSS_PHASE_FACTORIZATION, cfg_dss, data_dss,
+                            dssA, dssX, dssB));
+
+      // 15) Solve phase
+      HANDLE_ERROR(cudaMemset(d_x, 0, n_dofs * sizeof(double)));
+      CUDSS_OK(cudssExecute(h_dss, CUDSS_PHASE_SOLVE, cfg_dss, data_dss, dssA,
+                            dssX, dssB));
+
+      // 16) Cleanup
+      CUDSS_OK(cudssMatrixDestroy(dssA));
+      CUDSS_OK(cudssMatrixDestroy(dssB));
+      CUDSS_OK(cudssMatrixDestroy(dssX));
+      CUDSS_OK(cudssDataDestroy(h_dss, data_dss));
+      CUDSS_OK(cudssConfigDestroy(cfg_dss));
+      CUDSS_OK(cudssDestroy(h_dss));
+
+      CHECK_CUSPARSE(cusparseDestroyDnMat(dnH));
+      CHECK_CUSPARSE(cusparseDestroySpMat(spCOO));
+      CHECK_CUSPARSE(cusparseDestroy(hSp));
+
+      HANDLE_ERROR(cudaFree(d_cooRow));
+      HANDLE_ERROR(cudaFree(d_cooCol));
+      HANDLE_ERROR(cudaFree(d_cooVal));
+      HANDLE_ERROR(cudaFree(d_csrOffsets));
+      HANDLE_ERROR(cudaFree(d2sBuf));
+
+      // update v_guess with delta_v
+      cudss_solve_update_v_guess<<<numBlocks_update_v_guess, threadsPerBlock>>>(
+          d_newton_solver_);
+      cudss_solve_update_pos<<<numBlocks_update_pos, threadsPerBlock>>>(
+          d_newton_solver_, static_cast<GPU_FEAT10_Data *>(d_data_));
+
+      // cuBLAS reduction to get L2 norm of gradient
+      HANDLE_ERROR(cudaDeviceSynchronize());
+      double norm_g = compute_l2_norm_cublas(d_g_, 3 * n_coef_);
+      std::cout << "    ||g|| from cuBLAS = " << std::scientific << norm_g
+                << std::endl;
+
+      if (norm_g < h_inner_tol_) {
+        break;
+      }
+
+    }
+
+    cudss_solve_update_v_prev<<<numBlocks_update_prev_v, threadsPerBlock>>>(
+        d_newton_solver_);
+
+    cudss_solve_constraints_eval<<<numBlocks_constraints_eval,
+                                   threadsPerBlock>>>(
+        static_cast<GPU_FEAT10_Data *>(d_data_), d_newton_solver_);
+
+    cudss_solve_update_dual_var<<<numBlocks_update_dual_var, threadsPerBlock>>>(
+        static_cast<GPU_FEAT10_Data *>(d_data_), d_newton_solver_);
+
+    // Check norm of the constraint_val, for ALM convergence
+    HANDLE_ERROR(cudaDeviceSynchronize());
+
+    // Get constraint pointer from GPU_FEAT10_Data
+    if (n_constraints_ > 0) {
+      double norm_constraint =
+          compute_l2_norm_cublas(d_constraint_ptr_,n_constraints_);
+      std::cout << "  Outer iter " << outer_iter
+                << ": ||c|| = " << std::scientific << norm_constraint
+                << std::endl;
+
+      if (norm_constraint < h_outer_tol_) {
+        std::cout << "  Outer loop converged at iteration " << outer_iter
+                  << std::endl;
+        break;
+      }
+    }
+  }
+
+  // end section
 
   HANDLE_ERROR(cudaDeviceSynchronize());
   float milliseconds = 0;
