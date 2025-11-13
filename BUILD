@@ -348,6 +348,29 @@ cc_binary(
     ],
 )
 
+
+cc_binary(
+    name = "test_feat10_bunny_newton",
+    srcs = ["lib_bin/test_feat10_bunny_newton.cc"],
+    copts = ["--std=c++17"],
+    linkopts = [
+        "-L/usr/local/cuda/lib64",
+        "-lcusparse",
+        "-lcudart",
+        "-lcudss",
+        "-lcublas",
+    ],
+    deps = [
+        ":FEAT10Data",
+        ":cpu_utils",
+        ":solvers_syncednesterov",
+        ":solvers_syncedadamw",
+        ":solvers_syncednewton",
+        "@eigen//:eigen",
+    ],
+)
+
+
 # ========================================
 
 # ========================================
