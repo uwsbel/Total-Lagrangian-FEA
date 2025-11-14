@@ -35,7 +35,8 @@ struct GPU_FEAT10_Data : public ElementBase {
   }
 
   __device__ Eigen::Map<Eigen::MatrixXi> element_connectivity() const {
-    return Eigen::Map<Eigen::MatrixXi>(d_element_connectivity, n_elem, 4);
+    return Eigen::Map<Eigen::MatrixXi>(d_element_connectivity, n_elem,
+                                       Quadrature::N_NODE_T10_10);
   }
 
   __device__ Eigen::Map<Eigen::MatrixXd> grad_N_ref(int elem_idx, int qp_idx) {
