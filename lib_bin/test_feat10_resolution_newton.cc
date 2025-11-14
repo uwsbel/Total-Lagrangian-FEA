@@ -23,7 +23,7 @@ int main() {
   int plot_target_node;
   int n_nodes, n_elems;
 
-  MESH_RESOLUTION resolution = RES_0;
+  MESH_RESOLUTION resolution = RES_4;
 
   if (resolution == RES_0) {
     n_nodes = ANCFCPUUtils::FEAT10_read_nodes(
@@ -231,9 +231,11 @@ int main() {
   // Vector to store x position of node 353 at each step
   std::vector<double> node_x_history;
 
+  solver.AnalyzeHessianSparsity();
+
   for (int i = 0; i < 50; i++) {
     // solver.Solve();
-    solver.SolveCuDSS();
+    solver.Solve();
     // Retrieve current positions
     Eigen::VectorXd x12_current, y12_current, z12_current;
     gpu_t10_data.RetrievePositionToCPU(x12_current, y12_current, z12_current);

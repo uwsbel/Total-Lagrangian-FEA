@@ -1,4 +1,6 @@
 #pragma once
+#include <cublas_v2.h>  // Add this line for cuBLAS
+
 #include "../../lib_utils/cuda_utils.h"
 #include "../../lib_utils/quadrature_utils.h"
 #include "../elements/ANCF3243Data.cuh"
@@ -21,7 +23,14 @@ class SyncedNewtonSolver : public SolverBase {
   SyncedNewtonSolver(ElementBase *data, int n_constraints)
       : n_coef_(data->get_n_coef()),
         n_beam_(data->get_n_beam()),
-        n_constraints_(n_constraints) {
+        n_constraints_(n_constraints),
+        sparse_hessian_initialized_(false),  // NEW
+        h_nnz_(0),                           // NEW
+        d_csr_row_offsets_(nullptr),         // NEW
+        d_csr_col_indices_(nullptr),         // NEW
+        d_csr_values_(nullptr),              // NEW
+        d_col_bitset_(nullptr),              // NEW
+        d_nnz_per_row_(nullptr) {            // NEW
     // Type-based casting to get the correct d_data from derived class
     if (data->type == TYPE_3243) {
       type_            = TYPE_3243;
@@ -74,9 +83,6 @@ class SyncedNewtonSolver : public SolverBase {
 
     cudaMalloc(&d_delta_v_, n_coef_ * 3 * sizeof(double));
     cudaMalloc(&d_r_, n_coef_ * 3 * sizeof(double));
-    cudaMalloc(&d_H_, n_coef_ * 3 * n_coef_ * 3 * sizeof(double));
-    cudaMalloc(&d_L_, n_coef_ * 3 * n_coef_ * 3 * sizeof(double));
-    cudaMalloc(&d_y_, n_coef_ * 3 * sizeof(double));  // Add this line
     cudaMalloc(&d_r_dot_r_, sizeof(double));
     cudaMalloc(&d_alpha_cg_, sizeof(double));
     cudaMalloc(&d_beta_cg_, sizeof(double));
@@ -90,6 +96,17 @@ class SyncedNewtonSolver : public SolverBase {
         d_constraint_ptr_ = nullptr;
       }
     }
+
+    // NEW: Create persistent handles
+    cublasCreate(&cublas_handle_);
+    cublasSetPointerMode(cublas_handle_, CUBLAS_POINTER_MODE_DEVICE);
+
+    cudaMalloc(&d_norm_temp_, sizeof(double));
+
+    // cuDSS handles created in Setup() after sparsity analysis
+    cudss_handle_ = nullptr;
+    cudss_config_ = nullptr;
+    cudss_data_   = nullptr;
   }
 
   ~SyncedNewtonSolver() {
@@ -116,12 +133,34 @@ class SyncedNewtonSolver : public SolverBase {
 
     cudaFree(d_delta_v_);
     cudaFree(d_r_);
-    cudaFree(d_H_);
-    cudaFree(d_L_);
-    cudaFree(d_y_);  // Add this line
     cudaFree(d_r_dot_r_);
     cudaFree(d_alpha_cg_);
     cudaFree(d_beta_cg_);
+
+    // NEW: Free sparse Hessian
+    if (d_csr_row_offsets_)
+      cudaFree(d_csr_row_offsets_);
+    if (d_csr_col_indices_)
+      cudaFree(d_csr_col_indices_);
+    if (d_csr_values_)
+      cudaFree(d_csr_values_);
+    if (d_col_bitset_)
+      cudaFree(d_col_bitset_);
+    if (d_nnz_per_row_)
+      cudaFree(d_nnz_per_row_);
+
+    // NEW: Destroy persistent handles
+    if (cublas_handle_)
+      cublasDestroy(cublas_handle_);
+    if (d_norm_temp_)
+      cudaFree(d_norm_temp_);
+
+    if (cudss_data_)
+      cudssDataDestroy(cudss_handle_, cudss_data_);
+    if (cudss_config_)
+      cudssConfigDestroy(cudss_config_);
+    if (cudss_handle_)
+      cudssDestroy(cudss_handle_);
   }
 
   void SetParameters(void *params) override {
@@ -163,9 +202,6 @@ class SyncedNewtonSolver : public SolverBase {
     cudaMemset(d_lambda_guess_, 0, n_constraints_ * sizeof(double));
     cudaMemset(d_g_, 0, n_coef_ * 3 * sizeof(double));
     cudaMemset(d_dv_, 0, n_coef_ * 3 * sizeof(double));
-    cudaMemset(d_H_, 0, n_coef_ * 3 * n_coef_ * 3 * sizeof(double));
-    cudaMemset(d_L_, 0, n_coef_ * 3 * n_coef_ * 3 * sizeof(double));
-    cudaMemset(d_y_, 0, n_coef_ * 3 * sizeof(double));  // Add this line
     cudaMemset(d_r_dot_r_, 0, sizeof(double));
 
     HANDLE_ERROR(cudaMemcpy(d_newton_solver_, this, sizeof(SyncedNewtonSolver),
@@ -189,19 +225,6 @@ class SyncedNewtonSolver : public SolverBase {
   __device__ Eigen::Map<Eigen::VectorXd> dv() {
     return Eigen::Map<Eigen::VectorXd>(d_dv_, 3 * n_coef_);
   }
-  __device__ Eigen::Map<Eigen::MatrixXd> H() {
-    int n_dofs = 3 * n_coef_;
-    return Eigen::Map<Eigen::MatrixXd>(d_H_, n_dofs, n_dofs);
-  }
-
-  __device__ Eigen::Map<Eigen::MatrixXd> L() {
-    int n_dofs = 3 * n_coef_;
-    return Eigen::Map<Eigen::MatrixXd>(d_L_, n_dofs, n_dofs);
-  }  // Add this accessor
-
-  __device__ Eigen::Map<Eigen::VectorXd> y() {
-    return Eigen::Map<Eigen::VectorXd>(d_y_, 3 * n_coef_);
-  }  // Add this accessor
 
   __device__ int gpu_n_constraints() {
     return n_constraints_;
@@ -274,17 +297,14 @@ class SyncedNewtonSolver : public SolverBase {
     return n_beam_;
   }
 
-  void OneStepNewton();
-
   void OneStepNewtonCuDSS();
 
   void Solve() override {
-    OneStepNewton();
-  }
-
-  void SolveCuDSS() {
     OneStepNewtonCuDSS();
   }
+
+  double compute_l2_norm_cublas(double *d_vec, int n_dofs);
+  void AnalyzeHessianSparsity();  // ADD THIS LINE
 
  private:
   ElementType type_;
@@ -304,11 +324,24 @@ class SyncedNewtonSolver : public SolverBase {
   int h_max_outer_, h_max_inner_;
   int *d_max_inner_, *d_max_outer_;
   double *d_delta_v_, *d_r_;
-  double *d_H_;                      // Hessian-vector product
-  double *d_L_;                      // Cholesky factorization L
-  double *d_y_;                      // Cholesky factorization y
   double *d_r_dot_r_;                // Scalar for dot product storage
   double *d_alpha_cg_, *d_beta_cg_;  // CG scalars
 
   double *d_constraint_ptr_;
+
+  // NEW: Sparse Hessian members
+  bool sparse_hessian_initialized_;
+  int h_nnz_;                   // Total number of non-zeros (host copy)
+  int *d_csr_row_offsets_;      // Size: n_dofs + 1
+  int *d_csr_col_indices_;      // Size: nnz
+  double *d_csr_values_;        // Size: nnz
+  unsigned int *d_col_bitset_;  // Temporary for sparsity analysis
+  int *d_nnz_per_row_;          // Temporary workspace
+
+  // NEW: Persistent library handles (reused across iterations)
+  cublasHandle_t cublas_handle_;
+  cudssHandle_t cudss_handle_;
+  cudssConfig_t cudss_config_;
+  cudssData_t cudss_data_;
+  double *d_norm_temp_;  // Reusable temp for cuBLAS norms
 };

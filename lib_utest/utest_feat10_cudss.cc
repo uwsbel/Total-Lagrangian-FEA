@@ -243,8 +243,10 @@ TEST(cudss_test, cudss_feat10) {
   // Vector to store x position of node 353 at each step
   std::vector<double> node_x_history;
 
-  for (int i = 0; i < 50; i++) {
-    solver.SolveCuDSS();
+  solver.AnalyzeHessianSparsity();
+
+  for (int i = 0; i < 2; i++) {
+    solver.Solve();
 
     // Retrieve current positions
     Eigen::VectorXd x12_current, y12_current, z12_current;

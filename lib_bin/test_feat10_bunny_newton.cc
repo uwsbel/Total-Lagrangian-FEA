@@ -188,12 +188,13 @@ int main() {
   solver.Setup();
   solver.SetParameters(&params);
 
+  solver.AnalyzeHessianSparsity();
+
   int output_interval = 10;  // 10 vtk per seconds
   int output_frame    = 0;
 
   for (int i = 0; i < 20000; i++) {
-    solver.SolveCuDSS();
-    // solver.Solve();
+    solver.Solve();
     if (i % output_interval == 0) {
       gpu_t10_data.WriteOutputVTK("output/bunny_adamw_step_" +
                                   std::to_string(output_frame) + ".vtk");
