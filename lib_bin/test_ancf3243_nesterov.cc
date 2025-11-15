@@ -21,10 +21,6 @@ int main() {
   ANCFCPUUtils::GridMeshGenerator grid_gen(3 * L, 0.0, L, true, false);
   grid_gen.generate_mesh();
 
-  const double E    = 7e8;   // Young's modulus
-  const double nu   = 0.33;  // Poisson's ratio
-  const double rho0 = 2700;  // Density
-
   int n_nodes    = grid_gen.get_num_nodes();
   int n_elements = grid_gen.get_num_elements();
 
