@@ -293,7 +293,7 @@ cc_test(
         "@eigen//:eigen",
         "@googletest//:gtest_main",
         ":csv_utils",
-        ":mesh_utils"
+        ":mesh_utils",
     ],
 )
 
