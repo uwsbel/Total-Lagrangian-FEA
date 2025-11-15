@@ -8,32 +8,40 @@
 #include "../lib_src/elements/ANCF3243Data.cuh"
 #include "../lib_src/solvers/SyncedAdamW.cuh"
 #include "../lib_utils/cpu_utils.h"
+#include "../lib_utils/mesh_utils.h"
 
 const double E    = 7e8;   // Young's modulus
 const double nu   = 0.33;  // Poisson's ratio
 const double rho0 = 2700;  // Density
 
 int main() {
-  // initialize GPU data structure
-  int n_beam = 3;  // this is working
-  GPU_ANCF3243_Data gpu_3243_data(n_beam);
-  gpu_3243_data.Initialize();
-
   double L = 2.0, W = 1.0, H = 1.0;
 
   const double E    = 7e8;   // Young's modulus
   const double nu   = 0.33;  // Poisson's ratio
   const double rho0 = 2700;  // Density
 
-  std::cout << "Number of beams: " << gpu_3243_data.get_n_beam() << std::endl;
-  std::cout << "Total nodes: " << gpu_3243_data.get_n_coef() << std::endl;
+  // Create 1D horizontal grid mesh (3 elements, 4 nodes)
+  ANCFCPUUtils::GridMeshGenerator grid_gen(3*L, 0.0, L, true, false);
+  grid_gen.generate_mesh();
+  
+  int n_nodes = grid_gen.get_num_nodes();
+  int n_elements = grid_gen.get_num_elements();
+  
+  std::cout << "Number of nodes: " << n_nodes << std::endl;
+  std::cout << "Number of elements: " << n_elements << std::endl;
+  std::cout << "Total DOFs: " << 4 * n_nodes << std::endl;
+
+  // initialize GPU data structure
+  GPU_ANCF3243_Data gpu_3243_data(n_nodes, n_elements);
+  gpu_3243_data.Initialize();
 
   // Compute B_inv on CPU
   Eigen::MatrixXd h_B_inv(Quadrature::N_SHAPE_3243, Quadrature::N_SHAPE_3243);
-  ANCFCPUUtils::ANCF3243_B12_matrix(2.0, 1.0, 1.0, h_B_inv,
+  ANCFCPUUtils::ANCF3243_B12_matrix(L, W, H, h_B_inv,
                                     Quadrature::N_SHAPE_3243);
 
-  // Generate nodal coordinates for multiple beams - using Eigen vectors
+  // Generate nodal coordinates using GridMeshGenerator
   Eigen::VectorXd h_x12(gpu_3243_data.get_n_coef());
   Eigen::VectorXd h_y12(gpu_3243_data.get_n_coef());
   Eigen::VectorXd h_z12(gpu_3243_data.get_n_coef());
@@ -41,7 +49,7 @@ int main() {
   Eigen::VectorXd h_y12_jac(gpu_3243_data.get_n_coef());
   Eigen::VectorXd h_z12_jac(gpu_3243_data.get_n_coef());
 
-  ANCFCPUUtils::ANCF3243_generate_beam_coordinates(n_beam, h_x12, h_y12, h_z12);
+  grid_gen.get_coordinates(h_x12, h_y12, h_z12);
 
   // print h_x12
   for (int i = 0; i < gpu_3243_data.get_n_coef(); i++) {
@@ -62,11 +70,15 @@ int main() {
   h_y12_jac = h_y12;
   h_z12_jac = h_z12;
 
-  // Calculate offsets - using Eigen vectors
-  Eigen::VectorXi h_offset_start(gpu_3243_data.get_n_beam());
-  Eigen::VectorXi h_offset_end(gpu_3243_data.get_n_beam());
-  ANCFCPUUtils::ANCF3243_calculate_offsets(gpu_3243_data.get_n_beam(),
-                                           h_offset_start, h_offset_end);
+  // Get element connectivity - using GridMeshGenerator
+  Eigen::MatrixXi h_element_connectivity;
+  grid_gen.get_element_connectivity(h_element_connectivity);
+  
+  // Debug: print element connectivity
+  std::cout << "Element connectivity:" << std::endl;
+  for (int i = 0; i < h_element_connectivity.rows(); i++) {
+    std::cout << "Element " << i << ": [" << h_element_connectivity(i, 0) << ", " << h_element_connectivity(i, 1) << "]" << std::endl;
+  }
 
   // ======================================================================
 
@@ -88,7 +100,7 @@ int main() {
                       Quadrature::gauss_zeta_2, Quadrature::weight_xi_m_6,
                       Quadrature::weight_xi_3, Quadrature::weight_eta_2,
                       Quadrature::weight_zeta_2, h_x12, h_y12, h_z12,
-                      h_offset_start, h_offset_end);
+                      h_element_connectivity);
 
   // ======================================================================
 
@@ -102,11 +114,12 @@ int main() {
   std::cout << "mass matrix:" << std::endl;
   for (int i = 0; i < mass_matrix.rows(); i++) {
     for (int j = 0; j < mass_matrix.cols(); j++) {
-      std::cout << mass_matrix(i, j) << " ";
+      std::cout << std::setw(10) << std::setprecision(3) << mass_matrix(i, j) << " ";
     }
     std::cout << std::endl;
   }
 
+  
   gpu_3243_data.ConvertToCSRMass();
 
   std::cout << "done ConvertToCSRMass" << std::endl;
@@ -171,6 +184,7 @@ int main() {
     }
     std::cout << std::endl;
   }
+
 
   SyncedAdamWParams params = {2e-4, 0.9,  0.999, 1e-8, 1e-4, 1e-1,
                               1e-6, 1e14, 5,     500,  1e-3, 10};

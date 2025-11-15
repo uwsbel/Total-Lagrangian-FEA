@@ -120,14 +120,19 @@ __device__ __forceinline__ void compute_p(int elem_idx, int qp_idx,
         }
     }
 
-    // Extract local nodal coordinates (e vectors)
-    double e[8][3]; // 8 nodes, each with 3 coordinates
+    // Extract local nodal coordinates (e vectors) using element connectivity
+    double e[8][3]; // 2 nodes × 4 DOFs = 8 entries
     #pragma unroll
     for (int i = 0; i < 8; i++)
     {
-        e[i][0] = d_data->x12(elem_idx)(i); // x coordinate
-        e[i][1] = d_data->y12(elem_idx)(i); // y coordinate
-        e[i][2] = d_data->z12(elem_idx)(i); // z coordinate
+        const int node_local  = (i < 4) ? 0 : 1;
+        const int dof_local   = i % 4;
+        const int node_global = d_data->element_node(elem_idx, node_local);
+        const int coef_idx    = node_global * 4 + dof_local;
+
+        e[i][0] = d_data->x12()(coef_idx); // x coordinate
+        e[i][1] = d_data->y12()(coef_idx); // y coordinate
+        e[i][2] = d_data->z12()(coef_idx); // z coordinate
     }
 
     // Compute F = sum_i e_i ⊗ ∇s_i
@@ -219,7 +224,11 @@ __device__ __forceinline__ void compute_p(int elem_idx, int qp_idx,
 __device__ __forceinline__ void compute_internal_force(
     int elem_idx, int node_idx, GPU_ANCF3243_Data *d_data) {
   double f_i[3] = {0};
-  int node_base = d_data->offset_start()(elem_idx);
+  // Map local node_idx (0-7) to global coefficient index using connectivity
+  const int node_local  = node_idx / 4;
+  const int dof_local   = node_idx % 4;
+  const int node_global = d_data->element_node(elem_idx, node_local);
+  const int coef_idx_global = node_global * 4 + dof_local;
   double geom   = (d_data->L() * d_data->W() * d_data->H()) / 8.0;
 
   // clang-format off
@@ -249,7 +258,7 @@ __device__ __forceinline__ void compute_internal_force(
     #pragma unroll
     for (int d = 0; d < 3; ++d)
     {
-        atomicAdd(&d_data->f_int(node_base + node_idx)(d), f_i[d]);
+        atomicAdd(&d_data->f_int(coef_idx_global)(d), f_i[d]);
     }
 
   // clang-format on
