@@ -141,7 +141,7 @@ cuda_library(
 
 # ========================================
 
-# ========================================
+# =========================\==============
 # cc binary section
 cc_binary(
     name = "test_ancf3243_nesterov",
@@ -158,6 +158,7 @@ cc_binary(
         ":solvers_syncednesterov",
         ":solvers_syncedadamw",
         "@eigen//:eigen",
+        ":mesh_utils",
     ],
 )
 
@@ -292,6 +293,7 @@ cc_test(
         "@eigen//:eigen",
         "@googletest//:gtest_main",
         ":csv_utils",
+        ":mesh_utils"
     ],
 )
 
@@ -327,6 +329,7 @@ cc_test(
         "@eigen//:eigen",
         "@googletest//:gtest_main",
         ":csv_utils",
+        ":mesh_utils",
     ],
 )
 # ========================================

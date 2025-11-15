@@ -5,6 +5,7 @@
 #include "../lib_src/elements/ANCF3243Data.cuh"
 #include "../lib_utils/cpu_utils.h"
 #include "../lib_utils/csv_utils.h"
+#include "../lib_utils/mesh_utils.h"
 
 // Test fixture class for ANCF tests
 class Test3243 : public ::testing::Test {
@@ -19,11 +20,17 @@ class Test3243 : public ::testing::Test {
 };
 
 TEST(Test3243, MassMatrix2Beams) {
-  int n_beam = 2;
-  GPU_ANCF3243_Data gpu_3243_data(n_beam);
-  gpu_3243_data.Initialize();
-
   double L = 2.0, W = 1.0, H = 1.0;
+
+  // Create 1D horizontal grid mesh (2 elements, 3 nodes)
+  ANCFCPUUtils::GridMeshGenerator grid_gen(2 * L, 0.0, L, true, false);
+  grid_gen.generate_mesh();
+
+  int n_nodes    = grid_gen.get_num_nodes();
+  int n_elements = grid_gen.get_num_elements();
+
+  GPU_ANCF3243_Data gpu_3243_data(n_nodes, n_elements);
+  gpu_3243_data.Initialize();
 
   const double E    = 7e8;   // Young's modulus
   const double nu   = 0.33;  // Poisson's ratio
@@ -37,19 +44,17 @@ TEST(Test3243, MassMatrix2Beams) {
   Eigen::VectorXd h_y12(gpu_3243_data.get_n_coef());
   Eigen::VectorXd h_z12(gpu_3243_data.get_n_coef());
 
-  ANCFCPUUtils::ANCF3243_generate_beam_coordinates(n_beam, h_x12, h_y12, h_z12);
+  grid_gen.get_coordinates(h_x12, h_y12, h_z12);
 
-  Eigen::VectorXi h_offset_start(gpu_3243_data.get_n_beam());
-  Eigen::VectorXi h_offset_end(gpu_3243_data.get_n_beam());
-  ANCFCPUUtils::ANCF3243_calculate_offsets(gpu_3243_data.get_n_beam(),
-                                           h_offset_start, h_offset_end);
+  Eigen::MatrixXi h_element_connectivity;
+  grid_gen.get_element_connectivity(h_element_connectivity);
 
   gpu_3243_data.Setup(L, W, H, rho0, nu, E, h_B_inv, Quadrature::gauss_xi_m_6,
                       Quadrature::gauss_xi_3, Quadrature::gauss_eta_2,
                       Quadrature::gauss_zeta_2, Quadrature::weight_xi_m_6,
                       Quadrature::weight_xi_3, Quadrature::weight_eta_2,
                       Quadrature::weight_zeta_2, h_x12, h_y12, h_z12,
-                      h_offset_start, h_offset_end);
+                      h_element_connectivity);
 
   gpu_3243_data.CalcDsDuPre();
   gpu_3243_data.CalcMassMatrix();
@@ -86,11 +91,17 @@ TEST(Test3243, MassMatrix2Beams) {
 }
 
 TEST(Test3243, MassMatrix3Beams) {
-  int n_beam = 3;
-  GPU_ANCF3243_Data gpu_3243_data(n_beam);
-  gpu_3243_data.Initialize();
-
   double L = 2.0, W = 1.0, H = 1.0;
+
+  // Create 1D horizontal grid mesh (3 elements, 4 nodes)
+  ANCFCPUUtils::GridMeshGenerator grid_gen(3 * L, 0.0, L, true, false);
+  grid_gen.generate_mesh();
+
+  int n_nodes    = grid_gen.get_num_nodes();
+  int n_elements = grid_gen.get_num_elements();
+
+  GPU_ANCF3243_Data gpu_3243_data(n_nodes, n_elements);
+  gpu_3243_data.Initialize();
 
   const double E    = 7e8;   // Young's modulus
   const double nu   = 0.33;  // Poisson's ratio
@@ -104,19 +115,17 @@ TEST(Test3243, MassMatrix3Beams) {
   Eigen::VectorXd h_y12(gpu_3243_data.get_n_coef());
   Eigen::VectorXd h_z12(gpu_3243_data.get_n_coef());
 
-  ANCFCPUUtils::ANCF3243_generate_beam_coordinates(n_beam, h_x12, h_y12, h_z12);
+  grid_gen.get_coordinates(h_x12, h_y12, h_z12);
 
-  Eigen::VectorXi h_offset_start(gpu_3243_data.get_n_beam());
-  Eigen::VectorXi h_offset_end(gpu_3243_data.get_n_beam());
-  ANCFCPUUtils::ANCF3243_calculate_offsets(gpu_3243_data.get_n_beam(),
-                                           h_offset_start, h_offset_end);
+  Eigen::MatrixXi h_element_connectivity;
+  grid_gen.get_element_connectivity(h_element_connectivity);
 
   gpu_3243_data.Setup(L, W, H, rho0, nu, E, h_B_inv, Quadrature::gauss_xi_m_6,
                       Quadrature::gauss_xi_3, Quadrature::gauss_eta_2,
                       Quadrature::gauss_zeta_2, Quadrature::weight_xi_m_6,
                       Quadrature::weight_xi_3, Quadrature::weight_eta_2,
                       Quadrature::weight_zeta_2, h_x12, h_y12, h_z12,
-                      h_offset_start, h_offset_end);
+                      h_element_connectivity);
 
   gpu_3243_data.CalcDsDuPre();
   gpu_3243_data.CalcMassMatrix();
