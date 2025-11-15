@@ -7,6 +7,7 @@
 #include "../lib_src/elements/FEAT10Data.cuh"
 #include "../lib_utils/cpu_utils.h"
 #include "../lib_utils/csv_utils.h"
+#include "../lib_utils/mesh_utils.h"
 
 // Test fixture class for FEAT10 tests
 class TestSparseMass : public ::testing::Test {
@@ -264,12 +265,16 @@ TEST_F(TestSparseMass, ANCF_3443_SparseMassMatrix) {
 }
 
 TEST_F(TestSparseMass, ANCF_3243_SparseMassMatrix) {
-  // initialize GPU data structure
-  int n_beam = 3;  // this is working
-  GPU_ANCF3243_Data gpu_3243_data(n_beam);
-  gpu_3243_data.Initialize();
-
+  // Create 1D horizontal grid mesh (3 elements, 4 nodes)
   double L = 2.0, W = 1.0, H = 1.0;
+  ANCFCPUUtils::GridMeshGenerator grid_gen(3 * L, 0.0, L, true, false);
+  grid_gen.generate_mesh();
+
+  int n_nodes    = grid_gen.get_num_nodes();
+  int n_elements = grid_gen.get_num_elements();
+
+  GPU_ANCF3243_Data gpu_3243_data(n_nodes, n_elements);
+  gpu_3243_data.Initialize();
 
   const double E    = 7e8;   // Young's modulus
   const double nu   = 0.33;  // Poisson's ratio
@@ -291,7 +296,10 @@ TEST_F(TestSparseMass, ANCF_3243_SparseMassMatrix) {
   Eigen::VectorXd h_y12_jac(gpu_3243_data.get_n_coef());
   Eigen::VectorXd h_z12_jac(gpu_3243_data.get_n_coef());
 
-  ANCFCPUUtils::ANCF3243_generate_beam_coordinates(n_beam, h_x12, h_y12, h_z12);
+  grid_gen.get_coordinates(h_x12, h_y12, h_z12);
+
+  Eigen::MatrixXi h_element_connectivity;
+  grid_gen.get_element_connectivity(h_element_connectivity);
 
   // print h_x12
   for (int i = 0; i < gpu_3243_data.get_n_coef(); i++) {
@@ -338,7 +346,7 @@ TEST_F(TestSparseMass, ANCF_3243_SparseMassMatrix) {
                       Quadrature::gauss_zeta_2, Quadrature::weight_xi_m_6,
                       Quadrature::weight_xi_3, Quadrature::weight_eta_2,
                       Quadrature::weight_zeta_2, h_x12, h_y12, h_z12,
-                      h_offset_start, h_offset_end);
+                      h_element_connectivity);
 
   // ======================================================================
 
