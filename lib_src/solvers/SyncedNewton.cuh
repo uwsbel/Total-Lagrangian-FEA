@@ -97,6 +97,15 @@ class SyncedNewtonSolver : public SolverBase {
       }
     }
 
+    if (type_ == TYPE_3243) {
+      if (static_cast<GPU_ANCF3243_Data *>(data)->Get_Is_Constraint_Setup()) {
+        d_constraint_ptr_ =
+            static_cast<GPU_ANCF3243_Data *>(data)->Get_Constraint_Ptr();
+      } else {
+        d_constraint_ptr_ = nullptr;
+      }
+    }
+
     // NEW: Create persistent handles
     cublasCreate(&cublas_handle_);
     cublasSetPointerMode(cublas_handle_, CUBLAS_POINTER_MODE_DEVICE);

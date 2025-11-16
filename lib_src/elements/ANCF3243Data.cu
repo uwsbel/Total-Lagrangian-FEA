@@ -55,10 +55,8 @@ __global__ void mass_matrix_qp_kernel(GPU_ANCF3243_Data *d_data) {
     return;
 
   // local indices
-  int i_local =
-      item_local / Quadrature::N_SHAPE_3243;  // 0–7 (row)
-  int j_local =
-      item_local % Quadrature::N_SHAPE_3243;  // 0–7 (col)
+  int i_local = item_local / Quadrature::N_SHAPE_3243;  // 0–7 (row)
+  int j_local = item_local % Quadrature::N_SHAPE_3243;  // 0–7 (col)
 
   // ===============================================================
   // --- New: local→global DOF mapping using element_connectivity ---
@@ -79,20 +77,20 @@ __global__ void mass_matrix_qp_kernel(GPU_ANCF3243_Data *d_data) {
   const int i_global = node_i_global * 4 + dof_i_local;
   const int j_global = node_j_global * 4 + dof_j_local;
 
-  // Get element nodes using connectivity  
+  // Get element nodes using connectivity
   int node0 = d_data->element_node(elem, 0);
   int node1 = d_data->element_node(elem, 1);
 
   // Create custom Eigen::Map that handles both nodes
   Eigen::Map<Eigen::VectorXd> x_loc = d_data->x12(elem);
-  Eigen::Map<Eigen::VectorXd> y_loc = d_data->y12(elem);  
+  Eigen::Map<Eigen::VectorXd> y_loc = d_data->y12(elem);
   Eigen::Map<Eigen::VectorXd> z_loc = d_data->z12(elem);
 
   // Precompute constants outside the loop
   double rho = d_data->rho0();
-  double L = d_data->L();
-  double W = d_data->W();
-  double H = d_data->H();
+  double L   = d_data->L();
+  double W   = d_data->W();
+  double H   = d_data->H();
 
   for (int qp_local = 0; qp_local < n_qp_per_elem; qp_local++) {
     // Decode qp_local into (ixi, ieta, izeta)
@@ -121,9 +119,9 @@ __global__ void mass_matrix_qp_kernel(GPU_ANCF3243_Data *d_data) {
     double detJ = ancf3243_det3x3(J);
 
     // Accumulate contribution
-    atomicAdd(d_data->node_values(i_global, j_global), rho * s[i_local] * s[j_local] * weight * detJ);
+    atomicAdd(d_data->node_values(i_global, j_global),
+              rho * s[i_local] * s[j_local] * weight * detJ);
   }
-
 }
 
 __global__ void calc_p_kernel(GPU_ANCF3243_Data *d_data) {

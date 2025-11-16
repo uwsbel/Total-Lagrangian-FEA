@@ -1,5 +1,5 @@
 #include <cooperative_groups.h>
-#include <cublas_v2.h>  // Add this line for cuBLAS
+#include <cublas_v2.h>
 #include <thrust/device_ptr.h>
 #include <thrust/scan.h>
 
@@ -12,6 +12,69 @@
 #include "SyncedNewton.cuh"
 
 namespace cg = cooperative_groups;
+template <typename ElementType>
+struct ElementTraits;
+template <>
+struct ElementTraits<GPU_FEAT10_Data> {
+  static constexpr int N_NODES         = Quadrature::N_NODE_T10_10;
+  static constexpr int N_QP            = Quadrature::N_QP_T10_5;
+  static constexpr int N_DOFS_PER_NODE = 3;
+  static constexpr int N_ELEMENT_DOFS  = N_NODES * N_DOFS_PER_NODE;  // 30
+
+  __device__ static int get_global_node(GPU_FEAT10_Data *data, int elem_idx,
+                                        int local_node) {
+    return data->element_connectivity()(elem_idx, local_node);
+  }
+
+  __device__ static int node_to_coef(int node) {
+    return node;  // 1:1 mapping for FEAT10
+  }
+
+  __device__ static int n_coef_per_node() {
+    return 1;  // Each node has 1 coefficient index
+  }
+
+  __device__ static int get_n_elem(GPU_FEAT10_Data *data) {
+    return data->gpu_n_elem();
+  }
+};
+template <>
+struct ElementTraits<GPU_ANCF3243_Data> {
+  static constexpr int N_NODES         = 2;
+  static constexpr int N_SHAPE         = Quadrature::N_SHAPE_3243;  // 8
+  static constexpr int N_QP            = Quadrature::N_TOTAL_QP_3_2_2;
+  static constexpr int N_DOFS_PER_NODE = 3;
+  static constexpr int N_ELEMENT_DOFS  = N_SHAPE * N_DOFS_PER_NODE;  // 24
+
+  __device__ static int get_global_node(GPU_ANCF3243_Data *data, int elem_idx,
+                                        int local_node) {
+    if (local_node < 4)
+      return data->element_node(elem_idx, 0) * 4 + local_node;
+    else
+      return data->element_node(elem_idx, 1) * 4 + (local_node - 4);
+  }
+
+  __device__ static int n_coef_per_node() {
+    return 4;
+  }
+
+  __device__ static int node_to_coef(int node) {
+    // Start coefficient index for this physical node
+    return node * n_coef_per_node();
+  }
+
+  __device__ static int shape_to_coef(GPU_ANCF3243_Data *data, int elem_idx,
+                                      int shape_idx) {
+    const int node_local  = (shape_idx < 4) ? 0 : 1;
+    const int dof_local   = shape_idx % 4;
+    const int node_global = data->element_node(elem_idx, node_local);
+    return node_global * n_coef_per_node() + dof_local;
+  }
+
+  __device__ static int get_n_elem(GPU_ANCF3243_Data *data) {
+    return data->gpu_n_beam();
+  }
+};
 
 // =====================================================
 // SPARSE HESSIAN: Bitset-based Sparsity Analysis
@@ -32,10 +95,13 @@ __device__ int binary_search_column(const int *cols, int n_cols, int target) {
   return -1;  // Not found
 }
 // Step 1: Analyze sparsity pattern using bitsets (union of all contributions)
-__global__ void analyze_hessian_sparsity_bitset(GPU_FEAT10_Data *d_data,
+template <typename ElementType>
+__global__ void analyze_hessian_sparsity_bitset(ElementType *d_data,
                                                 SyncedNewtonSolver *d_solver,
                                                 unsigned int *d_col_bitset,
                                                 int bitset_size) {
+  using Traits = ElementTraits<ElementType>;
+
   int row_dof = blockIdx.x * blockDim.x + threadIdx.x;
   int n_dofs  = 3 * d_solver->get_n_coef();
 
@@ -44,23 +110,19 @@ __global__ void analyze_hessian_sparsity_bitset(GPU_FEAT10_Data *d_data,
 
   unsigned int *my_bitset = &d_col_bitset[row_dof * bitset_size];
 
-  int node_i = row_dof / 3;
-  int dof_i  = row_dof % 3;  // 0=x, 1=y, 2=z
+  int coef_i = row_dof / 3;  // This is coefficient index for both element types
+  int dof_i  = row_dof % 3;
 
   // ===== Contribution 1: Mass Matrix =====
-  // M is block-diagonal 3x3 for each node pair (identity structure)
   const int *mass_offsets = d_data->csr_offsets();
   const int *mass_columns = d_data->csr_columns();
 
-  int row_start = mass_offsets[node_i];
-  int row_end   = mass_offsets[node_i + 1];
+  int row_start = mass_offsets[coef_i];
+  int row_end   = mass_offsets[coef_i + 1];
 
   for (int idx = row_start; idx < row_end; idx++) {
-    int node_j = mass_columns[idx];
-
-    // FIXED: Only add diagonal entries of 3×3 block (consistent mass identity)
-    // row_dof = node_i*3 + dof_i only couples with col_dof = node_j*3 + dof_i
-    int col_dof = node_j * 3 + dof_i;  // Same DOF index
+    int coef_j  = mass_columns[idx];
+    int col_dof = coef_j * 3 + dof_i;
 
     int word_idx = col_dof / 32;
     int bit_idx  = col_dof % 32;
@@ -68,30 +130,51 @@ __global__ void analyze_hessian_sparsity_bitset(GPU_FEAT10_Data *d_data,
   }
 
   // ===== Contribution 2: Tangent Stiffness (Element Connectivity) =====
-  // Each element contributes a 30x30 block (10 nodes × 3 DOFs)
-  // We need element connectivity: which elements contain node_i
   int n_elems = d_solver->get_n_beam();
 
   for (int elem = 0; elem < n_elems; elem++) {
-    // Check if this element contains node_i
     bool node_in_elem = false;
-    for (int local_node = 0; local_node < 10; local_node++) {
-      int global_node = d_data->element_connectivity()(elem, local_node);
-      if (global_node == node_i) {
-        node_in_elem = true;
-        break;
-      }
-    }
 
-    if (node_in_elem) {
-      // This element affects row_dof, add all element nodes to sparsity
-      for (int local_node = 0; local_node < 10; local_node++) {
-        int node_j = d_data->element_connectivity()(elem, local_node);
-        for (int dof_j = 0; dof_j < 3; dof_j++) {
-          int col_dof  = node_j * 3 + dof_j;
-          int word_idx = col_dof / 32;
-          int bit_idx  = col_dof % 32;
-          atomicOr(&my_bitset[word_idx], 1u << bit_idx);
+    // Check connectivity based on element type
+    if constexpr (std::is_same_v<ElementType, GPU_FEAT10_Data>) {
+      for (int local_node = 0; local_node < Traits::N_NODES; local_node++) {
+        int global_node = Traits::get_global_node(d_data, elem, local_node);
+        if (global_node == coef_i) {  // FIXED: changed node_i to coef_i
+          node_in_elem = true;
+          break;
+        }
+      }
+
+      if (node_in_elem) {
+        for (int local_node = 0; local_node < Traits::N_NODES; local_node++) {
+          int node_j = Traits::get_global_node(d_data, elem, local_node);
+          for (int dof_j = 0; dof_j < 3; dof_j++) {
+            int col_dof  = node_j * 3 + dof_j;
+            int word_idx = col_dof / 32;
+            int bit_idx  = col_dof % 32;
+            atomicOr(&my_bitset[word_idx], 1u << bit_idx);
+          }
+        }
+      }
+    } else if constexpr (std::is_same_v<ElementType, GPU_ANCF3243_Data>) {
+      // For ANCF, check if any coefficient of this node is in the element
+      for (int shape_idx = 0; shape_idx < Traits::N_SHAPE; shape_idx++) {
+        int coef_idx = Traits::shape_to_coef(d_data, elem, shape_idx);
+        if (coef_idx == coef_i) {  // FIXED: changed node_i to coef_i
+          node_in_elem = true;
+          break;
+        }
+      }
+
+      if (node_in_elem) {
+        for (int shape_idx = 0; shape_idx < Traits::N_SHAPE; shape_idx++) {
+          int coef_j = Traits::shape_to_coef(d_data, elem, shape_idx);
+          for (int dof_j = 0; dof_j < 3; dof_j++) {
+            int col_dof  = coef_j * 3 + dof_j;
+            int word_idx = col_dof / 32;
+            int bit_idx  = col_dof % 32;
+            atomicOr(&my_bitset[word_idx], 1u << bit_idx);
+          }
         }
       }
     }
@@ -100,27 +183,21 @@ __global__ void analyze_hessian_sparsity_bitset(GPU_FEAT10_Data *d_data,
   // ===== Contribution 3: Constraint Jacobian (J^T * J) =====
   int n_constraints = d_solver->gpu_n_constraints();
   if (n_constraints > 0) {
-    // J^T stored in CSR format
     const int *cjT_offsets = d_data->cj_csr_offsets();
     const int *cjT_columns = d_data->cj_csr_columns();
 
-    // Find constraints that affect this DOF
     int col_start = cjT_offsets[row_dof];
     int col_end   = cjT_offsets[row_dof + 1];
 
     for (int idx1 = col_start; idx1 < col_end; idx1++) {
       int c_idx = cjT_columns[idx1];
 
-      // For this constraint, find all DOFs it couples to (via J^T @ J)
-      // Scan all DOFs to find which ones are affected by constraint c_idx
       for (int other_dof = 0; other_dof < n_dofs; other_dof++) {
         int other_start = cjT_offsets[other_dof];
         int other_end   = cjT_offsets[other_dof + 1];
 
-        // Check if constraint c_idx affects other_dof
         for (int idx2 = other_start; idx2 < other_end; idx2++) {
           if (cjT_columns[idx2] == c_idx) {
-            // Add coupling between row_dof and other_dof
             int word_idx = other_dof / 32;
             int bit_idx  = other_dof % 32;
             atomicOr(&my_bitset[word_idx], 1u << bit_idx);
@@ -183,8 +260,6 @@ __global__ void extract_columns_from_bitset(unsigned int *d_col_bitset,
   if (row < 3) {
     int row_start = d_csr_row_offsets[row];
     int row_end   = d_csr_row_offsets[row + 1];
-    printf("DEBUG extract: Row %d wrote %d entries (expected %d)\n", row,
-           write_pos - row_start, row_end - row_start);
   }
 }
 
@@ -269,7 +344,8 @@ __global__ void debug_mass_assembly_lookups(GPU_FEAT10_Data *d_data,
 
 // Assemble Mass Contribution: (M/h) into sparse H
 // CORRECTED: Handles full 3x3 blocks for consistent mass
-__global__ void assemble_sparse_hessian_mass(GPU_FEAT10_Data *d_data,
+template <typename ElementType>
+__global__ void assemble_sparse_hessian_mass(ElementType *d_data,
                                              SyncedNewtonSolver *d_solver,
                                              int *d_csr_row_offsets,
                                              int *d_csr_col_indices,
@@ -295,22 +371,17 @@ __global__ void assemble_sparse_hessian_mass(GPU_FEAT10_Data *d_data,
     double mass_ij = mass_values[idx];
     double contrib = mass_ij * inv_h;
 
-    // Add to FULL 3x3 block (i, j) in sparse Hessian
-    // Consistent mass: M_ij = mass_ij * I_3x3
     for (int dof_i = 0; dof_i < 3; dof_i++) {
       for (int dof_j = 0; dof_j < 3; dof_j++) {
         int row_dof = node_i * 3 + dof_i;
         int col_dof = node_j * 3 + dof_j;
 
-        // Only add to diagonal of the 3x3 block (identity structure)
         if (dof_i == dof_j) {
-          // Find position in CSR structure
           int row_begin  = d_csr_row_offsets[row_dof];
           int row_length = d_csr_row_offsets[row_dof + 1] - row_begin;
 
           int pos = binary_search_column(&d_csr_col_indices[row_begin],
                                          row_length, col_dof);
-          // printf("pos: %d\n", pos);
 
           if (pos >= 0) {
             atomicAdd(&d_csr_values[row_begin + pos], contrib);
@@ -319,17 +390,20 @@ __global__ void assemble_sparse_hessian_mass(GPU_FEAT10_Data *d_data,
       }
     }
   }
-}
+}  // Add this closing brace for assemble_sparse_hessian_mass
 
 // Assemble Tangent Stiffness: (h * Kt) into sparse H
-__global__ void assemble_sparse_hessian_tangent(GPU_FEAT10_Data *d_data,
+template <typename ElementType>
+__global__ void assemble_sparse_hessian_tangent(ElementType *d_data,
                                                 SyncedNewtonSolver *d_solver,
                                                 int *d_csr_row_offsets,
                                                 int *d_csr_col_indices,
                                                 double *d_csr_values) {
+  using Traits = ElementTraits<ElementType>;
+
   int tid    = blockIdx.x * blockDim.x + threadIdx.x;
-  int n_elem = d_data->gpu_n_elem();
-  int n_qp   = Quadrature::N_QP_T10_5;
+  int n_elem = Traits::get_n_elem(d_data);
+  int n_qp   = Traits::N_QP;
 
   int elem_idx = tid / n_qp;
   int qp_idx   = tid % n_qp;
@@ -339,134 +413,256 @@ __global__ void assemble_sparse_hessian_tangent(GPU_FEAT10_Data *d_data,
 
   const double h = d_solver->solver_time_step();
 
-  // Get element connectivity
-  int global_node_indices[10];
-#pragma unroll
-  for (int node = 0; node < 10; node++) {
-    global_node_indices[node] = d_data->element_connectivity()(elem_idx, node);
-  }
+  // Call element-specific hessian assembly (already computed in DataFunc.cuh)
+  // We need to create a wrapper that uses the Eigen Map
 
-  // Get current nodal positions for this element
-  double x_nodes[10][3];
-#pragma unroll
-  for (int node = 0; node < 10; node++) {
-    int global_node_idx = global_node_indices[node];
-    x_nodes[node][0]    = d_data->x12()(global_node_idx);
-    x_nodes[node][1]    = d_data->y12()(global_node_idx);
-    x_nodes[node][2]    = d_data->z12()(global_node_idx);
-  }
+  int n_dofs = 3 * d_solver->get_n_coef();
+  Eigen::Map<Eigen::MatrixXd> H_global_map(d_csr_values, n_dofs, n_dofs);
 
-  // Get precomputed shape function gradients
-  double grad_N[10][3];
-#pragma unroll
-  for (int a = 0; a < 10; a++) {
-    grad_N[a][0] = d_data->grad_N_ref(elem_idx, qp_idx)(a, 0);
-    grad_N[a][1] = d_data->grad_N_ref(elem_idx, qp_idx)(a, 1);
-    grad_N[a][2] = d_data->grad_N_ref(elem_idx, qp_idx)(a, 2);
-  }
+  // This won't work directly with sparse CSR - we need a different approach
+  // Call the element-specific function that scatters to CSR format
 
-  // Compute deformation gradient F
-  double F[3][3] = {{0.0}};
+  if constexpr (std::is_same_v<ElementType, GPU_FEAT10_Data>) {
+    // Inline FEAT10 tangent assembly (from original code)
+    int global_node_indices[10];
 #pragma unroll
-  for (int a = 0; a < 10; a++) {
+    for (int node = 0; node < 10; node++) {
+      global_node_indices[node] =
+          d_data->element_connectivity()(elem_idx, node);
+    }
+
+    double x_nodes[10][3];
+#pragma unroll
+    for (int node = 0; node < 10; node++) {
+      int global_node_idx = global_node_indices[node];
+      x_nodes[node][0]    = d_data->x12()(global_node_idx);
+      x_nodes[node][1]    = d_data->y12()(global_node_idx);
+      x_nodes[node][2]    = d_data->z12()(global_node_idx);
+    }
+
+    double grad_N[10][3];
+#pragma unroll
+    for (int a = 0; a < 10; a++) {
+      grad_N[a][0] = d_data->grad_N_ref(elem_idx, qp_idx)(a, 0);
+      grad_N[a][1] = d_data->grad_N_ref(elem_idx, qp_idx)(a, 1);
+      grad_N[a][2] = d_data->grad_N_ref(elem_idx, qp_idx)(a, 2);
+    }
+
+    double F[3][3] = {{0.0}};
+#pragma unroll
+    for (int a = 0; a < 10; a++) {
+      for (int i = 0; i < 3; i++) {
+        for (int j = 0; j < 3; j++) {
+          F[i][j] += x_nodes[a][i] * grad_N[a][j];
+        }
+      }
+    }
+
+    double C[3][3] = {{0.0}};
+#pragma unroll
     for (int i = 0; i < 3; i++) {
+#pragma unroll
       for (int j = 0; j < 3; j++) {
-        F[i][j] += x_nodes[a][i] * grad_N[a][j];
+#pragma unroll
+        for (int k = 0; k < 3; k++) {
+          C[i][j] += F[k][i] * F[k][j];
+        }
       }
     }
-  }
 
-  // Compute C = F^T * F
-  double C[3][3] = {{0.0}};
+    double trC = C[0][0] + C[1][1] + C[2][2];
+    double trE = 0.5 * (trC - 3.0);
+
+    double FFT[3][3] = {{0.0}};
 #pragma unroll
-  for (int i = 0; i < 3; i++) {
+    for (int i = 0; i < 3; i++) {
 #pragma unroll
-    for (int j = 0; j < 3; j++) {
+      for (int j = 0; j < 3; j++) {
 #pragma unroll
-      for (int k = 0; k < 3; k++) {
-        C[i][j] += F[k][i] * F[k][j];
+        for (int k = 0; k < 3; k++) {
+          FFT[i][j] += F[i][k] * F[j][k];
+        }
       }
     }
-  }
 
-  // Compute tr(E)
-  double trC = C[0][0] + C[1][1] + C[2][2];
-  double trE = 0.5 * (trC - 3.0);
-
-  // Compute F * F^T
-  double FFT[3][3] = {{0.0}};
+    double Fh[10][3];
 #pragma unroll
-  for (int i = 0; i < 3; i++) {
+    for (int i = 0; i < 10; i++) {
 #pragma unroll
-    for (int j = 0; j < 3; j++) {
+      for (int row = 0; row < 3; row++) {
+        Fh[i][row] = 0.0;
 #pragma unroll
-      for (int k = 0; k < 3; k++) {
-        FFT[i][j] += F[i][k] * F[j][k];
+        for (int col = 0; col < 3; col++) {
+          Fh[i][row] += F[row][col] * grad_N[i][col];
+        }
       }
     }
-  }
 
-  // Precompute Fh[i] = F @ grad_N[i]
-  double Fh[10][3];
+    double lambda = d_data->lambda();
+    double mu     = d_data->mu();
+    double detJ   = d_data->detJ_ref(elem_idx, qp_idx);
+    double wq     = d_data->tet5pt_weights(qp_idx);
+    double dV     = detJ * wq;
+
 #pragma unroll
-  for (int i = 0; i < 10; i++) {
+    for (int i = 0; i < 10; i++) {
 #pragma unroll
-    for (int row = 0; row < 3; row++) {
-      Fh[i][row] = 0.0;
+      for (int j = 0; j < 10; j++) {
+        double hij = grad_N[j][0] * grad_N[i][0] + grad_N[j][1] * grad_N[i][1] +
+                     grad_N[j][2] * grad_N[i][2];
+
+        double Fhj_dot_Fhi =
+            Fh[j][0] * Fh[i][0] + Fh[j][1] * Fh[i][1] + Fh[j][2] * Fh[i][2];
+
 #pragma unroll
-      for (int col = 0; col < 3; col++) {
-        Fh[i][row] += F[row][col] * grad_N[i][col];
+        for (int d = 0; d < 3; d++) {
+#pragma unroll
+          for (int e = 0; e < 3; e++) {
+            double A_de    = lambda * Fh[i][d] * Fh[j][e];
+            double B_de    = lambda * trE * hij * (d == e ? 1.0 : 0.0);
+            double C1_de   = mu * Fhj_dot_Fhi * (d == e ? 1.0 : 0.0);
+            double D_de    = mu * Fh[j][d] * Fh[i][e];
+            double Etrm_de = mu * hij * FFT[d][e];
+            double Ftrm_de = -mu * hij * (d == e ? 1.0 : 0.0);
+
+            double K_ij_de =
+                (A_de + B_de + C1_de + D_de + Etrm_de + Ftrm_de) * dV;
+
+            int global_dof_i = global_node_indices[i] * 3 + d;
+            int global_dof_j = global_node_indices[j] * 3 + e;
+
+            int row_begin  = d_csr_row_offsets[global_dof_i];
+            int row_length = d_csr_row_offsets[global_dof_i + 1] - row_begin;
+
+            int pos = binary_search_column(&d_csr_col_indices[row_begin],
+                                           row_length, global_dof_j);
+
+            if (pos >= 0) {
+              atomicAdd(&d_csr_values[row_begin + pos], h * K_ij_de);
+            }
+          }
+        }
       }
     }
-  }
-
-  // Material and quadrature
-  double lambda = d_data->lambda();
-  double mu     = d_data->mu();
-  double detJ   = d_data->detJ_ref(elem_idx, qp_idx);
-  double wq     = d_data->tet5pt_weights(qp_idx);
-  double dV     = detJ * wq;
-
-// Build local 30x30 tangent and scatter to global sparse H
+  } else if constexpr (std::is_same_v<ElementType, GPU_ANCF3243_Data>) {
+    // ANCF3243 tangent assembly - similar structure but with 8 shape functions
+    double e[8][3];
 #pragma unroll
-  for (int i = 0; i < 10; i++) {
+    for (int i = 0; i < 8; i++) {
+      const int coef_idx = Traits::shape_to_coef(d_data, elem_idx, i);
+      e[i][0]            = d_data->x12()(coef_idx);
+      e[i][1]            = d_data->y12()(coef_idx);
+      e[i][2]            = d_data->z12()(coef_idx);
+    }
+
+    double grad_s[8][3];
 #pragma unroll
-    for (int j = 0; j < 10; j++) {
-      // Compute scalars
-      double hij = grad_N[j][0] * grad_N[i][0] + grad_N[j][1] * grad_N[i][1] +
-                   grad_N[j][2] * grad_N[i][2];
+    for (int i = 0; i < 8; i++) {
+      grad_s[i][0] = d_data->ds_du_pre(qp_idx)(i, 0);
+      grad_s[i][1] = d_data->ds_du_pre(qp_idx)(i, 1);
+      grad_s[i][2] = d_data->ds_du_pre(qp_idx)(i, 2);
+    }
 
-      double Fhj_dot_Fhi =
-          Fh[j][0] * Fh[i][0] + Fh[j][1] * Fh[i][1] + Fh[j][2] * Fh[i][2];
-
-// Fill 3x3 block (i,j)
+    double F[3][3] = {{0.0}};
 #pragma unroll
-      for (int d = 0; d < 3; d++) {
+    for (int i = 0; i < 8; i++) {
 #pragma unroll
-        for (int e = 0; e < 3; e++) {
-          double A_de    = lambda * Fh[i][d] * Fh[j][e];
-          double B_de    = lambda * trE * hij * (d == e ? 1.0 : 0.0);
-          double C1_de   = mu * Fhj_dot_Fhi * (d == e ? 1.0 : 0.0);
-          double D_de    = mu * Fh[j][d] * Fh[i][e];
-          double Etrm_de = mu * hij * FFT[d][e];
-          double Ftrm_de = -mu * hij * (d == e ? 1.0 : 0.0);
+      for (int row = 0; row < 3; row++) {
+#pragma unroll
+        for (int col = 0; col < 3; col++) {
+          F[row][col] += e[i][row] * grad_s[i][col];
+        }
+      }
+    }
 
-          double K_ij_de =
-              (A_de + B_de + C1_de + D_de + Etrm_de + Ftrm_de) * dV;
+    double C[3][3] = {{0.0}};
+#pragma unroll
+    for (int i = 0; i < 3; i++) {
+#pragma unroll
+      for (int j = 0; j < 3; j++) {
+#pragma unroll
+        for (int k = 0; k < 3; k++) {
+          C[i][j] += F[k][i] * F[k][j];
+        }
+      }
+    }
 
-          // Map to global DOFs
-          int global_dof_i = global_node_indices[i] * 3 + d;
-          int global_dof_j = global_node_indices[j] * 3 + e;
+    double trC = C[0][0] + C[1][1] + C[2][2];
+    double trE = 0.5 * (trC - 3.0);
 
-          // Find position in CSR and add h * K_ij_de
-          int row_begin  = d_csr_row_offsets[global_dof_i];
-          int row_length = d_csr_row_offsets[global_dof_i + 1] - row_begin;
+    double FFT[3][3] = {{0.0}};
+#pragma unroll
+    for (int i = 0; i < 3; i++) {
+#pragma unroll
+      for (int j = 0; j < 3; j++) {
+#pragma unroll
+        for (int k = 0; k < 3; k++) {
+          FFT[i][j] += F[i][k] * F[j][k];
+        }
+      }
+    }
 
-          int pos = binary_search_column(&d_csr_col_indices[row_begin],
-                                         row_length, global_dof_j);
+    double Fh[8][3];
+#pragma unroll
+    for (int i = 0; i < 8; i++) {
+#pragma unroll
+      for (int row = 0; row < 3; row++) {
+        Fh[i][row] = 0.0;
+#pragma unroll
+        for (int col = 0; col < 3; col++) {
+          Fh[i][row] += F[row][col] * grad_s[i][col];
+        }
+      }
+    }
 
-          if (pos >= 0) {
-            atomicAdd(&d_csr_values[row_begin + pos], h * K_ij_de);
+    double lambda = d_data->lambda();
+    double mu     = d_data->mu();
+    double geom   = (d_data->L() * d_data->W() * d_data->H()) / 8.0;
+    double scale  = d_data->weight_xi()(
+                       qp_idx / (Quadrature::N_QP_2 * Quadrature::N_QP_2)) *
+                   d_data->weight_eta()((qp_idx / Quadrature::N_QP_2) %
+                                        Quadrature::N_QP_2) *
+                   d_data->weight_zeta()(qp_idx % Quadrature::N_QP_2);
+    double dV = scale * geom;
+
+#pragma unroll
+    for (int i = 0; i < 8; i++) {
+#pragma unroll
+      for (int j = 0; j < 8; j++) {
+        double h_ij = grad_s[j][0] * grad_s[i][0] +
+                      grad_s[j][1] * grad_s[i][1] + grad_s[j][2] * grad_s[i][2];
+
+        double Fhj_dot_Fhi =
+            Fh[j][0] * Fh[i][0] + Fh[j][1] * Fh[i][1] + Fh[j][2] * Fh[i][2];
+
+#pragma unroll
+        for (int d = 0; d < 3; d++) {
+#pragma unroll
+          for (int e = 0; e < 3; e++) {
+            double A_de    = lambda * Fh[i][d] * Fh[j][e];
+            double B_de    = lambda * trE * h_ij * (d == e ? 1.0 : 0.0);
+            double C1_de   = mu * Fhj_dot_Fhi * (d == e ? 1.0 : 0.0);
+            double D_de    = mu * Fh[j][d] * Fh[i][e];
+            double Etrm_de = mu * h_ij * FFT[d][e];
+            double Ftrm_de = -mu * h_ij * (d == e ? 1.0 : 0.0);
+
+            double K_ij_de =
+                (A_de + B_de + C1_de + D_de + Etrm_de + Ftrm_de) * dV;
+
+            int coef_i       = Traits::shape_to_coef(d_data, elem_idx, i);
+            int coef_j       = Traits::shape_to_coef(d_data, elem_idx, j);
+            int global_dof_i = coef_i * 3 + d;
+            int global_dof_j = coef_j * 3 + e;
+
+            int row_begin  = d_csr_row_offsets[global_dof_i];
+            int row_length = d_csr_row_offsets[global_dof_i + 1] - row_begin;
+
+            int pos = binary_search_column(&d_csr_col_indices[row_begin],
+                                           row_length, global_dof_j);
+
+            if (pos >= 0) {
+              atomicAdd(&d_csr_values[row_begin + pos], h * K_ij_de);
+            }
           }
         }
       }
@@ -476,9 +672,11 @@ __global__ void assemble_sparse_hessian_tangent(GPU_FEAT10_Data *d_data,
 
 // Assemble Constraint Contribution: (h^2 * rho * J^T * J) into sparse H
 // NO CHANGES NEEDED - already correct
+template <typename ElementType>
 __global__ void assemble_sparse_hessian_constraints(
-    GPU_FEAT10_Data *d_data, SyncedNewtonSolver *d_solver,
-    int *d_csr_row_offsets, int *d_csr_col_indices, double *d_csr_values) {
+    ElementType *d_data, SyncedNewtonSolver *d_solver, int *d_csr_row_offsets,
+    int *d_csr_col_indices, double *d_csr_values) {
+  // This kernel is element-agnostic - same implementation for all types
   int tid           = blockIdx.x * blockDim.x + threadIdx.x;
   int n_constraints = d_solver->gpu_n_constraints();
 
@@ -496,7 +694,6 @@ __global__ void assemble_sparse_hessian_constraints(
   const int *cjT_columns   = d_data->cj_csr_columns();
   const double *cjT_values = d_data->cj_csr_values();
 
-  // Find all DOFs affected by this constraint
   for (int dof_i = 0; dof_i < n_dofs; dof_i++) {
     int col_start_i = cjT_offsets[dof_i];
     int col_end_i   = cjT_offsets[dof_i + 1];
@@ -504,7 +701,6 @@ __global__ void assemble_sparse_hessian_constraints(
     double J_ic  = 0.0;
     bool found_i = false;
 
-    // Check if constraint c_idx affects dof_i
     for (int idx = col_start_i; idx < col_end_i; idx++) {
       if (cjT_columns[idx] == c_idx) {
         J_ic    = cjT_values[idx];
@@ -516,7 +712,6 @@ __global__ void assemble_sparse_hessian_constraints(
     if (!found_i)
       continue;
 
-    // Now find all dof_j that this constraint couples with
     for (int dof_j = 0; dof_j < n_dofs; dof_j++) {
       int col_start_j = cjT_offsets[dof_j];
       int col_end_j   = cjT_offsets[dof_j + 1];
@@ -531,7 +726,6 @@ __global__ void assemble_sparse_hessian_constraints(
       }
 
       if (J_jc != 0.0) {
-        // Add factor * J_ic * J_jc to H(dof_i, dof_j)
         int row_begin  = d_csr_row_offsets[dof_i];
         int row_length = d_csr_row_offsets[dof_i + 1] - row_begin;
 
@@ -615,9 +809,9 @@ __device__ double solver_grad_L(int tid, ElementType *data,
 // ===============================================
 // cusparse and cudss one step newton
 // ===============================================
-
+template <typename ElementType>
 __global__ void cudss_solve_update_pos_prev(
-    GPU_FEAT10_Data *d_data, SyncedNewtonSolver *d_newton_solver) {
+    ElementType *d_data, SyncedNewtonSolver *d_newton_solver) {
   int tid = blockIdx.x * blockDim.x + threadIdx.x;
 
   if (tid < d_newton_solver->get_n_coef()) {
@@ -627,7 +821,8 @@ __global__ void cudss_solve_update_pos_prev(
   }
 }
 
-__global__ void cudss_solve_compute_p(GPU_FEAT10_Data *d_data,
+template <typename ElementType>
+__global__ void cudss_solve_compute_p(ElementType *d_data,
                                       SyncedNewtonSolver *d_newton_solver) {
   int tid = blockIdx.x * blockDim.x + threadIdx.x;
 
@@ -639,7 +834,8 @@ __global__ void cudss_solve_compute_p(GPU_FEAT10_Data *d_data,
   }
 }
 
-__global__ void cudss_solve_clear_internal_force(GPU_FEAT10_Data *d_data) {
+template <typename ElementType>
+__global__ void cudss_solve_clear_internal_force(ElementType *d_data) {
   int tid = blockIdx.x * blockDim.x + threadIdx.x;
 
   if (tid < d_data->n_coef * 3) {
@@ -647,8 +843,9 @@ __global__ void cudss_solve_clear_internal_force(GPU_FEAT10_Data *d_data) {
   }
 }
 
+template <typename ElementType>
 __global__ void cudss_solve_compute_internal_force(
-    GPU_FEAT10_Data *d_data, SyncedNewtonSolver *d_newton_solver) {
+    ElementType *d_data, SyncedNewtonSolver *d_newton_solver) {
   int tid = blockIdx.x * blockDim.x + threadIdx.x;
 
   if (tid < d_newton_solver->get_n_beam() * d_newton_solver->gpu_n_shape()) {
@@ -659,8 +856,9 @@ __global__ void cudss_solve_compute_internal_force(
   }
 }
 
+template <typename ElementType>
 __global__ void cudss_solve_constraints_eval(
-    GPU_FEAT10_Data *d_data, SyncedNewtonSolver *d_newton_solver) {
+    ElementType *d_data, SyncedNewtonSolver *d_newton_solver) {
   int tid = blockIdx.x * blockDim.x + threadIdx.x;
 
   if (tid < d_newton_solver->gpu_n_constraints() / 3) {
@@ -668,8 +866,9 @@ __global__ void cudss_solve_constraints_eval(
   }
 }
 
+template <typename ElementType>
 __global__ void cudss_solve_update_dual_var(
-    GPU_FEAT10_Data *d_data, SyncedNewtonSolver *d_newton_solver) {
+    ElementType *d_data, SyncedNewtonSolver *d_newton_solver) {
   int tid = blockIdx.x * blockDim.x + threadIdx.x;
 
   int n_constraints = d_newton_solver->gpu_n_constraints();
@@ -680,8 +879,9 @@ __global__ void cudss_solve_update_dual_var(
   }
 }
 
+template <typename ElementType>
 __global__ void cudss_solve_compute_grad_l(
-    GPU_FEAT10_Data *d_data, SyncedNewtonSolver *d_newton_solver) {
+    ElementType *d_data, SyncedNewtonSolver *d_newton_solver) {
   int tid = blockIdx.x * blockDim.x + threadIdx.x;
 
   if (tid < d_newton_solver->get_n_coef() * 3) {
@@ -690,8 +890,9 @@ __global__ void cudss_solve_compute_grad_l(
   }
 }
 
+template <typename ElementType>
 __global__ void cudss_solve_initialize_prehess(
-    GPU_FEAT10_Data *d_data, SyncedNewtonSolver *d_newton_solver) {
+    ElementType *d_data, SyncedNewtonSolver *d_newton_solver) {
   int tid = blockIdx.x * blockDim.x + threadIdx.x;
   if (tid < d_newton_solver->get_n_coef() * 3) {
     d_newton_solver->delta_v()[tid] = 0.0;
@@ -699,8 +900,9 @@ __global__ void cudss_solve_initialize_prehess(
   }
 }
 
+template <typename ElementType>
 __global__ void cudss_solve_update_pos(SyncedNewtonSolver *d_newton_solver,
-                                       GPU_FEAT10_Data *d_data) {
+                                       ElementType *d_data) {
   int tid = blockIdx.x * blockDim.x + threadIdx.x;
   if (tid < d_newton_solver->get_n_coef()) {
     d_data->x12()(tid) = d_newton_solver->x12_prev()(tid) +
@@ -744,14 +946,13 @@ double SyncedNewtonSolver::compute_l2_norm_cublas(double *d_vec, int n_dofs) {
 
 void SyncedNewtonSolver::AnalyzeHessianSparsity() {
   if (sparse_hessian_initialized_)
-    return;  // Already done
+    return;
 
   std::cout << "Analyzing Hessian sparsity pattern..." << std::endl;
 
   int n_dofs      = 3 * n_coef_;
   int bitset_size = (n_dofs + 31) / 32;
 
-  // Allocate temporary bitset workspace
   HANDLE_ERROR(
       cudaMalloc(&d_col_bitset_, n_dofs * bitset_size * sizeof(unsigned int)));
   HANDLE_ERROR(cudaMemset(d_col_bitset_, 0,
@@ -760,46 +961,46 @@ void SyncedNewtonSolver::AnalyzeHessianSparsity() {
   HANDLE_ERROR(cudaMalloc(&d_nnz_per_row_, n_dofs * sizeof(int)));
   HANDLE_ERROR(cudaMemset(d_nnz_per_row_, 0, n_dofs * sizeof(int)));
 
-  // Step 1: Analyze sparsity (bitset union)
   int numBlocks = (n_dofs + 255) / 256;
-  analyze_hessian_sparsity_bitset<<<numBlocks, 256>>>(
-      static_cast<GPU_FEAT10_Data *>(d_data_), d_newton_solver_, d_col_bitset_,
-      bitset_size);
+
+  // Call templated kernel based on element type
+  if (type_ == TYPE_T10) {
+    analyze_hessian_sparsity_bitset<<<numBlocks, 256>>>(
+        static_cast<GPU_FEAT10_Data *>(d_data_), d_newton_solver_,
+        d_col_bitset_, bitset_size);
+  } else if (type_ == TYPE_3243) {
+    analyze_hessian_sparsity_bitset<<<numBlocks, 256>>>(
+        static_cast<GPU_ANCF3243_Data *>(d_data_), d_newton_solver_,
+        d_col_bitset_, bitset_size);
+  }
+
   HANDLE_ERROR(cudaDeviceSynchronize());
 
-  // Step 2: Count nnz per row
+  // Rest of the implementation remains the same...
   count_nnz_from_bitset<<<numBlocks, 256>>>(d_col_bitset_, d_nnz_per_row_,
                                             n_dofs, bitset_size);
   HANDLE_ERROR(cudaDeviceSynchronize());
 
-  // Step 3: Allocate row_offsets and compute prefix sum
   HANDLE_ERROR(cudaMalloc(&d_csr_row_offsets_, (n_dofs + 1) * sizeof(int)));
-
-  // Option 1: Use inclusive_scan then prepend 0
-  // We'll compute cumulative sum: offset[i] = sum of nnz[0..i-1]
 
   thrust::device_ptr<int> nnz_ptr(d_nnz_per_row_);
   thrust::device_ptr<int> offset_ptr(d_csr_row_offsets_);
 
-  // First, set offset[0] = 0
   int zero = 0;
   HANDLE_ERROR(cudaMemcpy(d_csr_row_offsets_, &zero, sizeof(int),
                           cudaMemcpyHostToDevice));
 
-  // Then compute inclusive scan into a temp array
   int *d_temp_scan;
   HANDLE_ERROR(cudaMalloc(&d_temp_scan, n_dofs * sizeof(int)));
   thrust::device_ptr<int> temp_ptr(d_temp_scan);
   thrust::inclusive_scan(nnz_ptr, nnz_ptr + n_dofs, temp_ptr);
 
-  // Copy the inclusive scan result to offset[1..n_dofs]
   HANDLE_ERROR(cudaMemcpy(d_csr_row_offsets_ + 1, d_temp_scan,
                           n_dofs * sizeof(int), cudaMemcpyDeviceToDevice));
   HANDLE_ERROR(cudaFree(d_temp_scan));
 
   HANDLE_ERROR(cudaDeviceSynchronize());
 
-  // Get total nnz
   HANDLE_ERROR(cudaMemcpy(&h_nnz_, &d_csr_row_offsets_[n_dofs], sizeof(int),
                           cudaMemcpyDeviceToHost));
 
@@ -807,30 +1008,14 @@ void SyncedNewtonSolver::AnalyzeHessianSparsity() {
             << ", nnz = " << h_nnz_ << " ("
             << (100.0 * h_nnz_) / (n_dofs * n_dofs) << "%)" << std::endl;
 
-  // Step 4: Allocate col_indices and values
   HANDLE_ERROR(cudaMalloc(&d_csr_col_indices_, h_nnz_ * sizeof(int)));
   HANDLE_ERROR(cudaMalloc(&d_csr_values_, h_nnz_ * sizeof(double)));
 
-  // Step 5: Extract column indices from bitset
   extract_columns_from_bitset<<<numBlocks, 256>>>(
       d_col_bitset_, d_csr_row_offsets_, d_csr_col_indices_, n_dofs,
       bitset_size);
   HANDLE_ERROR(cudaDeviceSynchronize());
 
-  // DEBUG: Check sparsity pattern
-  std::cout << "DEBUG: Checking sparsity pattern..." << std::endl;
-  debug_check_sparsity_pattern<<<(10 + 255) / 256, 256>>>(
-      d_csr_row_offsets_, d_csr_col_indices_, n_dofs);
-  HANDLE_ERROR(cudaDeviceSynchronize());
-
-  // DEBUG: Check what mass assembly will look for
-  std::cout << "DEBUG: Checking mass assembly lookups..." << std::endl;
-  debug_mass_assembly_lookups<<<(5 + 255) / 256, 256>>>(
-      static_cast<GPU_FEAT10_Data *>(d_data_), d_newton_solver_,
-      d_csr_row_offsets_, d_csr_col_indices_);
-  HANDLE_ERROR(cudaDeviceSynchronize());
-
-  // Free temporary workspace
   cudaFree(d_col_bitset_);
   d_col_bitset_ = nullptr;
   cudaFree(d_nnz_per_row_);
@@ -840,9 +1025,18 @@ void SyncedNewtonSolver::AnalyzeHessianSparsity() {
   std::cout << "Sparsity analysis complete." << std::endl;
 }
 
-// Replace your OneStepNewtonCuDSS() function with this debugged version:
-// Replace the entire OneStepNewtonCuDSS function (lines 900-1128):
 void SyncedNewtonSolver::OneStepNewtonCuDSS() {
+  // Determine element-specific constants
+  int n_qp_per_elem;
+  if (type_ == TYPE_T10) {
+    n_qp_per_elem = Quadrature::N_QP_T10_5;
+  } else if (type_ == TYPE_3243) {
+    n_qp_per_elem = Quadrature::N_TOTAL_QP_3_2_2;
+  } else {
+    std::cerr << "Unsupported element type!" << std::endl;
+    return;
+  }
+
   cudaEvent_t start, stop;
   HANDLE_ERROR(cudaEventCreate(&start));
   HANDLE_ERROR(cudaEventCreate(&stop));
@@ -860,11 +1054,9 @@ void SyncedNewtonSolver::OneStepNewtonCuDSS() {
   int numBlocks_initialize_prehess =
       (n_coef_ * 3 + threadsPerBlock - 1) / threadsPerBlock;
 
-  // SPARSE HESSIAN: New block sizes
   int numBlocks_sparse_mass = (n_coef_ + threadsPerBlock - 1) / threadsPerBlock;
   int numBlocks_sparse_tangent =
-      (n_beam_ * Quadrature::N_QP_T10_5 + threadsPerBlock - 1) /
-      threadsPerBlock;
+      (n_beam_ * n_qp_per_elem + threadsPerBlock - 1) / threadsPerBlock;
   int numBlocks_sparse_constraint =
       (n_constraints_ + threadsPerBlock - 1) / threadsPerBlock;
 
@@ -879,15 +1071,12 @@ void SyncedNewtonSolver::OneStepNewtonCuDSS() {
       (n_coef_ * 3 + threadsPerBlock - 1) / threadsPerBlock;
   int n_dofs = 3 * n_coef_;
 
-  // ===== CREATE cuDSS HANDLES ONCE PER TIMESTEP =====
   if (!cudss_handle_) {
     CUDSS_OK(cudssCreate(&cudss_handle_));
     CUDSS_OK(cudssConfigCreate(&cudss_config_));
     CUDSS_OK(cudssDataCreate(cudss_handle_, &cudss_data_));
   }
 
-  // Create matrix/vector descriptors ONCE (reuse pointers, sparsity pattern
-  // fixed)
   cudssMatrix_t dssA, dssB, dssX;
   CUDSS_OK(cudssMatrixCreateCsr(
       &dssA, n_dofs, n_dofs, h_nnz_, d_csr_row_offsets_, nullptr,
@@ -898,119 +1087,216 @@ void SyncedNewtonSolver::OneStepNewtonCuDSS() {
   CUDSS_OK(cudssMatrixCreateDn(&dssX, n_dofs, 1, n_dofs, d_delta_v_, CUDA_R_64F,
                                CUDSS_LAYOUT_COL_MAJOR));
 
-  // Analysis phase ONCE per timestep (sparsity pattern doesn't change)
   CUDSS_OK(cudssExecute(cudss_handle_, CUDSS_PHASE_ANALYSIS, cudss_config_,
                         cudss_data_, dssA, dssX, dssB));
 
   HANDLE_ERROR(cudaEventRecord(start));
 
-  cudss_solve_update_pos_prev<<<numBlocks_update_pos_prev, threadsPerBlock>>>(
-      static_cast<GPU_FEAT10_Data *>(d_data_), d_newton_solver_);
+  // Dispatch based on element type
+  if (type_ == TYPE_T10) {
+    auto *typed_data = static_cast<GPU_FEAT10_Data *>(d_data_);
 
-  for (int outer_iter = 0; outer_iter < h_max_outer_; ++outer_iter) {
-    std::cout << "Outer iter " << outer_iter << std::endl;
+    cudss_solve_update_pos_prev<<<numBlocks_update_pos_prev, threadsPerBlock>>>(
+        typed_data, d_newton_solver_);
 
-    for (int newton_iter = 0; newton_iter < h_max_inner_; ++newton_iter) {
-      std::cout << "  Newton iter " << newton_iter << std::endl;
+    for (int outer_iter = 0; outer_iter < h_max_outer_; ++outer_iter) {
+      std::cout << "Outer iter " << outer_iter << std::endl;
 
-      // Compute gradient
-      cudss_solve_compute_p<<<numBlocks_compute_p, threadsPerBlock>>>(
-          static_cast<GPU_FEAT10_Data *>(d_data_), d_newton_solver_);
+      for (int newton_iter = 0; newton_iter < h_max_inner_; ++newton_iter) {
+        std::cout << "  Newton iter " << newton_iter << std::endl;
 
-      cudss_solve_clear_internal_force<<<numBlocks_clear_internal_force,
-                                         threadsPerBlock>>>(
-          static_cast<GPU_FEAT10_Data *>(d_data_));
-      cudss_solve_compute_internal_force<<<numBlocks_internal_force,
-                                           threadsPerBlock>>>(
-          static_cast<GPU_FEAT10_Data *>(d_data_), d_newton_solver_);
+        cudss_solve_compute_p<<<numBlocks_compute_p, threadsPerBlock>>>(
+            typed_data, d_newton_solver_);
+
+        cudss_solve_clear_internal_force<<<numBlocks_clear_internal_force,
+                                           threadsPerBlock>>>(typed_data);
+
+        cudss_solve_compute_internal_force<<<numBlocks_internal_force,
+                                             threadsPerBlock>>>(
+            typed_data, d_newton_solver_);
+
+        cudss_solve_constraints_eval<<<numBlocks_constraints_eval,
+                                       threadsPerBlock>>>(typed_data,
+                                                          d_newton_solver_);
+
+        cudss_solve_compute_grad_l<<<numBlocks_grad_l, threadsPerBlock>>>(
+            typed_data, d_newton_solver_);
+
+        cudss_solve_initialize_prehess<<<numBlocks_initialize_prehess,
+                                         threadsPerBlock>>>(typed_data,
+                                                            d_newton_solver_);
+
+        HANDLE_ERROR(cudaMemset(d_csr_values_, 0, h_nnz_ * sizeof(double)));
+
+        assemble_sparse_hessian_mass<<<numBlocks_sparse_mass,
+                                       threadsPerBlock>>>(
+            typed_data, d_newton_solver_, d_csr_row_offsets_,
+            d_csr_col_indices_, d_csr_values_);
+
+        assemble_sparse_hessian_tangent<<<numBlocks_sparse_tangent,
+                                          threadsPerBlock>>>(
+            typed_data, d_newton_solver_, d_csr_row_offsets_,
+            d_csr_col_indices_, d_csr_values_);
+
+        if (n_constraints_ > 0) {
+          assemble_sparse_hessian_constraints<<<numBlocks_sparse_constraint,
+                                                threadsPerBlock>>>(
+              typed_data, d_newton_solver_, d_csr_row_offsets_,
+              d_csr_col_indices_, d_csr_values_);
+        }
+
+        HANDLE_ERROR(cudaDeviceSynchronize());
+
+        CUDSS_OK(cudssExecute(cudss_handle_, CUDSS_PHASE_FACTORIZATION,
+                              cudss_config_, cudss_data_, dssA, dssX, dssB));
+
+        HANDLE_ERROR(cudaMemset(d_delta_v_, 0, n_dofs * sizeof(double)));
+        CUDSS_OK(cudssExecute(cudss_handle_, CUDSS_PHASE_SOLVE, cudss_config_,
+                              cudss_data_, dssA, dssX, dssB));
+
+        cudss_solve_update_v_guess<<<numBlocks_update_v_guess,
+                                     threadsPerBlock>>>(d_newton_solver_);
+        cudss_solve_update_pos<<<numBlocks_update_pos, threadsPerBlock>>>(
+            d_newton_solver_, typed_data);
+
+        HANDLE_ERROR(cudaDeviceSynchronize());
+        double norm_g = compute_l2_norm_cublas(d_g_, n_dofs);
+        std::cout << "    ||g|| = " << std::scientific << norm_g << std::endl;
+
+        if (norm_g < h_inner_tol_) {
+          break;
+        }
+      }
+
+      cudss_solve_update_v_prev<<<numBlocks_update_prev_v, threadsPerBlock>>>(
+          d_newton_solver_);
 
       cudss_solve_constraints_eval<<<numBlocks_constraints_eval,
-                                     threadsPerBlock>>>(
-          static_cast<GPU_FEAT10_Data *>(d_data_), d_newton_solver_);
-      cudss_solve_compute_grad_l<<<numBlocks_grad_l, threadsPerBlock>>>(
-          static_cast<GPU_FEAT10_Data *>(d_data_), d_newton_solver_);
+                                     threadsPerBlock>>>(typed_data,
+                                                        d_newton_solver_);
 
-      cudss_solve_initialize_prehess<<<numBlocks_initialize_prehess,
-                                       threadsPerBlock>>>(
-          static_cast<GPU_FEAT10_Data *>(d_data_), d_newton_solver_);
+      cudss_solve_update_dual_var<<<numBlocks_update_dual_var,
+                                    threadsPerBlock>>>(typed_data,
+                                                       d_newton_solver_);
 
-      // ===== SPARSE HESSIAN ASSEMBLY =====
-      HANDLE_ERROR(cudaMemset(d_csr_values_, 0, h_nnz_ * sizeof(double)));
-
-      assemble_sparse_hessian_mass<<<numBlocks_sparse_mass, threadsPerBlock>>>(
-          static_cast<GPU_FEAT10_Data *>(d_data_), d_newton_solver_,
-          d_csr_row_offsets_, d_csr_col_indices_, d_csr_values_);
-
-      assemble_sparse_hessian_tangent<<<numBlocks_sparse_tangent,
-                                        threadsPerBlock>>>(
-          static_cast<GPU_FEAT10_Data *>(d_data_), d_newton_solver_,
-          d_csr_row_offsets_, d_csr_col_indices_, d_csr_values_);
+      HANDLE_ERROR(cudaDeviceSynchronize());
 
       if (n_constraints_ > 0) {
-        assemble_sparse_hessian_constraints<<<numBlocks_sparse_constraint,
-                                              threadsPerBlock>>>(
-            static_cast<GPU_FEAT10_Data *>(d_data_), d_newton_solver_,
-            d_csr_row_offsets_, d_csr_col_indices_, d_csr_values_);
-      }
+        double norm_constraint =
+            compute_l2_norm_cublas(d_constraint_ptr_, n_constraints_);
+        std::cout << "  Outer iter " << outer_iter
+                  << ": ||c|| = " << std::scientific << norm_constraint
+                  << std::endl;
 
-      HANDLE_ERROR(cudaDeviceSynchronize());
-
-      // ===== SOLVE USING cuDSS (REUSE HANDLES!) =====
-
-      // Factorization (Hessian values updated, but sparsity unchanged)
-      CUDSS_OK(cudssExecute(cudss_handle_, CUDSS_PHASE_FACTORIZATION,
-                            cudss_config_, cudss_data_, dssA, dssX, dssB));
-
-      // Solve
-      HANDLE_ERROR(cudaMemset(d_delta_v_, 0, n_dofs * sizeof(double)));
-      CUDSS_OK(cudssExecute(cudss_handle_, CUDSS_PHASE_SOLVE, cudss_config_,
-                            cudss_data_, dssA, dssX, dssB));
-
-      // Update position
-      cudss_solve_update_v_guess<<<numBlocks_update_v_guess, threadsPerBlock>>>(
-          d_newton_solver_);
-      cudss_solve_update_pos<<<numBlocks_update_pos, threadsPerBlock>>>(
-          d_newton_solver_, static_cast<GPU_FEAT10_Data *>(d_data_));
-
-      // Check convergence
-      HANDLE_ERROR(cudaDeviceSynchronize());
-      double norm_g = compute_l2_norm_cublas(d_g_, n_dofs);
-      std::cout << "    ||g|| = " << std::scientific << norm_g << std::endl;
-
-      if (norm_g < h_inner_tol_) {
-        break;
+        if (norm_constraint < h_outer_tol_) {
+          break;
+        }
       }
     }
+  } else if (type_ == TYPE_3243) {
+    auto *typed_data = static_cast<GPU_ANCF3243_Data *>(d_data_);
 
-    cudss_solve_update_v_prev<<<numBlocks_update_prev_v, threadsPerBlock>>>(
-        d_newton_solver_);
+    cudss_solve_update_pos_prev<<<numBlocks_update_pos_prev, threadsPerBlock>>>(
+        typed_data, d_newton_solver_);
 
-    cudss_solve_constraints_eval<<<numBlocks_constraints_eval,
-                                   threadsPerBlock>>>(
-        static_cast<GPU_FEAT10_Data *>(d_data_), d_newton_solver_);
+    for (int outer_iter = 0; outer_iter < h_max_outer_; ++outer_iter) {
+      std::cout << "Outer iter " << outer_iter << std::endl;
 
-    cudss_solve_update_dual_var<<<numBlocks_update_dual_var, threadsPerBlock>>>(
-        static_cast<GPU_FEAT10_Data *>(d_data_), d_newton_solver_);
+      for (int newton_iter = 0; newton_iter < h_max_inner_; ++newton_iter) {
+        std::cout << "  Newton iter " << newton_iter << std::endl;
 
-    // Check constraint convergence
-    HANDLE_ERROR(cudaDeviceSynchronize());
+        cudss_solve_compute_p<<<numBlocks_compute_p, threadsPerBlock>>>(
+            typed_data, d_newton_solver_);
 
-    if (n_constraints_ > 0) {
-      double norm_constraint =
-          compute_l2_norm_cublas(d_constraint_ptr_, n_constraints_);
-      std::cout << "  Outer iter " << outer_iter
-                << ": ||c|| = " << std::scientific << norm_constraint
-                << std::endl;
+        cudss_solve_clear_internal_force<<<numBlocks_clear_internal_force,
+                                           threadsPerBlock>>>(typed_data);
 
-      if (norm_constraint < h_outer_tol_) {
-        std::cout << "  Outer loop converged at iteration " << outer_iter
+        cudss_solve_compute_internal_force<<<numBlocks_internal_force,
+                                             threadsPerBlock>>>(
+            typed_data, d_newton_solver_);
+
+        cudss_solve_constraints_eval<<<numBlocks_constraints_eval,
+                                       threadsPerBlock>>>(typed_data,
+                                                          d_newton_solver_);
+
+        cudss_solve_compute_grad_l<<<numBlocks_grad_l, threadsPerBlock>>>(
+            typed_data, d_newton_solver_);
+
+        cudss_solve_initialize_prehess<<<numBlocks_initialize_prehess,
+                                         threadsPerBlock>>>(typed_data,
+                                                            d_newton_solver_);
+
+        HANDLE_ERROR(cudaMemset(d_csr_values_, 0, h_nnz_ * sizeof(double)));
+
+        assemble_sparse_hessian_mass<<<numBlocks_sparse_mass,
+                                       threadsPerBlock>>>(
+            typed_data, d_newton_solver_, d_csr_row_offsets_,
+            d_csr_col_indices_, d_csr_values_);
+
+        assemble_sparse_hessian_tangent<<<numBlocks_sparse_tangent,
+                                          threadsPerBlock>>>(
+            typed_data, d_newton_solver_, d_csr_row_offsets_,
+            d_csr_col_indices_, d_csr_values_);
+
+        if (n_constraints_ > 0) {
+          assemble_sparse_hessian_constraints<<<numBlocks_sparse_constraint,
+                                                threadsPerBlock>>>(
+              typed_data, d_newton_solver_, d_csr_row_offsets_,
+              d_csr_col_indices_, d_csr_values_);
+        }
+
+        HANDLE_ERROR(cudaDeviceSynchronize());
+
+        CUDSS_OK(cudssExecute(cudss_handle_, CUDSS_PHASE_FACTORIZATION,
+                              cudss_config_, cudss_data_, dssA, dssX, dssB));
+
+        HANDLE_ERROR(cudaMemset(d_delta_v_, 0, n_dofs * sizeof(double)));
+        CUDSS_OK(cudssExecute(cudss_handle_, CUDSS_PHASE_SOLVE, cudss_config_,
+                              cudss_data_, dssA, dssX, dssB));
+
+        cudss_solve_update_v_guess<<<numBlocks_update_v_guess,
+                                     threadsPerBlock>>>(d_newton_solver_);
+        cudss_solve_update_pos<<<numBlocks_update_pos, threadsPerBlock>>>(
+            d_newton_solver_, typed_data);
+
+        HANDLE_ERROR(cudaDeviceSynchronize());
+        double norm_g = compute_l2_norm_cublas(d_g_, n_dofs);
+        std::cout << "    ||g|| = " << std::scientific << norm_g << std::endl;
+
+        if (norm_g < h_inner_tol_) {
+          break;
+        }
+      }
+
+      cudss_solve_update_v_prev<<<numBlocks_update_prev_v, threadsPerBlock>>>(
+          d_newton_solver_);
+
+      cudss_solve_constraints_eval<<<numBlocks_constraints_eval,
+                                     threadsPerBlock>>>(typed_data,
+                                                        d_newton_solver_);
+
+      cudss_solve_update_dual_var<<<numBlocks_update_dual_var,
+                                    threadsPerBlock>>>(typed_data,
+                                                       d_newton_solver_);
+
+      HANDLE_ERROR(cudaDeviceSynchronize());
+
+      std::cout << "n_constraints_ = " << n_constraints_ << std::endl;
+
+      if (n_constraints_ > 0) {
+        double norm_constraint =
+            compute_l2_norm_cublas(d_constraint_ptr_, n_constraints_);
+        std::cout << "  Outer iter " << outer_iter
+                  << ": ||c|| = " << std::scientific << norm_constraint
                   << std::endl;
-        break;
+
+        if (norm_constraint < h_outer_tol_) {
+          break;
+        }
       }
     }
   }
 
-  // Cleanup matrix descriptors (keep handles for next timestep!)
   CUDSS_OK(cudssMatrixDestroy(dssA));
   CUDSS_OK(cudssMatrixDestroy(dssB));
   CUDSS_OK(cudssMatrixDestroy(dssX));

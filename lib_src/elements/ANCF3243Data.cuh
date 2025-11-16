@@ -233,7 +233,6 @@ struct GPU_ANCF3243_Data : public ElementBase {
     return d_element_connectivity[elem * 2 + local_node_idx];
   }
 
-
   __device__ double L() const {
     return *d_L;
   }
@@ -326,9 +325,10 @@ struct GPU_ANCF3243_Data : public ElementBase {
   }
 
   // Constructor
-  GPU_ANCF3243_Data(int num_nodes, int num_elements) : n_nodes(num_nodes), n_elements(num_elements) {
+  GPU_ANCF3243_Data(int num_nodes, int num_elements)
+      : n_nodes(num_nodes), n_elements(num_elements) {
     n_beam = num_elements;  // Initialize n_beam with n_elements
-    n_coef = 4 * n_nodes;  // Non-overlapping DOFs: 4 DOFs per node
+    n_coef = 4 * n_nodes;   // Non-overlapping DOFs: 4 DOFs per node
     type   = TYPE_3243;
   }
 
@@ -362,7 +362,8 @@ struct GPU_ANCF3243_Data : public ElementBase {
     HANDLE_ERROR(cudaMalloc(&d_y12, n_coef * sizeof(double)));
     HANDLE_ERROR(cudaMalloc(&d_z12, n_coef * sizeof(double)));
 
-    HANDLE_ERROR(cudaMalloc(&d_element_connectivity, n_elements * 2 * sizeof(int)));
+    HANDLE_ERROR(
+        cudaMalloc(&d_element_connectivity, n_elements * 2 * sizeof(int)));
 
     HANDLE_ERROR(cudaMalloc(&d_node_values, n_coef * n_coef * sizeof(double)));
 
@@ -398,7 +399,8 @@ struct GPU_ANCF3243_Data : public ElementBase {
              const Eigen::VectorXd &weight_eta,
              const Eigen::VectorXd &weight_zeta, const Eigen::VectorXd &h_x12,
              const Eigen::VectorXd &h_y12, const Eigen::VectorXd &h_z12,
-             const Eigen::Matrix<int, Eigen::Dynamic, 2, Eigen::RowMajor> &h_element_connectivity) {
+             const Eigen::Matrix<int, Eigen::Dynamic, 2, Eigen::RowMajor>
+                 &h_element_connectivity) {
     if (is_setup) {
       std::cerr << "GPU_ANCF3243_Data is already set up." << std::endl;
       return;
@@ -448,8 +450,9 @@ struct GPU_ANCF3243_Data : public ElementBase {
     HANDLE_ERROR(cudaMemcpy(d_z12, h_z12.data(), n_coef * sizeof(double),
                             cudaMemcpyHostToDevice));
 
-    HANDLE_ERROR(cudaMemcpy(d_element_connectivity, h_element_connectivity.data(),
-                            n_elements * 2 * sizeof(int), cudaMemcpyHostToDevice));
+    HANDLE_ERROR(
+        cudaMemcpy(d_element_connectivity, h_element_connectivity.data(),
+                   n_elements * 2 * sizeof(int), cudaMemcpyHostToDevice));
 
     HANDLE_ERROR(
         cudaMemset(d_node_values, 0, n_coef * n_coef * sizeof(double)));
@@ -613,6 +616,14 @@ struct GPU_ANCF3243_Data : public ElementBase {
 
   void RetrievePositionToCPU(Eigen::VectorXd &x12, Eigen::VectorXd &y12,
                              Eigen::VectorXd &z12);
+
+  double *Get_Constraint_Ptr() {
+    return d_constraint;
+  }
+
+  bool Get_Is_Constraint_Setup() {
+    return is_constraints_setup;
+  }
 
   GPU_ANCF3243_Data *d_data;  // Storing GPU copy of SAPGPUData
 
