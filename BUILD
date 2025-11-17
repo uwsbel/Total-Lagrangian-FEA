@@ -137,7 +137,27 @@ cuda_library(
     visibility = ["//visibility:public"],
 )
 
-
+cuda_library(
+    name = "solvers_syncednewton",
+    srcs = [
+        "lib_src/solvers/SyncedNewton.cu",
+    ],
+    hdrs = [
+        "lib_src/solvers/SolverBase.h",
+        "lib_src/solvers/SyncedNewton.cuh",
+    ],
+    copts = ["--std=c++17", "-O3", "--use_fast_math", "--extra-device-vectorization"],
+    linkopts = ["-lcusolver", "-lcublas", "-lcusparse", "-lcudss"],  # Add -lcudss here
+    deps = [
+        ":ANCF3243Data",
+        ":ANCF3443Data",
+        ":FEAT10Data",
+        ":cuda_utils",
+        ":cpu_utils",
+        "@eigen//:eigen",
+    ],
+    visibility = ["//visibility:public"],
+)
 
 # ========================================
 
@@ -157,10 +177,35 @@ cc_binary(
         ":cpu_utils",
         ":solvers_syncednesterov",
         ":solvers_syncedadamw",
+        ":solvers_syncednewton",
         "@eigen//:eigen",
         ":mesh_utils",
     ],
 )
+
+
+cc_binary(
+    name = "test_ancf3243_newton",
+    srcs = ["lib_bin/test_ancf3243_newton.cc"],
+    copts = ["--std=c++17"],
+    linkopts = [
+        "-L/usr/local/cuda/lib64",
+        "-lcusparse",
+        "-lcudart",
+        "-lcudss",  
+        "-lcublas",
+    ],
+    deps = [
+        ":ANCF3243Data",
+        ":cpu_utils",
+        ":solvers_syncednesterov",
+        ":solvers_syncedadamw",
+        ":solvers_syncednewton",
+        "@eigen//:eigen",
+        ":mesh_utils",
+    ],
+)
+
 
 cc_binary(
     name = "test_ancf3443_nesterov",
@@ -176,6 +221,7 @@ cc_binary(
         ":cpu_utils",
         ":solvers_syncednesterov",
         ":solvers_syncedadamw",
+        ":solvers_syncednewton",
         "@eigen//:eigen",
     ],
 )
@@ -195,6 +241,7 @@ cc_binary(
         ":mesh_utils",
         ":solvers_syncednesterov",
         ":solvers_syncedadamw",
+        ":solvers_syncednewton",
         "@eigen//:eigen",
     ],
 )
@@ -213,9 +260,32 @@ cc_binary(
         ":cpu_utils",
         ":solvers_syncednesterov",
         ":solvers_syncedadamw",
+        ":solvers_syncednewton",
         "@eigen//:eigen",
     ],
 )
+
+cc_binary(
+    name = "test_ancf3443_newton",
+    srcs = ["lib_bin/test_ancf3443_newton.cc"],
+    copts = ["--std=c++17"],
+    linkopts = [
+        "-L/usr/local/cuda/lib64",
+        "-lcusparse",
+        "-lcudart",
+        "-lcudss",  
+        "-lcublas",
+    ],
+    deps = [
+        ":ANCF3443Data",
+        ":cpu_utils",
+        ":solvers_syncednesterov",
+        ":solvers_syncedadamw",
+        ":solvers_syncednewton",
+        "@eigen//:eigen",
+    ],
+)
+
 
 cc_binary(
     name = "test_feat10_adamw",
@@ -231,6 +301,7 @@ cc_binary(
         ":cpu_utils",
         ":solvers_syncednesterov",
         ":solvers_syncedadamw",
+        ":solvers_syncednewton",
         "@eigen//:eigen",
     ],
 )
@@ -249,9 +320,53 @@ cc_binary(
         ":cpu_utils",
         ":solvers_syncednesterov",
         ":solvers_syncedadamw",
+        ":solvers_syncednewton",
         "@eigen//:eigen",
     ],
 )
+
+cc_binary(
+    name = "test_feat10_resolution_newton",
+    srcs = ["lib_bin/test_feat10_resolution_newton.cc"],
+    copts = ["--std=c++17"],
+    linkopts = [
+        "-L/usr/local/cuda/lib64",
+        "-lcusparse",
+        "-lcudart",
+        "-lcudss",  
+        "-lcublas",
+    ],
+    deps = [
+        ":FEAT10Data",
+        ":cpu_utils",
+        ":solvers_syncednesterov",
+        ":solvers_syncedadamw",
+        ":solvers_syncednewton",
+        "@eigen//:eigen",
+    ],
+)
+
+
+
+cc_binary(
+    name = "test_feat10_resolution_adamw_soft",
+    srcs = ["lib_bin/test_feat10_resolution_adamw_soft.cc"],
+    copts = ["--std=c++17"],
+    linkopts = [
+        "-L/usr/local/cuda/lib64",
+        "-lcusparse",
+        "-lcudart",
+    ],
+    deps = [
+        ":FEAT10Data",
+        ":cpu_utils",
+        ":solvers_syncednesterov",
+        ":solvers_syncedadamw",
+        ":solvers_syncednewton",
+        "@eigen//:eigen",
+    ],
+)
+
 
 cc_binary(
     name = "test_feat10_nesterov",
@@ -267,9 +382,52 @@ cc_binary(
         ":cpu_utils",
         ":solvers_syncednesterov",
         ":solvers_syncedadamw",
+        ":solvers_syncednewton",
         "@eigen//:eigen",
     ],
 )
+
+cc_binary(
+    name = "test_feat10_bunny_adamw",
+    srcs = ["lib_bin/test_feat10_bunny_adamw.cc"],
+    copts = ["--std=c++17"],
+    linkopts = [
+        "-L/usr/local/cuda/lib64",
+        "-lcusparse",
+        "-lcudart",
+    ],
+    deps = [
+        ":FEAT10Data",
+        ":cpu_utils",
+        ":solvers_syncednesterov",
+        ":solvers_syncedadamw",
+        ":solvers_syncednewton",
+        "@eigen//:eigen",
+    ],
+)
+
+
+cc_binary(
+    name = "test_feat10_bunny_newton",
+    srcs = ["lib_bin/test_feat10_bunny_newton.cc"],
+    copts = ["--std=c++17"],
+    linkopts = [
+        "-L/usr/local/cuda/lib64",
+        "-lcusparse",
+        "-lcudart",
+        "-lcudss",
+        "-lcublas",
+    ],
+    deps = [
+        ":FEAT10Data",
+        ":cpu_utils",
+        ":solvers_syncednesterov",
+        ":solvers_syncedadamw",
+        ":solvers_syncednewton",
+        "@eigen//:eigen",
+    ],
+)
+
 
 # ========================================
 
@@ -332,4 +490,59 @@ cc_test(
         ":mesh_utils",
     ],
 )
+
+
+cc_test(
+    name = "utest_feat10_mesh",
+    srcs = ["lib_utest/utest_feat10_mesh.cc"],
+    copts = ["--std=c++17"],
+    linkopts = [
+        "-L/usr/local/cuda/lib64",
+        "-lcusparse",
+        "-lcudart",                
+    ],
+    data = glob([
+        "data/utest/**/*",
+        "data/meshes/**",
+    ]),
+    deps = [
+        ":FEAT10Data",
+        ":cpu_utils",
+        "@eigen//:eigen",
+        "@googletest//:gtest_main",
+        ":solvers_syncednesterov",
+        ":solvers_syncedadamw",
+        ":solvers_syncednewton",
+        ":csv_utils",
+    ],
+)
+
+cc_test(
+    name = "utest_feat10_cudss",
+    srcs = ["lib_utest/utest_feat10_cudss.cc"],
+    copts = ["--std=c++17"],
+    linkopts = [
+        "-L/usr/local/cuda/lib64",
+        "-lcusparse",
+        "-lcudart",
+        "-lcudss",
+        "-lcublas",
+    ],
+    data = glob([
+        "data/utest/**/*",
+        "data/meshes/**",
+    ]),
+    deps = [
+        ":FEAT10Data",
+        ":cpu_utils",
+        "@eigen//:eigen",
+        "@googletest//:gtest_main",
+        ":solvers_syncednesterov",
+        ":solvers_syncedadamw",
+        ":solvers_syncednewton",
+        ":csv_utils",
+    ],
+)
+
+
 # ========================================

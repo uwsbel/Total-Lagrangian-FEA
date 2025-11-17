@@ -489,27 +489,33 @@ int FEAT10_read_nodes(const std::string &filename, Eigen::MatrixXd &nodes) {
     return 0;
   }
 
-  // Resize the output matrix
   nodes.resize(n_nodes, 3);
   nodes.setZero();
 
-  // Read node coordinates
+  // First pass: find minimum node_id
+  int min_id = INT_MAX;
+  std::vector<std::tuple<int, double, double, double>> node_data;
   for (int i = 0; i < n_nodes; i++) {
-    if (!std::getline(file, line) || line.empty()) {
+    if (!std::getline(file, line) || line.empty())
       continue;
-    }
-
     std::istringstream iss(line);
     int node_id;
     double x, y, z;
-
     if (iss >> node_id >> x >> y >> z) {
-      int idx = node_id - 1;  // Convert to 0-based indexing
-      if (idx >= 0 && idx < n_nodes) {
-        nodes(idx, 0) = x;
-        nodes(idx, 1) = y;
-        nodes(idx, 2) = z;
-      }
+      min_id = std::min(min_id, node_id);
+      node_data.emplace_back(node_id, x, y, z);
+    }
+  }
+
+  // Second pass: fill nodes matrix
+  for (const auto &tup : node_data) {
+    int node_id = std::get<0>(tup);
+    double x = std::get<1>(tup), y = std::get<2>(tup), z = std::get<3>(tup);
+    int idx = node_id - (min_id == 0 ? 0 : 1);  // adaptive offset
+    if (idx >= 0 && idx < n_nodes) {
+      nodes(idx, 0) = x;
+      nodes(idx, 1) = y;
+      nodes(idx, 2) = z;
     }
   }
 
@@ -519,6 +525,7 @@ int FEAT10_read_nodes(const std::string &filename, Eigen::MatrixXd &nodes) {
 
 int FEAT10_read_elements(const std::string &filename,
                          Eigen::MatrixXi &elements) {
+  std::cout << "filename: " << filename << std::endl;
   std::ifstream file(filename);
   if (!file.is_open()) {
     std::cerr << "Error: Could not open element file " << filename << std::endl;
@@ -542,39 +549,45 @@ int FEAT10_read_elements(const std::string &filename,
     return 0;
   }
 
-  // Resize the output matrix
   elements.resize(n_elements, 10);
   elements.setZero();
 
-  // Read element connectivity
+  // First pass: find minimum elem_id and node_id
+  int min_elem_id = INT_MAX, min_node_id = INT_MAX;
+  struct ElemData {
+    int elem_id;
+    std::vector<int> node_ids;
+  };
+  std::vector<ElemData> elem_data;
   for (int i = 0; i < n_elements; i++) {
-    if (!std::getline(file, line) || line.empty()) {
+    if (!std::getline(file, line) || line.empty())
       continue;
-    }
-
     std::istringstream iss(line);
     int elem_id;
     iss >> elem_id;
-
-    // Read the raw TetGen element connectivity
-    Eigen::VectorXi tetgen_elem(10);
+    min_elem_id = std::min(min_elem_id, elem_id);
+    std::vector<int> node_ids(10);
     for (int j = 0; j < 10; j++) {
       int node_id;
       if (iss >> node_id) {
-        tetgen_elem(j) = node_id - 1;  // Convert to 0-based indexing
+        min_node_id = std::min(min_node_id, node_id);
+        node_ids[j] = node_id;
       }
     }
+    elem_data.push_back({elem_id, node_ids});
+  }
 
-    // Remap to standard ordering
-    Eigen::VectorXi standard_elem(10);
+  // Second pass: fill elements matrix
+  for (const auto &ed : elem_data) {
+    Eigen::VectorXi tetgen_elem(10), standard_elem(10);
+    for (int j = 0; j < 10; j++)
+      tetgen_elem(j) =
+          ed.node_ids[j] - (min_node_id == 0 ? 0 : 1);  // adaptive offset
     FEAT10_remap_tetgen_indices(tetgen_elem, standard_elem);
-
-    // Store in the output matrix
-    int elem_idx = elem_id - 1;  // Convert to 0-based indexing
+    int elem_idx = ed.elem_id - (min_elem_id == 0 ? 0 : 1);  // adaptive offset
     if (elem_idx >= 0 && elem_idx < n_elements) {
-      for (int j = 0; j < 10; j++) {
+      for (int j = 0; j < 10; j++)
         elements(elem_idx, j) = standard_elem(j);
-      }
     }
   }
 

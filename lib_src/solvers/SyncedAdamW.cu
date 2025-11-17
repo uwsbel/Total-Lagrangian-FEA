@@ -20,6 +20,7 @@ __device__ double solver_grad_L(int tid, ElementType *data,
 
   const int n_coef    = d_solver->get_n_coef();
   const double inv_dt = 1.0 / d_solver->solver_time_step();
+  const double dt     = d_solver->solver_time_step();
 
   // Cache pointers once
   const double *__restrict__ v_g    = d_solver->v_guess().data();
@@ -28,7 +29,7 @@ __device__ double solver_grad_L(int tid, ElementType *data,
   const int *__restrict__ columns   = data->csr_columns();
   const double *__restrict__ values = data->csr_values();
 
-  // Mass matrix contribution
+  // Mass matrix contribution: (M @ (v_loc - v_prev)) / h
   int row_start = offsets[node_i];
   int row_end   = offsets[node_i + 1];
 
@@ -40,17 +41,15 @@ __device__ double solver_grad_L(int tid, ElementType *data,
     res += mass_ij * v_diff * inv_dt;
   }
 
-  // Internal force
-  res -= (-data->f_int()(tid));
-
-  // External force
-  res -= data->f_ext()(tid);
+  // Mechanical force contribution: - (-f_int + f_ext) = f_int - f_ext
+  res -= (-data->f_int()(tid));  // Add f_int
+  res -= data->f_ext()(tid);     // Subtract f_ext
 
   const int n_constraints = d_solver->gpu_n_constraints();
 
   if (n_constraints > 0) {
-    const double rho_dt =
-        *d_solver->solver_rho() * d_solver->solver_time_step();
+    // Python: h * (J.T @ (lam_mult + rho_bb * cA))
+    const double rho = *d_solver->solver_rho();
 
     const double *__restrict__ lam = d_solver->lambda_guess().data();
     const double *__restrict__ con = data->constraint().data();
@@ -70,9 +69,9 @@ __device__ double solver_grad_L(int tid, ElementType *data,
           cjT_values[idx];  // J^T[tid, constraint_idx] = J[constraint_idx, tid]
       const double constraint_val = con[constraint_idx];
 
-      // Add constraint contribution: J^T * (lambda + rho*dt*c)
-      res +=
-          constraint_jac_val * (lam[constraint_idx] + rho_dt * constraint_val);
+      // Add constraint contribution: h * J^T * (lambda + rho*c)
+      res += dt * constraint_jac_val *
+             (lam[constraint_idx] + rho * constraint_val);
     }
   }
 
@@ -115,6 +114,7 @@ __global__ void one_step_adamw_kernel_impl(ElementType *d_data,
       double beta2        = d_adamw_solver->solver_beta2();
       double eps          = d_adamw_solver->solver_eps();
       double weight_decay = d_adamw_solver->solver_weight_decay();
+      double lr_decay     = d_adamw_solver->solver_lr_decay();
       int conv_check_interval =
           d_adamw_solver->solver_convergence_check_interval();
 
@@ -143,7 +143,7 @@ __global__ void one_step_adamw_kernel_impl(ElementType *d_data,
           if (tid < d_adamw_solver->get_n_coef() * 3) {
             double g_tid       = d_adamw_solver->g()(tid);
             double v_guess_tid = d_adamw_solver->v_guess()(tid);
-            lr                 = lr * 0.995;
+            lr                 = lr * lr_decay;
             t += 1;
 
             m_t          = beta1 * m_t + (1 - beta1) * g_tid;

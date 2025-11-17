@@ -280,7 +280,8 @@ def alm_adamw_step(v_guess, lam_guess, v_prev, q_prev, M, f_int_func, f_ext, h, 
             g_mech = (M @ (v_loc - v_prev)) / h - (-f_int_dyn + f_ext)
             J = constraint_jacobian(qA)
             cA = constraint(qA)
-            return g_mech + J.T @ (lam_mult + rho_bb*h*cA)
+            #return g_mech + J.T @ (lam_mult + rho_bb*h*cA)
+            return g_mech + h * (J.T @ (lam_mult + rho_bb * cA))
 
         m_t = np.zeros_like(v)
         v_t = np.zeros_like(v)
@@ -309,7 +310,7 @@ def alm_adamw_step(v_guess, lam_guess, v_prev, q_prev, M, f_int_func, f_ext, h, 
         v = v_curr
         qA = q_prev + h*v
         cA = constraint(qA)
-        lam_mult += rho_bb*h*cA
+        lam_mult += rho_bb*cA
         print(f">>>>> OUTER {outer_iter}: ||c||={np.linalg.norm(cA):.3e}")
         if np.linalg.norm(cA) < outer_tol:
             break
@@ -349,7 +350,7 @@ if __name__ == "__main__":
     v_guess = v_prev.copy()
     lam_guess = np.zeros(3 * len(get_fixed_nodes(X_nodes)))
 
-    Nt = 100
+    Nt = 200
     node19_x = []  # List to store x position of node index 19
     node20_x = []  # List to store x position of node index 20
     outer_iters_per_step = []  # List to store outer iterations for each step

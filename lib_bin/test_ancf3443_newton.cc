@@ -6,7 +6,7 @@
 
 #include "../../lib_utils/quadrature_utils.h"
 #include "../lib_src/elements/ANCF3443Data.cuh"
-#include "../lib_src/solvers/SyncedAdamW.cuh"
+#include "../lib_src/solvers/SyncedNewton.cuh"
 #include "../lib_utils/cpu_utils.h"
 
 const double E    = 7e8;   // Young's modulus
@@ -192,11 +192,14 @@ int main() {
     std::cout << std::endl;
   }
 
-  SyncedAdamWParams params = {2e-4, 0.9,  0.999, 1e-8, 1e-4, 0.995, 1e-1,
-                              1e-6, 1e14, 5,     500,  1e-3, 10};
-  SyncedAdamWSolver solver(&gpu_3443_data, gpu_3443_data.get_n_constraint());
+  SyncedNewtonParams params = {1e-4, 1e-6, 1e14, 5, 10, 1e-3};
+
+  // for now, n_constraints needs to be explicitly defined
+  SyncedNewtonSolver solver(&gpu_3443_data, gpu_3443_data.get_n_constraint());
   solver.Setup();
   solver.SetParameters(&params);
+
+  solver.AnalyzeHessianSparsity();
   for (int i = 0; i < 50; i++) {
     solver.Solve();
   }

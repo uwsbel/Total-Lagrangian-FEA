@@ -35,7 +35,8 @@ struct GPU_FEAT10_Data : public ElementBase {
   }
 
   __device__ Eigen::Map<Eigen::MatrixXi> element_connectivity() const {
-    return Eigen::Map<Eigen::MatrixXi>(d_element_connectivity, n_elem, 4);
+    return Eigen::Map<Eigen::MatrixXi>(d_element_connectivity, n_elem,
+                                       Quadrature::N_NODE_T10_10);
   }
 
   __device__ Eigen::Map<Eigen::MatrixXd> grad_N_ref(int elem_idx, int qp_idx) {
@@ -317,6 +318,10 @@ struct GPU_FEAT10_Data : public ElementBase {
 
   void RetrieveDetJToCPU(std::vector<std::vector<double>> &detJ);
 
+  void RetrieveConnectivityToCPU(Eigen::MatrixXi &connectivity);
+
+  void WriteOutputVTK(const std::string &filename);
+
   // Constructor
   GPU_FEAT10_Data(int num_elements, int num_nodes)
       : n_elem(num_elements), n_coef(num_nodes) {
@@ -511,6 +516,14 @@ struct GPU_FEAT10_Data : public ElementBase {
       HANDLE_ERROR(cudaFree(d_constraint_jac));
       HANDLE_ERROR(cudaFree(d_fixed_nodes));
     }
+  }
+
+  double *Get_Constraint_Ptr() {
+    return d_constraint;
+  }
+
+  bool Get_Is_Constraint_Setup() {
+    return is_constraints_setup;
   }
 
   GPU_FEAT10_Data *d_data;  // Storing GPU copy of SAPGPUData

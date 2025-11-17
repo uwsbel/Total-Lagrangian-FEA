@@ -19,6 +19,7 @@ __device__ double solver_grad_L(int tid, ElementType *data,
   int dof_i  = tid % 3;
 
   const double inv_dt = 1.0 / d_solver->solver_time_step();
+  const double dt     = d_solver->solver_time_step();
 
   // Mass matrix contribution using CSR format
   int *offsets   = data->csr_offsets();
@@ -46,8 +47,8 @@ __device__ double solver_grad_L(int tid, ElementType *data,
   const int n_constraints = d_solver->gpu_n_constraints();
 
   if (n_constraints > 0) {
-    const double rho_dt =
-        *d_solver->solver_rho() * d_solver->solver_time_step();
+    // Python: h * (J.T @ (lam_mult + rho_bb * cA))
+    const double rho = *d_solver->solver_rho();
 
     const double *__restrict__ lam = d_solver->lambda_guess().data();
     const double *__restrict__ con = data->constraint().data();
@@ -67,8 +68,9 @@ __device__ double solver_grad_L(int tid, ElementType *data,
       const double constraint_jac_val = cjT_values[idx];
       const double constraint_val     = con[constraint_idx];
 
-      res +=
-          constraint_jac_val * (lam[constraint_idx] + rho_dt * constraint_val);
+      // Add constraint contribution: h * J^T * (lambda + rho*c)
+      res += dt * constraint_jac_val *
+             (lam[constraint_idx] + rho * constraint_val);
     }
   }
 

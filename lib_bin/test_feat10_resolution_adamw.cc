@@ -23,7 +23,7 @@ int main() {
   int plot_target_node;
   int n_nodes, n_elems;
 
-  MESH_RESOLUTION resolution = RES_4;
+  MESH_RESOLUTION resolution = RES_0;
 
   if (resolution == RES_0) {
     n_nodes = ANCFCPUUtils::FEAT10_read_nodes(
@@ -223,7 +223,7 @@ int main() {
   std::cout << f_int.transpose() << std::endl;
   std::cout << "done retrieving internal force vector" << std::endl;
 
-  SyncedAdamWParams params = {2e-4, 0.9,  0.999, 1e-8, 1e-4, 1e-1,
+  SyncedAdamWParams params = {2e-4, 0.9,  0.999, 1e-8, 1e-4, 0.995, 1e-1,
                               1e-6, 1e14, 5,     500,  1e-3, 20};
   SyncedAdamWSolver solver(&gpu_t10_data, gpu_t10_data.get_n_constraint());
   solver.Setup();

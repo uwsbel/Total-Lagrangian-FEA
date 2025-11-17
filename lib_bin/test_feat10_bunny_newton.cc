@@ -6,22 +6,22 @@
 
 #include "../../lib_utils/quadrature_utils.h"
 #include "../lib_src/elements/FEAT10Data.cuh"
-#include "../lib_src/solvers/SyncedAdamW.cuh"
+#include "../lib_src/solvers/SyncedNewton.cuh"
 #include "../lib_utils/cpu_utils.h"
 
-const double E    = 7e8;   // Young's modulus
-const double nu   = 0.33;  // Poisson's ratio
-const double rho0 = 2700;  // Density
+const double E    = 3.0e8;  // Pa  (~0.3 GPa, between 0.7 GPa and 0.13 GPa)
+const double nu   = 0.40;   // polymers tend to be higher than metals
+const double rho0 = 920.0;  // kg/m^3, typical polyethylene density
 
 int main() {
   // Read mesh data
   Eigen::MatrixXd nodes;
   Eigen::MatrixXi elements;
 
-  int n_nodes =
-      ANCFCPUUtils::FEAT10_read_nodes("data/meshes/T10/cube.1.node", nodes);
-  int n_elems = ANCFCPUUtils::FEAT10_read_elements("data/meshes/T10/cube.1.ele",
-                                                   elements);
+  int n_nodes = ANCFCPUUtils::FEAT10_read_nodes(
+      "data/meshes/T10/bunny_ascii_26.1.node", nodes);
+  int n_elems = ANCFCPUUtils::FEAT10_read_elements(
+      "data/meshes/T10/bunny_ascii_26.1.ele", elements);
 
   std::cout << "mesh read nodes: " << n_nodes << std::endl;
   std::cout << "mesh read elements: " << n_elems << std::endl;
@@ -48,12 +48,10 @@ int main() {
     h_z12(i) = nodes(i, 2);  // Z coordinates
   }
 
-  // ==========================================================================
-
-  // Find all nodes with z == 0
+  // Find all nodes with z < -4
   std::vector<int> fixed_node_indices;
   for (int i = 0; i < h_z12.size(); ++i) {
-    if (std::abs(h_z12(i)) < 1e-8) {  // tolerance for floating point
+    if (h_z12(i) < -4.0) {  // Fix nodes with z coordinate less than -4
       fixed_node_indices.push_back(i);
     }
   }
@@ -65,7 +63,7 @@ int main() {
   }
 
   // print fixed nodes
-  std::cout << "Fixed nodes (z == 0):" << std::endl;
+  std::cout << "Fixed nodes (z < -4.0):" << std::endl;
   for (int i = 0; i < h_fixed_nodes.size(); ++i) {
     std::cout << h_fixed_nodes(i) << " ";
   }
@@ -74,11 +72,15 @@ int main() {
   // Set fixed nodes
   gpu_t10_data.SetNodalFixed(h_fixed_nodes);
 
-  // set external force
+  // set external force: -1000N in z direction for all nodes above z=4
   Eigen::VectorXd h_f_ext(gpu_t10_data.get_n_coef() * 3);
-  // set external force applied at the end of the beam to be 0,0,3100
   h_f_ext.setZero();
-  h_f_ext(3 * 6 + 0) = 1000.0;
+
+  for (int i = 0; i < h_z12.size(); ++i) {
+    if (h_z12(i) > 4.0) {
+      h_f_ext(3 * i + 2) = -35000.0;  // z direction
+    }
+  }
   gpu_t10_data.SetExternalForce(h_f_ext);
 
   // Get quadrature data from quadrature_utils.h
@@ -95,8 +97,6 @@ int main() {
                      tet5pt_weights_host,  // Quadrature weights
                      h_x12, h_y12, h_z12,  // Node coordinates
                      elements);            // Element connectivity
-
-  // =========================================================================
 
   gpu_t10_data.CalcDnDuPre();
 
@@ -183,14 +183,23 @@ int main() {
             << "):" << std::endl;
   std::cout << f_int.transpose() << std::endl;
   std::cout << "done retrieving internal force vector" << std::endl;
-
-  SyncedAdamWParams params = {2e-4, 0.9,  0.999, 1e-8, 1e-4, 0.995, 1e-1,
-                              1e-6, 1e14, 5,     500,  1e-3, 10};
-  SyncedAdamWSolver solver(&gpu_t10_data, gpu_t10_data.get_n_constraint());
+  SyncedNewtonParams params = {1e-2, 1e-6, 1e14, 5, 10, 1e-3};
+  SyncedNewtonSolver solver(&gpu_t10_data, gpu_t10_data.get_n_constraint());
   solver.Setup();
   solver.SetParameters(&params);
-  for (int i = 0; i < 50; i++) {
+
+  solver.AnalyzeHessianSparsity();
+
+  int output_interval = 10;  // 10 vtk per seconds
+  int output_frame    = 0;
+
+  for (int i = 0; i < 20000; i++) {
     solver.Solve();
+    if (i % output_interval == 0) {
+      gpu_t10_data.WriteOutputVTK("output/bunny_adamw_step_" +
+                                  std::to_string(output_frame) + ".vtk");
+      output_frame++;
+    }
   }
 
   // // Set highest precision for cout

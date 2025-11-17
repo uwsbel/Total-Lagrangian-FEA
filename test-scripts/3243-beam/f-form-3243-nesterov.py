@@ -542,11 +542,6 @@ for step in range(Nt):
         return f_int
     
     def alm_nesterov_step(v_guess, lam_guess, v_prev, q_prev, M, f_int_func, f_int, f_ext, h, rho):
-        """
-        One ALM step with true Nesterov acceleration (FISTA schedule), no restart.
-        - Uses scaled duals: lam <- lam + rho*h*c(qA), and grad uses J^T(lam + rho*h*c(qA)).
-        - Fixed stepsize alpha (pick conservatively).
-        """
         v = v_guess.copy()
         lam = lam_guess.copy()
 
@@ -582,7 +577,7 @@ for step in range(Nt):
                 J = constraint_jacobian(qA)
                 cA = constraint(qA)
 
-                return g_mech + J.T @ (lam + rho * h * cA)
+                return g_mech + h * (J.T @ (lam + rho * cA))
 
             # ---- True Nesterov/FISTA inner loop (fixed schedule, no restart) ----
             v_k   = v.copy()
@@ -616,7 +611,7 @@ for step in range(Nt):
             v = v_k
             qA = q_prev + h * v
             cA = constraint(qA)
-            lam += rho * h * cA
+            lam += rho * cA
 
             if np.linalg.norm(cA) < outer_tol:
                 break

@@ -393,3 +393,16 @@ __device__ __forceinline__ void clear_internal_force(
     d_data->f_int()[thread_idx] = 0.0;
   }
 }
+
+// Add at the end of the file, after clear_internal_force()
+
+__device__ __forceinline__ void compute_hessian_assemble(
+    int elem_idx, int qp_idx, GPU_ANCF3443_Data *d_data,
+    Eigen::Map<Eigen::MatrixXd>
+        H_global,  // Eigen Map to global Hessian (n_dofs x n_dofs)
+    double h) {    // Output: Hessian-vector product (3*n_coef)
+
+  // TODO: Implement Hessian-vector product for ANCF3443 elements
+  // Element has 16 nodes × 3 DOFs = 48 DOFs per element
+  // For now, this is a placeholder stub
+}
