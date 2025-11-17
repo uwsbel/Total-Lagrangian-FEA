@@ -5,13 +5,12 @@ Uses Generalized-α time integration with constant load and time stepping.
 import os
 import numpy as np
 import ufl
+import pyvista
 
 from dolfinx import fem, mesh, plot, log, default_scalar_type
 from dolfinx.fem.petsc import NonlinearProblem
 from dolfinx.nls.petsc import NewtonSolver
 from tetgen_mesh_loader import load_tetgen_mesh
-
-import pyvista as pv
 
 
 # ============================================================================
@@ -19,8 +18,6 @@ import pyvista as pv
 # ============================================================================
 # Resolution selection: 0 (RES_0), 2 (RES_2), or 4 (RES_4)
 RES = 0
-# VTK output option: Set to True to save VTK files, False to skip
-SAVE_VTK = False
 
 # Load TetGen mesh using the tetgen_mesh_loader.py module
 domain, x_tetgen = load_tetgen_mesh("beam_3x2x1", resolution=RES)
@@ -42,7 +39,6 @@ print(f"Loaded TetGen mesh: beam_3x2x1 (RES_{RES})")
 print(f"Topology vertices: {topology_vertices}")
 print(f"Function space DOFs (quadratic): {total_dofs}")
 print(f"Total elements: {total_elements}")
-
 
 # ============================================================================
 # BOUNDARY CONDITIONS
@@ -212,29 +208,37 @@ solver.convergence_criterion = "incremental"
 
 
 # ============================================================================
-# DATA OUTPUT SETUP (VTK)
+# VISUALIZATION SETUP
 # ============================================================================
-if SAVE_VTK:
-    # Ensure output directory exists, and use a path relative to script location
-    output_dir = os.path.join(os.path.dirname(__file__), "output")
-    os.makedirs(output_dir, exist_ok=True)
+# PyVista setup for animated GIF
+plotter = pyvista.Plotter()
 
-    # Create VTK subdirectory for all VTK files
-    vtk_dir = os.path.join(output_dir, "beam_dynamic_vtk")
-    os.makedirs(vtk_dir, exist_ok=True)
+# Ensure output directory exists, and use a path relative to script location
+output_dir = os.path.join(os.path.dirname(__file__), "output")
+os.makedirs(output_dir, exist_ok=True)
+gif_path = os.path.join(output_dir, "deformation_dynamic.gif")
+plotter.open_gif(gif_path, fps=10)
 
-    # Create VTK mesh from domain (mesh is static, only fields change over time)
-    topology, cells, geometry = plot.vtk_mesh(u.function_space)
-    pv_mesh = pv.UnstructuredGrid(topology, cells, geometry)
+topology, cells, geometry = plot.vtk_mesh(u.function_space)
+function_grid = pyvista.UnstructuredGrid(topology, cells, geometry)
 
-    # Save base mesh once
-    mesh_path = os.path.join(vtk_dir, "beam_dynamic_mesh.vtk")
-    pv_mesh.save(mesh_path)
-    print(f"Saved base mesh to {mesh_path}")
+values = np.zeros((geometry.shape[0], 3))
+values[:, :len(u)] = u.x.array.reshape(geometry.shape[0], len(u))
+function_grid["u"] = values
+function_grid.set_active_vectors("u")
 
-    # Create function spaces for output
-    Vs = fem.functionspace(domain, ("Lagrange", 2))  # Scalar space for magnitude
-    magnitude = fem.Function(Vs)
+# Warp mesh by deformation
+warped = function_grid.warp_by_vector("u", factor=1)
+
+# Add mesh to plotter and visualize
+plotter.add_mesh(warped, show_edges=True, lighting=False)
+
+# Compute magnitude of displacement to visualize in GIF
+Vs = fem.functionspace(domain, ("Lagrange", 2))
+magnitude = fem.Function(Vs)
+us = fem.Expression(ufl.sqrt(sum([u[i]**2 for i in range(len(u))])), Vs.element.interpolation_points())
+magnitude.interpolate(us)
+warped["mag"] = magnitude.x.array
 
 
 # ============================================================================
@@ -296,25 +300,16 @@ for n in range(n_steps):
         print(f"  Max displacement: {max_disp:.6f}")
         print(f"  Max velocity: {max_vel:.6f}")
     
-    # Save displacement and magnitude fields to VTK file for this time step
-    if SAVE_VTK:
-        # Update displacement field on mesh
-        displacement_3d = u.x.array.reshape(-1, 3)
-        pv_mesh["displacement"] = displacement_3d
-        pv_mesh.set_active_vectors("displacement")
-        
-        # Compute and save magnitude field
-        us = fem.Expression(ufl.sqrt(sum([u[i]**2 for i in range(len(u))])), 
-                             Vs.element.interpolation_points())
+    # Update visualization every 2 steps for GIF
+    if n % 2 == 0:
+        function_grid["u"][:, :len(u)] = u.x.array.reshape(geometry.shape[0], len(u))
         magnitude.interpolate(us)
-        pv_mesh["magnitude"] = magnitude.x.array
-        
-        # Save VTK file for this time step
-        vtk_path = os.path.join(vtk_dir, f"beam_dynamic_step_{n:04d}.vtk")
-        pv_mesh.save(vtk_path)
+        warped.set_active_scalars("mag")
+        warped_n = function_grid.warp_by_vector(factor=1)
+        warped.points[:, :] = warped_n.points
+        warped.point_data["mag"][:] = magnitude.x.array
+        plotter.update_scalar_bar_range([0, 1])
+        plotter.write_frame()
 
-# Save final summary
-if SAVE_VTK:
-    print(f"Saved time series data to {vtk_dir}")
-    print(f"  Base mesh: beam_dynamic_mesh.vtk")
-    print(f"  Time step files: beam_dynamic_step_XXXX.vtk (total: {n_steps} files)")
+plotter.close()
+print(f"Saved GIF to {gif_path}")
