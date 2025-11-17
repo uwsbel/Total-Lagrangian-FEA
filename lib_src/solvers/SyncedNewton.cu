@@ -1485,106 +1485,106 @@ void SyncedNewtonSolver::OneStepNewtonCuDSS() {
       }
     }
   } else if (type_ == TYPE_3443) {
-  auto *typed_data = static_cast<GPU_ANCF3443_Data *>(d_data_);
+    auto *typed_data = static_cast<GPU_ANCF3443_Data *>(d_data_);
 
-  cudss_solve_update_pos_prev<<<numBlocks_update_pos_prev, threadsPerBlock>>>(
-      typed_data, d_newton_solver_);
+    cudss_solve_update_pos_prev<<<numBlocks_update_pos_prev, threadsPerBlock>>>(
+        typed_data, d_newton_solver_);
 
-  for (int outer_iter = 0; outer_iter < h_max_outer_; ++outer_iter) {
-    std::cout << "Outer iter " << outer_iter << std::endl;
+    for (int outer_iter = 0; outer_iter < h_max_outer_; ++outer_iter) {
+      std::cout << "Outer iter " << outer_iter << std::endl;
 
-    for (int newton_iter = 0; newton_iter < h_max_inner_; ++newton_iter) {
-      std::cout << "  Newton iter " << newton_iter << std::endl;
+      for (int newton_iter = 0; newton_iter < h_max_inner_; ++newton_iter) {
+        std::cout << "  Newton iter " << newton_iter << std::endl;
 
-      cudss_solve_compute_p<<<numBlocks_compute_p, threadsPerBlock>>>(
-          typed_data, d_newton_solver_);
+        cudss_solve_compute_p<<<numBlocks_compute_p, threadsPerBlock>>>(
+            typed_data, d_newton_solver_);
 
-      cudss_solve_clear_internal_force<<<numBlocks_clear_internal_force,
-                                         threadsPerBlock>>>(typed_data);
+        cudss_solve_clear_internal_force<<<numBlocks_clear_internal_force,
+                                           threadsPerBlock>>>(typed_data);
 
-      cudss_solve_compute_internal_force<<<numBlocks_internal_force,
-                                           threadsPerBlock>>>(
-          typed_data, d_newton_solver_);
+        cudss_solve_compute_internal_force<<<numBlocks_internal_force,
+                                             threadsPerBlock>>>(
+            typed_data, d_newton_solver_);
+
+        cudss_solve_constraints_eval<<<numBlocks_constraints_eval,
+                                       threadsPerBlock>>>(typed_data,
+                                                          d_newton_solver_);
+
+        cudss_solve_compute_grad_l<<<numBlocks_grad_l, threadsPerBlock>>>(
+            typed_data, d_newton_solver_);
+
+        cudss_solve_initialize_prehess<<<numBlocks_initialize_prehess,
+                                         threadsPerBlock>>>(typed_data,
+                                                            d_newton_solver_);
+
+        HANDLE_ERROR(cudaMemset(d_csr_values_, 0, h_nnz_ * sizeof(double)));
+
+        assemble_sparse_hessian_mass<<<numBlocks_sparse_mass,
+                                       threadsPerBlock>>>(
+            typed_data, d_newton_solver_, d_csr_row_offsets_,
+            d_csr_col_indices_, d_csr_values_);
+
+        assemble_sparse_hessian_tangent<<<numBlocks_sparse_tangent,
+                                          threadsPerBlock>>>(
+            typed_data, d_newton_solver_, d_csr_row_offsets_,
+            d_csr_col_indices_, d_csr_values_);
+
+        if (n_constraints_ > 0) {
+          assemble_sparse_hessian_constraints<<<numBlocks_sparse_constraint,
+                                                threadsPerBlock>>>(
+              typed_data, d_newton_solver_, d_csr_row_offsets_,
+              d_csr_col_indices_, d_csr_values_);
+        }
+
+        HANDLE_ERROR(cudaDeviceSynchronize());
+
+        CUDSS_OK(cudssExecute(cudss_handle_, CUDSS_PHASE_FACTORIZATION,
+                              cudss_config_, cudss_data_, dssA, dssX, dssB));
+
+        HANDLE_ERROR(cudaMemset(d_delta_v_, 0, n_dofs * sizeof(double)));
+        CUDSS_OK(cudssExecute(cudss_handle_, CUDSS_PHASE_SOLVE, cudss_config_,
+                              cudss_data_, dssA, dssX, dssB));
+
+        cudss_solve_update_v_guess<<<numBlocks_update_v_guess,
+                                     threadsPerBlock>>>(d_newton_solver_);
+        cudss_solve_update_pos<<<numBlocks_update_pos, threadsPerBlock>>>(
+            d_newton_solver_, typed_data);
+
+        HANDLE_ERROR(cudaDeviceSynchronize());
+        double norm_g = compute_l2_norm_cublas(d_g_, n_dofs);
+        std::cout << "    ||g|| = " << std::scientific << norm_g << std::endl;
+
+        if (norm_g < h_inner_tol_) {
+          break;
+        }
+      }
+
+      cudss_solve_update_v_prev<<<numBlocks_update_prev_v, threadsPerBlock>>>(
+          d_newton_solver_);
 
       cudss_solve_constraints_eval<<<numBlocks_constraints_eval,
                                      threadsPerBlock>>>(typed_data,
                                                         d_newton_solver_);
 
-      cudss_solve_compute_grad_l<<<numBlocks_grad_l, threadsPerBlock>>>(
-          typed_data, d_newton_solver_);
+      cudss_solve_update_dual_var<<<numBlocks_update_dual_var,
+                                    threadsPerBlock>>>(typed_data,
+                                                       d_newton_solver_);
 
-      cudss_solve_initialize_prehess<<<numBlocks_initialize_prehess,
-                                       threadsPerBlock>>>(typed_data,
-                                                          d_newton_solver_);
-
-      HANDLE_ERROR(cudaMemset(d_csr_values_, 0, h_nnz_ * sizeof(double)));
-
-      assemble_sparse_hessian_mass<<<numBlocks_sparse_mass,
-                                     threadsPerBlock>>>(
-          typed_data, d_newton_solver_, d_csr_row_offsets_,
-          d_csr_col_indices_, d_csr_values_);
-
-      assemble_sparse_hessian_tangent<<<numBlocks_sparse_tangent,
-                                        threadsPerBlock>>>(
-          typed_data, d_newton_solver_, d_csr_row_offsets_,
-          d_csr_col_indices_, d_csr_values_);
+      HANDLE_ERROR(cudaDeviceSynchronize());
 
       if (n_constraints_ > 0) {
-        assemble_sparse_hessian_constraints<<<numBlocks_sparse_constraint,
-                                              threadsPerBlock>>>(
-            typed_data, d_newton_solver_, d_csr_row_offsets_,
-            d_csr_col_indices_, d_csr_values_);
-      }
+        double norm_constraint =
+            compute_l2_norm_cublas(d_constraint_ptr_, n_constraints_);
+        std::cout << "  Outer iter " << outer_iter
+                  << ": ||c|| = " << std::scientific << norm_constraint
+                  << std::endl;
 
-      HANDLE_ERROR(cudaDeviceSynchronize());
-
-      CUDSS_OK(cudssExecute(cudss_handle_, CUDSS_PHASE_FACTORIZATION,
-                            cudss_config_, cudss_data_, dssA, dssX, dssB));
-
-      HANDLE_ERROR(cudaMemset(d_delta_v_, 0, n_dofs * sizeof(double)));
-      CUDSS_OK(cudssExecute(cudss_handle_, CUDSS_PHASE_SOLVE, cudss_config_,
-                            cudss_data_, dssA, dssX, dssB));
-
-      cudss_solve_update_v_guess<<<numBlocks_update_v_guess,
-                                   threadsPerBlock>>>(d_newton_solver_);
-      cudss_solve_update_pos<<<numBlocks_update_pos, threadsPerBlock>>>(
-          d_newton_solver_, typed_data);
-
-      HANDLE_ERROR(cudaDeviceSynchronize());
-      double norm_g = compute_l2_norm_cublas(d_g_, n_dofs);
-      std::cout << "    ||g|| = " << std::scientific << norm_g << std::endl;
-
-      if (norm_g < h_inner_tol_) {
-        break;
-      }
-    }
-
-    cudss_solve_update_v_prev<<<numBlocks_update_prev_v, threadsPerBlock>>>(
-        d_newton_solver_);
-
-    cudss_solve_constraints_eval<<<numBlocks_constraints_eval,
-                                   threadsPerBlock>>>(typed_data,
-                                                      d_newton_solver_);
-
-    cudss_solve_update_dual_var<<<numBlocks_update_dual_var,
-                                  threadsPerBlock>>>(typed_data,
-                                                     d_newton_solver_);
-
-    HANDLE_ERROR(cudaDeviceSynchronize());
-
-    if (n_constraints_ > 0) {
-      double norm_constraint =
-          compute_l2_norm_cublas(d_constraint_ptr_, n_constraints_);
-      std::cout << "  Outer iter " << outer_iter
-                << ": ||c|| = " << std::scientific << norm_constraint
-                << std::endl;
-
-      if (norm_constraint < h_outer_tol_) {
-        break;
+        if (norm_constraint < h_outer_tol_) {
+          break;
+        }
       }
     }
   }
-}
 
   CUDSS_OK(cudssMatrixDestroy(dssA));
   CUDSS_OK(cudssMatrixDestroy(dssB));
