@@ -657,6 +657,14 @@ struct GPU_ANCF3443_Data : public ElementBase {
   void RetrievePositionToCPU(Eigen::VectorXd &x12, Eigen::VectorXd &y12,
                              Eigen::VectorXd &z12);
 
+  double *Get_Constraint_Ptr() {
+    return d_constraint;
+  }
+
+  bool Get_Is_Constraint_Setup() {
+    return is_constraints_setup;
+  }
+
   GPU_ANCF3443_Data *d_data;  // Storing GPU copy of SAPGPUData
 
   int n_beam;

@@ -76,6 +76,46 @@ struct ElementTraits<GPU_ANCF3243_Data> {
   }
 };
 
+template <>
+struct ElementTraits<GPU_ANCF3443_Data> {
+  static constexpr int N_NODES         = 4;  // 4 physical nodes
+  static constexpr int N_SHAPE         = Quadrature::N_SHAPE_3443;      // 16
+  static constexpr int N_QP            = Quadrature::N_TOTAL_QP_4_4_3;  // 48
+  static constexpr int N_DOFS_PER_NODE = 3;
+  static constexpr int N_ELEMENT_DOFS  = N_SHAPE * N_DOFS_PER_NODE;  // 48
+
+  __device__ static int get_global_node(GPU_ANCF3443_Data *data, int elem_idx,
+                                        int local_node) {
+    // For ANCF3443: 4 nodes, each with 4 shape functions (DOFs)
+    // Shape indices [0-3] → node 0, [4-7] → node 1, [8-11] → node 2, [12-15] →
+    // node 3
+    int physical_node = local_node / 4;  // Which of the 4 physical nodes
+    int dof_local     = local_node % 4;  // Which DOF within that node
+    return data->element_connectivity()(elem_idx, physical_node) * 4 +
+           dof_local;
+  }
+
+  __device__ static int n_coef_per_node() {
+    return 4;
+  }
+
+  __device__ static int node_to_coef(int node) {
+    return node * n_coef_per_node();
+  }
+
+  __device__ static int shape_to_coef(GPU_ANCF3443_Data *data, int elem_idx,
+                                      int shape_idx) {
+    const int node_local  = shape_idx / 4;  // 0,1,2,3
+    const int dof_local   = shape_idx % 4;  // 0,1,2,3
+    const int node_global = data->element_connectivity()(elem_idx, node_local);
+    return node_global * n_coef_per_node() + dof_local;
+  }
+
+  __device__ static int get_n_elem(GPU_ANCF3443_Data *data) {
+    return data->gpu_n_beam();
+  }
+};
+
 // =====================================================
 // SPARSE HESSIAN: Bitset-based Sparsity Analysis
 // =====================================================
@@ -177,9 +217,29 @@ __global__ void analyze_hessian_sparsity_bitset(ElementType *d_data,
           }
         }
       }
+    } else if constexpr (std::is_same_v<ElementType, GPU_ANCF3443_Data>) {
+      // For ANCF3443, check if any coefficient of this node is in the element
+      for (int shape_idx = 0; shape_idx < Traits::N_SHAPE; shape_idx++) {
+        int coef_idx = Traits::shape_to_coef(d_data, elem, shape_idx);
+        if (coef_idx == coef_i) {
+          node_in_elem = true;
+          break;
+        }
+      }
+
+      if (node_in_elem) {
+        for (int shape_idx = 0; shape_idx < Traits::N_SHAPE; shape_idx++) {
+          int coef_j = Traits::shape_to_coef(d_data, elem, shape_idx);
+          for (int dof_j = 0; dof_j < 3; dof_j++) {
+            int col_dof  = coef_j * 3 + dof_j;
+            int word_idx = col_dof / 32;
+            int bit_idx  = col_dof % 32;
+            atomicOr(&my_bitset[word_idx], 1u << bit_idx);
+          }
+        }
+      }
     }
   }
-
   // ===== Contribution 3: Constraint Jacobian (J^T * J) =====
   int n_constraints = d_solver->gpu_n_constraints();
   if (n_constraints > 0) {
@@ -667,6 +727,129 @@ __global__ void assemble_sparse_hessian_tangent(ElementType *d_data,
         }
       }
     }
+  } else if constexpr (std::is_same_v<ElementType, GPU_ANCF3443_Data>) {
+    // ANCF3443 tangent assembly - 16 shape functions
+    double e[16][3];
+#pragma unroll
+    for (int i = 0; i < 16; i++) {
+      const int coef_idx = Traits::shape_to_coef(d_data, elem_idx, i);
+      e[i][0]            = d_data->x12()(coef_idx);
+      e[i][1]            = d_data->y12()(coef_idx);
+      e[i][2]            = d_data->z12()(coef_idx);
+    }
+
+    double grad_s[16][3];
+#pragma unroll
+    for (int i = 0; i < 16; i++) {
+      grad_s[i][0] = d_data->ds_du_pre(qp_idx)(i, 0);
+      grad_s[i][1] = d_data->ds_du_pre(qp_idx)(i, 1);
+      grad_s[i][2] = d_data->ds_du_pre(qp_idx)(i, 2);
+    }
+
+    double F[3][3] = {{0.0}};
+#pragma unroll
+    for (int i = 0; i < 16; i++) {
+#pragma unroll
+      for (int row = 0; row < 3; row++) {
+#pragma unroll
+        for (int col = 0; col < 3; col++) {
+          F[row][col] += e[i][row] * grad_s[i][col];
+        }
+      }
+    }
+
+    double C[3][3] = {{0.0}};
+#pragma unroll
+    for (int i = 0; i < 3; i++) {
+#pragma unroll
+      for (int j = 0; j < 3; j++) {
+#pragma unroll
+        for (int k = 0; k < 3; k++) {
+          C[i][j] += F[k][i] * F[k][j];
+        }
+      }
+    }
+
+    double trC = C[0][0] + C[1][1] + C[2][2];
+    double trE = 0.5 * (trC - 3.0);
+
+    double FFT[3][3] = {{0.0}};
+#pragma unroll
+    for (int i = 0; i < 3; i++) {
+#pragma unroll
+      for (int j = 0; j < 3; j++) {
+#pragma unroll
+        for (int k = 0; k < 3; k++) {
+          FFT[i][j] += F[i][k] * F[j][k];
+        }
+      }
+    }
+
+    double Fh[16][3];
+#pragma unroll
+    for (int i = 0; i < 16; i++) {
+#pragma unroll
+      for (int row = 0; row < 3; row++) {
+        Fh[i][row] = 0.0;
+#pragma unroll
+        for (int col = 0; col < 3; col++) {
+          Fh[i][row] += F[row][col] * grad_s[i][col];
+        }
+      }
+    }
+
+    double lambda = d_data->lambda();
+    double mu     = d_data->mu();
+    double geom   = (d_data->L() * d_data->W() * d_data->H()) / 8.0;
+    double scale  = d_data->weight_xi()(
+                       qp_idx / (Quadrature::N_QP_4 * Quadrature::N_QP_3)) *
+                   d_data->weight_eta()((qp_idx / Quadrature::N_QP_3) %
+                                        Quadrature::N_QP_4) *
+                   d_data->weight_zeta()(qp_idx % Quadrature::N_QP_3);
+    double dV = scale * geom;
+
+#pragma unroll
+    for (int i = 0; i < 16; i++) {
+#pragma unroll
+      for (int j = 0; j < 16; j++) {
+        double h_ij = grad_s[j][0] * grad_s[i][0] +
+                      grad_s[j][1] * grad_s[i][1] + grad_s[j][2] * grad_s[i][2];
+
+        double Fhj_dot_Fhi =
+            Fh[j][0] * Fh[i][0] + Fh[j][1] * Fh[i][1] + Fh[j][2] * Fh[i][2];
+
+#pragma unroll
+        for (int d = 0; d < 3; d++) {
+#pragma unroll
+          for (int e = 0; e < 3; e++) {
+            double A_de    = lambda * Fh[i][d] * Fh[j][e];
+            double B_de    = lambda * trE * h_ij * (d == e ? 1.0 : 0.0);
+            double C1_de   = mu * Fhj_dot_Fhi * (d == e ? 1.0 : 0.0);
+            double D_de    = mu * Fh[j][d] * Fh[i][e];
+            double Etrm_de = mu * h_ij * FFT[d][e];
+            double Ftrm_de = -mu * h_ij * (d == e ? 1.0 : 0.0);
+
+            double K_ij_de =
+                (A_de + B_de + C1_de + D_de + Etrm_de + Ftrm_de) * dV;
+
+            int coef_i       = Traits::shape_to_coef(d_data, elem_idx, i);
+            int coef_j       = Traits::shape_to_coef(d_data, elem_idx, j);
+            int global_dof_i = coef_i * 3 + d;
+            int global_dof_j = coef_j * 3 + e;
+
+            int row_begin  = d_csr_row_offsets[global_dof_i];
+            int row_length = d_csr_row_offsets[global_dof_i + 1] - row_begin;
+
+            int pos = binary_search_column(&d_csr_col_indices[row_begin],
+                                           row_length, global_dof_j);
+
+            if (pos >= 0) {
+              atomicAdd(&d_csr_values[row_begin + pos], h * K_ij_de);
+            }
+          }
+        }
+      }
+    }
   }
 }
 
@@ -972,6 +1155,10 @@ void SyncedNewtonSolver::AnalyzeHessianSparsity() {
     analyze_hessian_sparsity_bitset<<<numBlocks, 256>>>(
         static_cast<GPU_ANCF3243_Data *>(d_data_), d_newton_solver_,
         d_col_bitset_, bitset_size);
+  } else if (type_ == TYPE_3443) {
+    analyze_hessian_sparsity_bitset<<<numBlocks, 256>>>(
+        static_cast<GPU_ANCF3443_Data *>(d_data_), d_newton_solver_,
+        d_col_bitset_, bitset_size);
   }
 
   HANDLE_ERROR(cudaDeviceSynchronize());
@@ -1032,6 +1219,8 @@ void SyncedNewtonSolver::OneStepNewtonCuDSS() {
     n_qp_per_elem = Quadrature::N_QP_T10_5;
   } else if (type_ == TYPE_3243) {
     n_qp_per_elem = Quadrature::N_TOTAL_QP_3_2_2;
+  } else if (type_ == TYPE_3443) {
+    n_qp_per_elem = Quadrature::N_TOTAL_QP_4_4_3;
   } else {
     std::cerr << "Unsupported element type!" << std::endl;
     return;
@@ -1295,7 +1484,107 @@ void SyncedNewtonSolver::OneStepNewtonCuDSS() {
         }
       }
     }
+  } else if (type_ == TYPE_3443) {
+  auto *typed_data = static_cast<GPU_ANCF3443_Data *>(d_data_);
+
+  cudss_solve_update_pos_prev<<<numBlocks_update_pos_prev, threadsPerBlock>>>(
+      typed_data, d_newton_solver_);
+
+  for (int outer_iter = 0; outer_iter < h_max_outer_; ++outer_iter) {
+    std::cout << "Outer iter " << outer_iter << std::endl;
+
+    for (int newton_iter = 0; newton_iter < h_max_inner_; ++newton_iter) {
+      std::cout << "  Newton iter " << newton_iter << std::endl;
+
+      cudss_solve_compute_p<<<numBlocks_compute_p, threadsPerBlock>>>(
+          typed_data, d_newton_solver_);
+
+      cudss_solve_clear_internal_force<<<numBlocks_clear_internal_force,
+                                         threadsPerBlock>>>(typed_data);
+
+      cudss_solve_compute_internal_force<<<numBlocks_internal_force,
+                                           threadsPerBlock>>>(
+          typed_data, d_newton_solver_);
+
+      cudss_solve_constraints_eval<<<numBlocks_constraints_eval,
+                                     threadsPerBlock>>>(typed_data,
+                                                        d_newton_solver_);
+
+      cudss_solve_compute_grad_l<<<numBlocks_grad_l, threadsPerBlock>>>(
+          typed_data, d_newton_solver_);
+
+      cudss_solve_initialize_prehess<<<numBlocks_initialize_prehess,
+                                       threadsPerBlock>>>(typed_data,
+                                                          d_newton_solver_);
+
+      HANDLE_ERROR(cudaMemset(d_csr_values_, 0, h_nnz_ * sizeof(double)));
+
+      assemble_sparse_hessian_mass<<<numBlocks_sparse_mass,
+                                     threadsPerBlock>>>(
+          typed_data, d_newton_solver_, d_csr_row_offsets_,
+          d_csr_col_indices_, d_csr_values_);
+
+      assemble_sparse_hessian_tangent<<<numBlocks_sparse_tangent,
+                                        threadsPerBlock>>>(
+          typed_data, d_newton_solver_, d_csr_row_offsets_,
+          d_csr_col_indices_, d_csr_values_);
+
+      if (n_constraints_ > 0) {
+        assemble_sparse_hessian_constraints<<<numBlocks_sparse_constraint,
+                                              threadsPerBlock>>>(
+            typed_data, d_newton_solver_, d_csr_row_offsets_,
+            d_csr_col_indices_, d_csr_values_);
+      }
+
+      HANDLE_ERROR(cudaDeviceSynchronize());
+
+      CUDSS_OK(cudssExecute(cudss_handle_, CUDSS_PHASE_FACTORIZATION,
+                            cudss_config_, cudss_data_, dssA, dssX, dssB));
+
+      HANDLE_ERROR(cudaMemset(d_delta_v_, 0, n_dofs * sizeof(double)));
+      CUDSS_OK(cudssExecute(cudss_handle_, CUDSS_PHASE_SOLVE, cudss_config_,
+                            cudss_data_, dssA, dssX, dssB));
+
+      cudss_solve_update_v_guess<<<numBlocks_update_v_guess,
+                                   threadsPerBlock>>>(d_newton_solver_);
+      cudss_solve_update_pos<<<numBlocks_update_pos, threadsPerBlock>>>(
+          d_newton_solver_, typed_data);
+
+      HANDLE_ERROR(cudaDeviceSynchronize());
+      double norm_g = compute_l2_norm_cublas(d_g_, n_dofs);
+      std::cout << "    ||g|| = " << std::scientific << norm_g << std::endl;
+
+      if (norm_g < h_inner_tol_) {
+        break;
+      }
+    }
+
+    cudss_solve_update_v_prev<<<numBlocks_update_prev_v, threadsPerBlock>>>(
+        d_newton_solver_);
+
+    cudss_solve_constraints_eval<<<numBlocks_constraints_eval,
+                                   threadsPerBlock>>>(typed_data,
+                                                      d_newton_solver_);
+
+    cudss_solve_update_dual_var<<<numBlocks_update_dual_var,
+                                  threadsPerBlock>>>(typed_data,
+                                                     d_newton_solver_);
+
+    HANDLE_ERROR(cudaDeviceSynchronize());
+
+    if (n_constraints_ > 0) {
+      double norm_constraint =
+          compute_l2_norm_cublas(d_constraint_ptr_, n_constraints_);
+      std::cout << "  Outer iter " << outer_iter
+                << ": ||c|| = " << std::scientific << norm_constraint
+                << std::endl;
+
+      if (norm_constraint < h_outer_tol_) {
+        break;
+      }
+    }
   }
+}
 
   CUDSS_OK(cudssMatrixDestroy(dssA));
   CUDSS_OK(cudssMatrixDestroy(dssB));
