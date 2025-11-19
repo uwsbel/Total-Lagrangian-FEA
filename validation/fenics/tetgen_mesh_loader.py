@@ -76,7 +76,7 @@ def load_tetgen_mesh(mesh_name, resolution=0, mesh_dir=None):
     x_tetgen = read_tetgen_node_file(node_file)
     cells = read_tetgen_ele_file(ele_file)
     element = basix.ufl.element("Lagrange", "tetrahedron", 2, shape=(3,), dtype=x_tetgen.dtype)
-    msh = mesh.create_mesh(MPI.COMM_WORLD, cells, x_tetgen, element)
+    msh = mesh.create_mesh(MPI.COMM_WORLD, cells, element, x_tetgen)
     
     return msh, x_tetgen
 

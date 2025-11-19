@@ -8,7 +8,6 @@ import ufl
 
 from dolfinx import fem, mesh, plot, log, default_scalar_type
 from dolfinx.fem.petsc import NonlinearProblem
-from dolfinx.nls.petsc import NewtonSolver
 from tetgen_mesh_loader import load_tetgen_mesh
 
 import pyvista as pv
@@ -202,13 +201,22 @@ F = (m(avg(a_old, a_new, alpha_m), v) +
 # ============================================================================
 # SOLVER SETUP
 # ============================================================================
-problem = NonlinearProblem(F, u, bcs)
-
-solver = NewtonSolver(domain.comm, problem)
-# Newton solver options
-solver.atol = 1e-8
-solver.rtol = 1e-8
-solver.convergence_criterion = "incremental"
+problem = NonlinearProblem(
+    F,
+    u,
+    bcs=bcs,
+    petsc_options={
+        "snes_type": "newtonls",
+        "snes_monitor": None,
+        "snes_atol": 1e-8,
+        "snes_rtol": 1e-8,
+        "snes_stol": 1e-8,
+        "ksp_type": "preonly",
+        "pc_type": "lu",
+        "pc_factor_mat_solver_type": "mumps",
+    },
+    petsc_options_prefix="beam_dynamic",
+)
 
 
 # ============================================================================
@@ -265,8 +273,10 @@ for n in range(n_steps):
     t = n * dt
     
     # Solve for displacement at current time step
-    num_its, converged = solver.solve(u)
-    assert (converged)
+    problem.solve()
+    converged = problem.solver.getConvergedReason()
+    num_its = problem.solver.getIterationNumber()
+    assert converged > 0, f"Newton solver did not converge (reason {converged})."
     u.x.scatter_forward()
     
     # Update fields using Generalized-α method (from reference)
@@ -304,8 +314,10 @@ for n in range(n_steps):
         pv_mesh.set_active_vectors("displacement")
         
         # Compute and save magnitude field
-        us = fem.Expression(ufl.sqrt(sum([u[i]**2 for i in range(len(u))])), 
-                             Vs.element.interpolation_points())
+        us = fem.Expression(
+            ufl.sqrt(sum([u[i] ** 2 for i in range(len(u))])),
+            Vs.element.interpolation_points,
+        )
         magnitude.interpolate(us)
         pv_mesh["magnitude"] = magnitude.x.array
         
