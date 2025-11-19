@@ -272,10 +272,13 @@ plotter.add_mesh(warped, show_edges=True, lighting=False, scalars="mag",
 plotter.add_text("Bunny Static Deformation (FEniCS)", position='upper_edge', font_size=12)
 
 # Create rotating animation (360 degrees over 36 frames)
+import time
 n_frames = 36
 for i in range(n_frames):
-    plotter.camera.azimuth = 10  # Rotate 10 degrees per frame
+    plotter.camera.azimuth += 10  # Increment by 10 degrees per frame
     plotter.write_frame()
+    if VIS:
+        time.sleep(0.1)
 
 plotter.close()
 print(f"Saved animated GIF to: {gif_path}")
