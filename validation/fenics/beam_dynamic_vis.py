@@ -9,7 +9,7 @@ import pyvista
 
 from dolfinx import fem, mesh, plot, log, default_scalar_type
 from dolfinx.fem.petsc import NonlinearProblem
-from tetgen_mesh_loader import load_tetgen_mesh
+from tetgen_mesh_loader import load_tetgen_mesh_from_files
 
 
 # ============================================================================
@@ -18,8 +18,16 @@ from tetgen_mesh_loader import load_tetgen_mesh
 # Resolution selection: 0 (RES_0), 2 (RES_2), or 4 (RES_4)
 RES = 0
 
-# Load TetGen mesh using the tetgen_mesh_loader.py module
-domain, x_tetgen = load_tetgen_mesh("beam_3x2x1", resolution=RES)
+# Construct mesh file paths
+script_dir = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.normpath(os.path.join(script_dir, os.pardir, os.pardir))
+mesh_dir = os.path.join(project_root, "data", "meshes", "T10", "resolution")
+
+node_file = os.path.join(mesh_dir, f"beam_3x2x1_res{RES}.1.node")
+ele_file = os.path.join(mesh_dir, f"beam_3x2x1_res{RES}.1.ele")
+
+# Load TetGen mesh
+domain, x_tetgen = load_tetgen_mesh_from_files(node_file, ele_file)
 V = fem.functionspace(domain, ("Lagrange", 2, (domain.geometry.dim, )))
 
 # Beam dimensions (for boundary conditions)

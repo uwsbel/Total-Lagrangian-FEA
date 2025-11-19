@@ -13,22 +13,47 @@ def remap_tetgen_to_fenics_tet10(tetgen_elem):
     return [tetgen_elem[i] for i in fenics_to_tetgen]
 
 
-def read_tetgen_node_file(fname):
-    """Read TetGen .node file and return node coordinates."""
+def read_tetgen_node_file(fname, return_offset=False):
+    """Read TetGen .node file and return node coordinates.
+    
+    Automatically detects and handles both 0-based and 1-based indexing.
+    
+    Args:
+        fname: Node file path
+        return_offset: If True, also returns the detected index offset (0 or 1)
+    
+    Returns:
+        x: Node coordinates array
+        offset: (optional) Detected index offset (0 for 0-based, 1 for 1-based files)
+    """
     with open(fname, 'r') as f:
         n_nodes, dim = map(int, f.readline().split()[:2])
         x = np.zeros((n_nodes, dim))
+        index_offset = None
         for line in f:
             if line.strip() and not line.startswith('#'):
                 parts = line.split()
                 if parts:
-                    node_id = int(parts[0]) - 1
+                    node_id_raw = int(parts[0])
+                    # Auto-detect indexing on first data line
+                    if index_offset is None:
+                        index_offset = node_id_raw  # 0 for 0-based, 1 for 1-based
+                    node_id = node_id_raw - index_offset
                     x[node_id] = [float(parts[i]) for i in range(1, dim + 1)]
+    if return_offset:
+        return x, index_offset
     return x
 
 
-def read_tetgen_ele_file(fname):
-    """Read TetGen .ele file and return cell connectivity."""
+def read_tetgen_ele_file(fname, node_index_offset=0):
+    """Read TetGen .ele file and return cell connectivity.
+    
+    Automatically handles both 0-based and 1-based node indexing.
+    
+    Args:
+        fname: Element file path
+        node_index_offset: Offset to apply to node indices (0 for 0-based, 1 for 1-based files)
+    """
     with open(fname, 'r') as f:
         n_elements, nodes_per_elem = map(int, f.readline().split()[:2])
         cells = []
@@ -36,47 +61,39 @@ def read_tetgen_ele_file(fname):
             if line.strip() and not line.startswith('#'):
                 parts = line.split()
                 if parts:
-                    node_indices = [int(parts[i]) - 1 for i in range(1, nodes_per_elem + 1)]
+                    # Read all node indices for this element and apply offset
+                    node_indices = [int(parts[i]) - node_index_offset for i in range(1, nodes_per_elem + 1)]
                     cells.append(remap_tetgen_to_fenics_tet10(node_indices))
     return np.array(cells, dtype=np.int64)
 
 
-def load_tetgen_mesh(mesh_name, resolution=0, mesh_dir=None):
-    """Load TetGen mesh files and create a FEniCS mesh.
+def load_tetgen_mesh_from_files(node_file, ele_file):
+    """Load TetGen mesh from .node and .ele files.
+    
+    Automatically detects and handles both 0-based and 1-based indexing in mesh files.
     
     Args:
-        mesh_name: Base name of mesh files (e.g., "beam_3x2x1")
-        resolution: Resolution level (0, 2, or 4). Default is 0 (RES_0).
-        mesh_dir: Directory containing mesh files (default: data/meshes/T10/resolution relative to project root)
+        node_file: Path to .node file (absolute or relative)
+        ele_file: Path to .ele file (absolute or relative)
     
     Returns:
-        tuple: (mesh, x_tetgen) - FEniCS mesh and original TetGen coordinates
+        tuple: (mesh, x_nodes) - DOLFINx mesh and node coordinate array
     
     Examples:
-        load_tetgen_mesh("beam_3x2x1")  # Loads beam_3x2x1_res0.1 (RES_0)
-        load_tetgen_mesh("beam_3x2x1", resolution=2)  # Loads beam_3x2x1_res2.1 (RES_2)
-        load_tetgen_mesh("beam_3x2x1", resolution=4)  # Loads beam_3x2x1_res4.1 (RES_4)
+        load_tetgen_mesh_from_files(
+            "data/meshes/T10/bunny_ascii_26.1.node",
+            "data/meshes/T10/bunny_ascii_26.1.ele"
+        )
     """
-    # Strip .1 suffix if present
-    if mesh_name.endswith(".1"):
-        base_name = mesh_name[:-2]
-    else:
-        base_name = mesh_name
+    # Read nodes and detect indexing offset (0 or 1)
+    x_nodes, index_offset = read_tetgen_node_file(node_file, return_offset=True)
     
-    if mesh_dir is None:
-        # Default to data/meshes/T10/resolution relative to project root
-        script_dir = os.path.dirname(os.path.abspath(__file__))
-        project_root = os.path.normpath(os.path.join(script_dir, os.pardir, os.pardir))
-        mesh_dir = os.path.join(project_root, "data", "meshes", "T10", "resolution")
+    # Read elements using the detected offset
+    cells = read_tetgen_ele_file(ele_file, node_index_offset=index_offset)
     
-    mesh_name = f"{base_name}_res{resolution}.1"
-    node_file = os.path.join(mesh_dir, f"{mesh_name}.node")
-    ele_file = os.path.join(mesh_dir, f"{mesh_name}.ele")
+    # Create DOLFINx mesh with P2 tetrahedral elements
+    element = basix.ufl.element("Lagrange", "tetrahedron", 2, shape=(3,), dtype=x_nodes.dtype)
+    msh = mesh.create_mesh(MPI.COMM_WORLD, cells, element, x_nodes)
     
-    x_tetgen = read_tetgen_node_file(node_file)
-    cells = read_tetgen_ele_file(ele_file)
-    element = basix.ufl.element("Lagrange", "tetrahedron", 2, shape=(3,), dtype=x_tetgen.dtype)
-    msh = mesh.create_mesh(MPI.COMM_WORLD, cells, element, x_tetgen)
-    
-    return msh, x_tetgen
+    return msh, x_nodes
 

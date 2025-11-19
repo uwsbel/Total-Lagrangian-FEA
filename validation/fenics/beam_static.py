@@ -4,7 +4,6 @@ Creates an animated GIF of the deformation using PyVista.
 """
 from dolfinx import log, default_scalar_type
 from dolfinx.fem.petsc import NonlinearProblem
-from dolfinx.nls.petsc import NewtonSolver
 import pyvista
 import numpy as np
 import ufl
@@ -112,13 +111,22 @@ F = ufl.inner(ufl.grad(v), P) * dx - ufl.inner(v, B) * dx - ufl.inner(v, T) * ds
 # ============================================================================
 # SOLVER SETUP
 # ============================================================================
-problem = NonlinearProblem(F, u, bcs)
-
-solver = NewtonSolver(domain.comm, problem)
-# Newton solver options
-solver.atol = 1e-8
-solver.rtol = 1e-8
-solver.convergence_criterion = "incremental"
+problem = NonlinearProblem(
+    F,
+    u,
+    bcs=bcs,
+    petsc_options={
+        "snes_type": "newtonls",
+        "snes_monitor": None,
+        "snes_atol": 1e-8,
+        "snes_rtol": 1e-8,
+        "snes_stol": 1e-8,
+        "ksp_type": "preonly",
+        "pc_type": "lu",
+        "pc_factor_mat_solver_type": "mumps",
+    },
+    petsc_options_prefix="beam_static",
+)
 
 
 # ============================================================================
@@ -150,7 +158,7 @@ plotter.add_mesh(warped, show_edges=True, lighting=False, clim=[0, 10])
 # Compute magnitude of displacement to visualize in GIF
 Vs = fem.functionspace(domain, ("Lagrange", 2))
 magnitude = fem.Function(Vs)
-us = fem.Expression(ufl.sqrt(sum([u[i]**2 for i in range(len(u))])), Vs.element.interpolation_points())
+us = fem.Expression(ufl.sqrt(sum([u[i]**2 for i in range(len(u))])), Vs.element.interpolation_points)
 magnitude.interpolate(us)
 warped["mag"] = magnitude.x.array
 
@@ -163,8 +171,10 @@ log.set_log_level(log.LogLevel.INFO)
 tval0 = -2.0
 for n in range(1, 12):
     T.value[1] = n * tval0
-    num_its, converged = solver.solve(u)
-    assert (converged)
+    problem.solve()
+    converged = problem.solver.getConvergedReason()
+    num_its = problem.solver.getIterationNumber()
+    assert converged > 0, f"Newton solver did not converge (reason {converged})."
     u.x.scatter_forward()
     print(f"Time step {n}, Number of iterations {num_its}, Load {T.value}")
     function_grid["u"][:, :len(u)] = u.x.array.reshape(geometry.shape[0], len(u))
