@@ -2,6 +2,23 @@ load("@rules_cuda//cuda:defs.bzl", "cuda_library")
 # ========================================
 
 # ========================================
+# collision library section
+cuda_library(
+    name = "collision_broadphase",
+    srcs = ["lib_src/collision/Broadphase.cu"],
+    hdrs = ["lib_src/collision/Broadphase.cuh"],
+    copts = ["--std=c++17", "-O3", "--use_fast_math", "--extra-device-vectorization"],
+    linkopts = ["-lcudart"],
+    deps = [
+        ":cpu_utils",
+        ":cuda_utils",
+        "@eigen//:eigen",
+    ],
+    visibility = ["//visibility:public"],
+)
+# ========================================
+
+# ========================================
 # utility library section (put this first since ANCF3243Data depends on it)
 cc_library(
     name = "cpu_utils",
@@ -465,6 +482,20 @@ cc_test(
         "@googletest//:gtest_main",
     ],
 )
+
+cc_test(
+    name = "utest_collision",
+    srcs = ["lib_utest/utest_collision.cc"],
+    copts = ["--std=c++17"],
+    deps = [
+        ":cpu_utils",
+        ":collision_broadphase",
+        ":mesh_utils",
+        "@eigen//:eigen",
+        "@googletest//:gtest_main",
+    ],
+)
+
 
 cc_test(
     name = "utest_sparse_mass",
