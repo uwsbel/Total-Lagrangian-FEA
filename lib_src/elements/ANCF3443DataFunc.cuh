@@ -1,6 +1,9 @@
 #pragma once
 #include "ANCF3443Data.cuh"
 
+// forward-declare solver type (pointer-only used here)
+struct SyncedNewtonSolver;
+
 __device__ __forceinline__ void compute_p(int, int, GPU_ANCF3443_Data *);
 __device__ __forceinline__ void compute_internal_force(int, int,
                                                        GPU_ANCF3443_Data *);
@@ -394,15 +397,193 @@ __device__ __forceinline__ void clear_internal_force(
   }
 }
 
-// Add at the end of the file, after clear_internal_force()
-
-__device__ __forceinline__ void compute_hessian_assemble(
-    int elem_idx, int qp_idx, GPU_ANCF3443_Data *d_data,
-    Eigen::Map<Eigen::MatrixXd>
-        H_global,  // Eigen Map to global Hessian (n_dofs x n_dofs)
-    double h) {    // Output: Hessian-vector product (3*n_coef)
-
-  // TODO: Implement Hessian-vector product for ANCF3443 elements
-  // Element has 16 nodes × 3 DOFs = 48 DOFs per element
-  // For now, this is a placeholder stub
+// --- CSR-version Hessian assembly for ANCF3443 ---
+static __device__ __forceinline__ int binary_search_column_csr_3443(const int *cols, int n_cols, int target) {
+  int left = 0, right = n_cols - 1;
+  while (left <= right) {
+    int mid = left + ((right - left) >> 1);
+    int v = cols[mid];
+    if (v == target) return mid;
+    if (v < target) left = mid + 1;
+    else right = mid - 1;
+  }
+  return -1;
 }
+
+template<typename ElementType>
+__device__ __forceinline__ void compute_hessian_assemble_csr(ElementType* d_data,
+    SyncedNewtonSolver* d_solver,
+    int elem_idx,
+    int qp_idx,
+    int* d_csr_row_offsets,
+    int* d_csr_col_indices,
+    double* d_csr_values,
+    double h);
+
+// Explicit specialization for GPU_ANCF3443_Data
+template<>
+__device__ __forceinline__ void compute_hessian_assemble_csr<GPU_ANCF3443_Data>(
+    GPU_ANCF3443_Data* d_data,
+    SyncedNewtonSolver* d_solver,
+    int elem_idx,
+    int qp_idx,
+    int* d_csr_row_offsets,
+    int* d_csr_col_indices,
+    double* d_csr_values,
+    double h) {
+
+  // Build local element K_elem (48x48) similarly to FEAT10/ANCF3243.
+  // Use existing local nodal extraction provided in compute_hessian_assemble
+  // (if you need the full constitutive formulas I can copy them in).
+
+  double e[Quadrature::N_SHAPE_3443][3];
+  #pragma unroll
+  for (int i = 0; i < Quadrature::N_SHAPE_3443; i++) {
+    int node_local = i / 4;           // which physical node (0..3)
+    int dof_local  = i % 4;           // which local DOF
+    int node_global = d_data->element_connectivity()(elem_idx, node_local);
+    int coef_idx = node_global * 4 + dof_local;
+    e[i][0] = d_data->x12()(coef_idx);
+    e[i][1] = d_data->y12()(coef_idx);
+    e[i][2] = d_data->z12()(coef_idx);
+  }
+
+  double grad_s[Quadrature::N_SHAPE_3443][3];
+  #pragma unroll
+  for (int i = 0; i < Quadrature::N_SHAPE_3443; i++) {
+    grad_s[i][0] = d_data->ds_du_pre(qp_idx)(i, 0);
+    grad_s[i][1] = d_data->ds_du_pre(qp_idx)(i, 1);
+    grad_s[i][2] = d_data->ds_du_pre(qp_idx)(i, 2);
+  }
+
+  double F[3][3] = {{0.0}};
+  #pragma unroll
+  for (int i = 0; i < Quadrature::N_SHAPE_3443; i++) {
+    #pragma unroll
+    for (int row = 0; row < 3; row++) {
+      #pragma unroll
+      for (int col = 0; col < 3; col++) {
+        F[row][col] += e[i][row] * grad_s[i][col];
+      }
+    }
+  }
+
+  double C[3][3] = {{0.0}};
+  #pragma unroll
+  for (int i = 0; i < 3; i++) {
+    #pragma unroll
+    for (int j = 0; j < 3; j++) {
+      #pragma unroll
+      for (int k = 0; k < 3; k++) {
+        C[i][j] += F[k][i] * F[k][j];
+      }
+    }
+  }
+
+  double trC = C[0][0] + C[1][1] + C[2][2];
+  double trE = 0.5 * (trC - 3.0);
+
+  double FFT[3][3] = {{0.0}};
+  #pragma unroll
+  for (int i = 0; i < 3; i++) {
+    #pragma unroll
+    for (int j = 0; j < 3; j++) {
+      #pragma unroll
+      for (int k = 0; k < 3; k++) {
+        FFT[i][j] += F[i][k] * F[j][k];
+      }
+    }
+  }
+
+  double Fh[Quadrature::N_SHAPE_3443][3];
+  #pragma unroll
+  for (int i = 0; i < Quadrature::N_SHAPE_3443; i++) {
+    #pragma unroll
+    for (int row = 0; row < 3; row++) {
+      Fh[i][row] = 0.0;
+      #pragma unroll
+      for (int col = 0; col < 3; col++) {
+        Fh[i][row] += F[row][col] * grad_s[i][col];
+      }
+    }
+  }
+
+  double lambda = d_data->lambda();
+  double mu     = d_data->mu();
+  double geom   = (d_data->L() * d_data->W() * d_data->H()) / 8.0;
+  double scale  = d_data->weight_xi()(qp_idx / (Quadrature::N_QP_4 * Quadrature::N_QP_3)) *
+                  d_data->weight_eta()((qp_idx / Quadrature::N_QP_3) % Quadrature::N_QP_4) *
+                  d_data->weight_zeta()(qp_idx % Quadrature::N_QP_3);
+  double dV = scale * geom;
+
+  // Local K_elem (48 x 48)
+  const int Nloc = Quadrature::N_SHAPE_3443 * 3; // 16*3 = 48
+  // Because large stack arrays can be heavy, but follow pattern from other DataFunc
+  // Implement K_elem as a local array
+  double K_elem[48][48];
+  #pragma unroll
+  for (int ii = 0; ii < Nloc; ii++)
+    for (int jj = 0; jj < Nloc; jj++)
+      K_elem[ii][jj] = 0.0;
+
+  // Build K_elem using the same constitutive building block pattern
+  #pragma unroll
+  for (int i = 0; i < Quadrature::N_SHAPE_3443; i++) {
+    #pragma unroll
+    for (int j = 0; j < Quadrature::N_SHAPE_3443; j++) {
+      double h_ij = grad_s[j][0] * grad_s[i][0] + grad_s[j][1] * grad_s[i][1] + grad_s[j][2] * grad_s[i][2];
+      double Fhj_dot_Fhi = Fh[j][0]*Fh[i][0] + Fh[j][1]*Fh[i][1] + Fh[j][2]*Fh[i][2];
+
+      for (int d = 0; d < 3; d++) {
+        for (int eidx = 0; eidx < 3; eidx++) {
+          double A_de    = lambda * Fh[i][d] * Fh[j][eidx];
+          double B_de    = lambda * trE * h_ij * (d == eidx ? 1.0 : 0.0);
+          double C1_de   = mu * Fhj_dot_Fhi * (d == eidx ? 1.0 : 0.0);
+          double D_de    = mu * Fh[j][d] * Fh[i][eidx];
+          double Etrm_de = mu * h_ij * FFT[d][eidx];
+          double Ftrm_de = -mu * h_ij * (d == eidx ? 1.0 : 0.0);
+
+          double K_ij_de = (A_de + B_de + C1_de + D_de + Etrm_de + Ftrm_de) * dV;
+
+          int row = 3 * i + d;
+          int col = 3 * j + eidx;
+          K_elem[row][col] = K_ij_de;
+        }
+      }
+    }
+  }
+
+  // Scatter to CSR
+  for (int local_row = 0; local_row < Quadrature::N_SHAPE_3443; local_row++) {
+    int node_local_row = local_row / 4;
+    int dof_local_row  = local_row % 4;
+    int node_global_row = d_data->element_connectivity()(elem_idx, node_local_row);
+    int coef_idx_row = node_global_row * 4 + dof_local_row;
+
+    for (int r_dof = 0; r_dof < 3; r_dof++) {
+      int global_row = 3 * coef_idx_row + r_dof;
+      int local_row_index = 3 * local_row + r_dof;
+
+      int row_begin = d_csr_row_offsets[global_row];
+      int row_len = d_csr_row_offsets[global_row + 1] - row_begin;
+
+      for (int local_col = 0; local_col < Quadrature::N_SHAPE_3443; local_col++) {
+        int node_local_col = local_col / 4;
+        int dof_local_col  = local_col % 4;
+        int node_global_col = d_data->element_connectivity()(elem_idx, node_local_col);
+        int coef_idx_col = node_global_col * 4 + dof_local_col;
+
+        for (int c_dof = 0; c_dof < 3; c_dof++) {
+          int global_col = 3 * coef_idx_col + c_dof;
+          int local_col_index = 3 * local_col + c_dof;
+
+          int pos = binary_search_column_csr_3443(&d_csr_col_indices[row_begin], row_len, global_col);
+          if (pos >= 0) {
+            atomicAdd(&d_csr_values[row_begin + pos], h * K_elem[local_row_index][local_col_index]);
+          }
+        }
+      }
+    }
+  }
+}
+

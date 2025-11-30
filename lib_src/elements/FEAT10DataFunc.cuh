@@ -5,6 +5,9 @@
 
 #include "FEAT10Data.cuh"
 
+// forward-declare solver type used by templated device functions
+struct SyncedNewtonSolver;
+
 // Solve 3x3 linear system: A * x = b
 // A: 3x3 coefficient matrix (row-major)
 // b: right-hand side vector
@@ -256,17 +259,45 @@ __device__ __forceinline__ void compute_constraint_data(
   }
 }
 
-__device__ __forceinline__ void compute_hessian_assemble(
-    int elem_idx, int qp_idx, GPU_FEAT10_Data* d_data,
-    Eigen::Map<Eigen::MatrixXd>
-        H_global,  // Eigen Map to global Hessian (n_dofs x n_dofs)
-    double h) {    // time-step scaling: we scatter h * K_elem into H_global
+// --- CSR-version Hessian assembly for FEAT10 ---
+// Local binary-search helper (self-contained)
+static __device__ __forceinline__ int binary_search_column_csr(const int *cols, int n_cols, int target) {
+  int left = 0, right = n_cols - 1;
+  while (left <= right) {
+    int mid = left + ((right - left) >> 1);
+    int v = cols[mid];
+    if (v == target) return mid;
+    if (v < target) left = mid + 1;
+    else right = mid - 1;
+  }
+  return -1;
+}
 
-  // clang-format off
+// Template declaration
+template<typename ElementType>
+__device__ __forceinline__ void compute_hessian_assemble_csr(ElementType* d_data,
+    SyncedNewtonSolver* d_solver,
+    int elem_idx,
+    int qp_idx,
+    int* d_csr_row_offsets,
+    int* d_csr_col_indices,
+    double* d_csr_values,
+    double h);
 
-  // Get n_dofs from the map dimensions
-  int n_dofs = H_global.rows();  // or H_global.cols() (square matrix)
+// Explicit specialization for FEAT10
+template<>
+__device__ __forceinline__ void compute_hessian_assemble_csr<GPU_FEAT10_Data>(
+    GPU_FEAT10_Data* d_data,
+    SyncedNewtonSolver* d_solver,
+    int elem_idx,
+    int qp_idx,
+    int* d_csr_row_offsets,
+    int* d_csr_col_indices,
+    double* d_csr_values,
+    double h) {
 
+  // Reuse all local computations from compute_hessian_assemble and then
+  // scatter by searching the CSR row for each (global_row, global_col).
 
   // Get element connectivity
   int global_node_indices[10];
@@ -275,17 +306,17 @@ __device__ __forceinline__ void compute_hessian_assemble(
     global_node_indices[node] = d_data->element_connectivity()(elem_idx, node);
   }
 
-  // Get current nodal positions for this element
+  // Read current nodal positions
   double x_nodes[10][3];
   #pragma unroll
   for (int node = 0; node < 10; node++) {
-    int global_node_idx = global_node_indices[node];
-    x_nodes[node][0]    = d_data->x12()(global_node_idx);
-    x_nodes[node][1]    = d_data->y12()(global_node_idx);
-    x_nodes[node][2]    = d_data->z12()(global_node_idx);
+    int gn = global_node_indices[node];
+    x_nodes[node][0] = d_data->x12()(gn);
+    x_nodes[node][1] = d_data->y12()(gn);
+    x_nodes[node][2] = d_data->z12()(gn);
   }
 
-  // Get precomputed shape function gradients grad_N (rename to avoid H clash)
+  // grad_N
   double grad_N[10][3];
   #pragma unroll
   for (int a = 0; a < 10; a++) {
@@ -294,7 +325,7 @@ __device__ __forceinline__ void compute_hessian_assemble(
     grad_N[a][2] = d_data->grad_N_ref(elem_idx, qp_idx)(a, 2);
   }
 
-  // Compute deformation gradient F = sum_a (x_a ⊗ grad_N[a]^T)
+  // Compute F, C, FFT, Fh etc. (same math as existing compute_hessian_assemble)
   double F[3][3] = {{0.0}};
   #pragma unroll
   for (int a = 0; a < 10; a++) {
@@ -305,24 +336,21 @@ __device__ __forceinline__ void compute_hessian_assemble(
     }
   }
 
-  // Compute C = F^T * F
   double C[3][3] = {{0.0}};
   #pragma unroll
   for (int i = 0; i < 3; i++) {
-  #pragma unroll
+    #pragma unroll
     for (int j = 0; j < 3; j++) {
-  #pragma unroll
+      #pragma unroll
       for (int k = 0; k < 3; k++) {
         C[i][j] += F[k][i] * F[k][j];
       }
     }
   }
 
-  // Compute tr(E) where E = 0.5*(C - I)
   double trC = C[0][0] + C[1][1] + C[2][2];
   double trE = 0.5 * (trC - 3.0);
 
-  // Compute F * F^T (FFT)
   double FFT[3][3] = {{0.0}};
   #pragma unroll
   for (int i = 0; i < 3; i++) {
@@ -335,7 +363,6 @@ __device__ __forceinline__ void compute_hessian_assemble(
     }
   }
 
-  // Precompute F*h for all nodes: Fh[i] = F @ grad_N[i]
   double Fh[10][3];
   #pragma unroll
   for (int i = 0; i < 10; i++) {
@@ -349,57 +376,35 @@ __device__ __forceinline__ void compute_hessian_assemble(
     }
   }
 
-  // Material and quadrature
   double lambda = d_data->lambda();
-  double mu     = d_data->mu();
+  double mu = d_data->mu();
   double detJ   = d_data->detJ_ref(elem_idx, qp_idx);
   double wq     = d_data->tet5pt_weights(qp_idx);
   double dV     = detJ * wq;
 
-  // Local element tangent K_elem (30 x 30), initialize to zero
+  // Local K_elem 30x30
   double K_elem[30][30];
   #pragma unroll
-  for (int ii = 0; ii < 30; ii++) {
-    #pragma unroll
-    for (int jj = 0; jj < 30; jj++) {
+  for (int ii = 0; ii < 30; ii++)
+    for (int jj = 0; jj < 30; jj++)
       K_elem[ii][jj] = 0.0;
-    }
-  }
 
-  // Build 3x3 blocks K_ij and store into K_elem
   #pragma unroll
   for (int i = 0; i < 10; i++) {
     #pragma unroll
     for (int j = 0; j < 10; j++) {
-      // compute hij and Fhj_dot_Fhi scalars
-      double hij = grad_N[j][0] * grad_N[i][0] +
-                   grad_N[j][1] * grad_N[i][1] +
-                   grad_N[j][2] * grad_N[i][2];
+      double hij = grad_N[j][0] * grad_N[i][0] + grad_N[j][1] * grad_N[i][1] + grad_N[j][2] * grad_N[i][2];
+      double Fhj_dot_Fhi = Fh[j][0]*Fh[i][0] + Fh[j][1]*Fh[i][1] + Fh[j][2]*Fh[i][2];
 
-      double Fhj_dot_Fhi =
-        Fh[j][0] * Fh[i][0] + Fh[j][1] * Fh[i][1] + Fh[j][2] * Fh[i][2];
-
-      // for block (i,j) fill 3x3
       #pragma unroll
       for (int d = 0; d < 3; d++) {
         #pragma unroll
         for (int e = 0; e < 3; e++) {
-          // A = λ (Fh_i)(Fh_j)^T
-          double A_de = lambda * Fh[i][d] * Fh[j][e];
-
-          // B = λ tr(E) (h_j^T h_i) I
-          double B_de = lambda * trE * hij * (d == e ? 1.0 : 0.0);
-
-          // C1 = μ (Fh_j)^T(Fh_i) I
-          double C1_de = mu * Fhj_dot_Fhi * (d == e ? 1.0 : 0.0);
-
-          // D = μ (Fh_j)(Fh_i)^T
-          double D_de = mu * Fh[j][d] * Fh[i][e];
-
-          // Etrm = μ (h_j^T h_i) F F^T
+          double A_de    = lambda * Fh[i][d] * Fh[j][e];
+          double B_de    = lambda * trE * hij * (d == e ? 1.0 : 0.0);
+          double C1_de   = mu * Fhj_dot_Fhi * (d == e ? 1.0 : 0.0);
+          double D_de    = mu * Fh[j][d] * Fh[i][e];
           double Etrm_de = mu * hij * FFT[d][e];
-
-          // Ftrm = −μ (h_j^T h_i) I
           double Ftrm_de = -mu * hij * (d == e ? 1.0 : 0.0);
 
           double K_ij_de = (A_de + B_de + C1_de + D_de + Etrm_de + Ftrm_de) * dV;
@@ -412,28 +417,29 @@ __device__ __forceinline__ void compute_hessian_assemble(
     }
   }
 
-  // Scatter using Eigen Map syntax
-  #pragma unroll
+  // Scatter to CSR
   for (int local_row_node = 0; local_row_node < 10; local_row_node++) {
     int global_node_row = global_node_indices[local_row_node];
-    #pragma unroll
     for (int r_dof = 0; r_dof < 3; r_dof++) {
       int global_row = 3 * global_node_row + r_dof;
       int local_row = 3 * local_row_node + r_dof;
 
-      #pragma unroll
+      int row_begin = d_csr_row_offsets[global_row];
+      int row_end   = d_csr_row_offsets[global_row + 1];
+      int row_len   = row_end - row_begin;
+
       for (int local_col_node = 0; local_col_node < 10; local_col_node++) {
         int global_node_col = global_node_indices[local_col_node];
-        #pragma unroll
         for (int c_dof = 0; c_dof < 3; c_dof++) {
           int global_col = 3 * global_node_col + c_dof;
-          int local_col = 3 * local_col_node + c_dof;
+          int local_col  = 3 * local_col_node + c_dof;
 
-          // Use Eigen Map to atomically add (access underlying data pointer)
-          atomicAdd(&H_global(global_row, global_col), h * K_elem[local_row][local_col]);
+          int pos = binary_search_column_csr(&d_csr_col_indices[row_begin], row_len, global_col);
+          if (pos >= 0) {
+            atomicAdd(&d_csr_values[row_begin + pos], h * K_elem[local_row][local_col]);
+          }
         }
       }
     }
   }
-  // clang-format on
 }

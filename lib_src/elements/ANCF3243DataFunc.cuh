@@ -1,6 +1,9 @@
 #pragma once
 #include "ANCF3243Data.cuh"
 
+// forward-declare solver type (pointer-only used here)
+struct SyncedNewtonSolver;
+
 __device__ __forceinline__ void compute_p(int, int, GPU_ANCF3243_Data *);
 __device__ __forceinline__ void compute_internal_force(int, int,
                                                        GPU_ANCF3243_Data *);
@@ -297,28 +300,47 @@ __device__ __forceinline__ void clear_internal_force(
   }
 }
 
-// Add at the end of the file, after clear_internal_force()
 
-__device__ __forceinline__ void compute_hessian_assemble(
-    int elem_idx, int qp_idx, GPU_ANCF3243_Data *d_data,
-    Eigen::Map<Eigen::MatrixXd>
-        H_global,  // Eigen Map to global Hessian (n_dofs x n_dofs)
-    double h) {    // time-step scaling: we scatter h * K_elem into H_global
+// --- CSR-version Hessian assembly for ANCF3243 ---
+static __device__ __forceinline__ int binary_search_column_csr_3243(const int *cols, int n_cols, int target) {
+  int left = 0, right = n_cols - 1;
+  while (left <= right) {
+    int mid = left + ((right - left) >> 1);
+    int v = cols[mid];
+    if (v == target) return mid;
+    if (v < target) left = mid + 1;
+    else right = mid - 1;
+  }
+  return -1;
+}
 
-  // clang-format off
+template<typename ElementType>
+__device__ __forceinline__ void compute_hessian_assemble_csr(ElementType* d_data,
+    SyncedNewtonSolver* d_solver,
+    int elem_idx,
+    int qp_idx,
+    int* d_csr_row_offsets,
+    int* d_csr_col_indices,
+    double* d_csr_values,
+    double h);
 
-  // Get n_dofs from the map dimensions
-  int n_dofs = H_global.rows();  // or H_global.cols() (square matrix)
+// Explicit specialization for GPU_ANCF3243_Data
+template<>
+__device__ __forceinline__ void compute_hessian_assemble_csr<GPU_ANCF3243_Data>(
+    GPU_ANCF3243_Data* d_data,
+    SyncedNewtonSolver* d_solver,
+    int elem_idx,
+    int qp_idx,
+    int* d_csr_row_offsets,
+    int* d_csr_col_indices,
+    double* d_csr_values,
+    double h) {
 
-  // Get element connectivity (2 physical nodes)
-  int node0 = d_data->element_node(elem_idx, 0);
-  int node1 = d_data->element_node(elem_idx, 1);
+  // Copy the element-local K construction (24×24) from compute_hessian_assemble,
+  // then scatter to CSR using local mapping: coef_idx = node_global * 4 + dof_local
 
-  // Extract local nodal coefficients (8 coefficients per dimension)
-  // Each node contributes 4 DOFs: [pos, dx, dy, dz] or similar
-  // Total: 8 shape functions × 3 dimensions = 24 DOFs per element
-  double e[Quadrature::N_SHAPE_3243][3]; // 8 × 3
-  
+  // Extract e[8][3]
+  double e[Quadrature::N_SHAPE_3243][3];
   #pragma unroll
   for (int i = 0; i < Quadrature::N_SHAPE_3243; i++) {
     const int node_local  = (i < 4) ? 0 : 1;
@@ -331,16 +353,14 @@ __device__ __forceinline__ void compute_hessian_assemble(
     e[i][2] = d_data->z12()(coef_idx);
   }
 
-  // Get precomputed shape function gradients ∇s_i (in material coordinates u,v,w)
   double grad_s[Quadrature::N_SHAPE_3243][3];
   #pragma unroll
   for (int i = 0; i < Quadrature::N_SHAPE_3243; i++) {
-    grad_s[i][0] = d_data->ds_du_pre(qp_idx)(i, 0); // ∂s_i/∂u
-    grad_s[i][1] = d_data->ds_du_pre(qp_idx)(i, 1); // ∂s_i/∂v
-    grad_s[i][2] = d_data->ds_du_pre(qp_idx)(i, 2); // ∂s_i/∂w
+    grad_s[i][0] = d_data->ds_du_pre(qp_idx)(i, 0);
+    grad_s[i][1] = d_data->ds_du_pre(qp_idx)(i, 1);
+    grad_s[i][2] = d_data->ds_du_pre(qp_idx)(i, 2);
   }
 
-  // Compute deformation gradient F = sum_i (e_i ⊗ ∇s_i)
   double F[3][3] = {{0.0}};
   #pragma unroll
   for (int i = 0; i < Quadrature::N_SHAPE_3243; i++) {
@@ -353,7 +373,6 @@ __device__ __forceinline__ void compute_hessian_assemble(
     }
   }
 
-  // Compute C = F^T * F
   double C[3][3] = {{0.0}};
   #pragma unroll
   for (int i = 0; i < 3; i++) {
@@ -366,11 +385,9 @@ __device__ __forceinline__ void compute_hessian_assemble(
     }
   }
 
-  // Compute tr(E) where E = 0.5*(C - I)
   double trC = C[0][0] + C[1][1] + C[2][2];
   double trE = 0.5 * (trC - 3.0);
 
-  // Compute F * F^T (FFT)
   double FFT[3][3] = {{0.0}};
   #pragma unroll
   for (int i = 0; i < 3; i++) {
@@ -383,7 +400,6 @@ __device__ __forceinline__ void compute_hessian_assemble(
     }
   }
 
-  // Precompute F*grad_s for all shape functions: Fh[i] = F @ grad_s[i]
   double Fh[Quadrature::N_SHAPE_3243][3];
   #pragma unroll
   for (int i = 0; i < Quadrature::N_SHAPE_3243; i++) {
@@ -397,61 +413,37 @@ __device__ __forceinline__ void compute_hessian_assemble(
     }
   }
 
-  // Material parameters
   double lambda = d_data->lambda();
   double mu     = d_data->mu();
-  
-  // Quadrature weight and geometry
-  double geom = (d_data->L() * d_data->W() * d_data->H()) / 8.0;
-  double scale = d_data->weight_xi()(qp_idx / (Quadrature::N_QP_2 * Quadrature::N_QP_2)) *
-                 d_data->weight_eta()((qp_idx / Quadrature::N_QP_2) % Quadrature::N_QP_2) *
-                 d_data->weight_zeta()(qp_idx % Quadrature::N_QP_2);
+  double geom   = (d_data->L() * d_data->W() * d_data->H()) / 8.0;
+  double scale  = d_data->weight_xi()(qp_idx / (Quadrature::N_QP_2 * Quadrature::N_QP_2)) *
+                  d_data->weight_eta()((qp_idx / Quadrature::N_QP_2) % Quadrature::N_QP_2) *
+                  d_data->weight_zeta()(qp_idx % Quadrature::N_QP_2);
   double dV = scale * geom;
 
-  // Local element tangent K_elem (24 x 24), initialize to zero
+  // Local K_elem 24x24
   double K_elem[24][24];
   #pragma unroll
-  for (int ii = 0; ii < 24; ii++) {
-    #pragma unroll
-    for (int jj = 0; jj < 24; jj++) {
+  for (int ii = 0; ii < 24; ii++)
+    for (int jj = 0; jj < 24; jj++)
       K_elem[ii][jj] = 0.0;
-    }
-  }
 
-  // Build 3x3 blocks K_ij and store into K_elem
   #pragma unroll
   for (int i = 0; i < Quadrature::N_SHAPE_3243; i++) {
     #pragma unroll
     for (int j = 0; j < Quadrature::N_SHAPE_3243; j++) {
-      // compute h_ij = grad_s[j]^T * grad_s[i] and Fh_j dot Fh_i
-      double h_ij = grad_s[j][0] * grad_s[i][0] +
-                    grad_s[j][1] * grad_s[i][1] +
-                    grad_s[j][2] * grad_s[i][2];
+      double h_ij = grad_s[j][0] * grad_s[i][0] + grad_s[j][1] * grad_s[i][1] + grad_s[j][2] * grad_s[i][2];
+      double Fhj_dot_Fhi = Fh[j][0]*Fh[i][0] + Fh[j][1]*Fh[i][1] + Fh[j][2]*Fh[i][2];
 
-      double Fhj_dot_Fhi =
-        Fh[j][0] * Fh[i][0] + Fh[j][1] * Fh[i][1] + Fh[j][2] * Fh[i][2];
-
-      // for block (i,j) fill 3x3
       #pragma unroll
       for (int d = 0; d < 3; d++) {
         #pragma unroll
         for (int e = 0; e < 3; e++) {
-          // A = λ (Fh_i)(Fh_j)^T
-          double A_de = lambda * Fh[i][d] * Fh[j][e];
-
-          // B = λ tr(E) h_ij I
-          double B_de = lambda * trE * h_ij * (d == e ? 1.0 : 0.0);
-
-          // C1 = μ (Fh_j)^T(Fh_i) I
-          double C1_de = mu * Fhj_dot_Fhi * (d == e ? 1.0 : 0.0);
-
-          // D = μ (Fh_j)(Fh_i)^T
-          double D_de = mu * Fh[j][d] * Fh[i][e];
-
-          // Etrm = μ h_ij F F^T
+          double A_de    = lambda * Fh[i][d] * Fh[j][e];
+          double B_de    = lambda * trE * h_ij * (d == e ? 1.0 : 0.0);
+          double C1_de   = mu * Fhj_dot_Fhi * (d == e ? 1.0 : 0.0);
+          double D_de    = mu * Fh[j][d] * Fh[i][e];
           double Etrm_de = mu * h_ij * FFT[d][e];
-
-          // Ftrm = −μ h_ij I
           double Ftrm_de = -mu * h_ij * (d == e ? 1.0 : 0.0);
 
           double K_ij_de = (A_de + B_de + C1_de + D_de + Etrm_de + Ftrm_de) * dV;
@@ -464,37 +456,36 @@ __device__ __forceinline__ void compute_hessian_assemble(
     }
   }
 
-  // Scatter to global Hessian using element connectivity
-  // Map local indices (0-7) to global coefficient indices
-  #pragma unroll
+  // Scatter to CSR using mapping coef_idx = node_global * 4 + dof_local
   for (int local_row_idx = 0; local_row_idx < Quadrature::N_SHAPE_3243; local_row_idx++) {
     const int node_local_row  = (local_row_idx < 4) ? 0 : 1;
     const int dof_local_row   = local_row_idx % 4;
     const int node_global_row = d_data->element_node(elem_idx, node_local_row);
     const int coef_idx_row    = node_global_row * 4 + dof_local_row;
 
-    #pragma unroll
     for (int r_dof = 0; r_dof < 3; r_dof++) {
       int global_row = 3 * coef_idx_row + r_dof;
       int local_row = 3 * local_row_idx + r_dof;
 
-      #pragma unroll
+      int row_begin = d_csr_row_offsets[global_row];
+      int row_len   = d_csr_row_offsets[global_row + 1] - row_begin;
+
       for (int local_col_idx = 0; local_col_idx < Quadrature::N_SHAPE_3243; local_col_idx++) {
         const int node_local_col  = (local_col_idx < 4) ? 0 : 1;
         const int dof_local_col   = local_col_idx % 4;
         const int node_global_col = d_data->element_node(elem_idx, node_local_col);
         const int coef_idx_col    = node_global_col * 4 + dof_local_col;
 
-        #pragma unroll
         for (int c_dof = 0; c_dof < 3; c_dof++) {
           int global_col = 3 * coef_idx_col + c_dof;
-          int local_col = 3 * local_col_idx + c_dof;
+          int local_col  = 3 * local_col_idx + c_dof;
 
-          // Use Eigen Map to atomically add (access underlying data pointer)
-          atomicAdd(&H_global(global_row, global_col), h * K_elem[local_row][local_col]);
+          int pos = binary_search_column_csr_3243(&d_csr_col_indices[row_begin], row_len, global_col);
+          if (pos >= 0) {
+            atomicAdd(&d_csr_values[row_begin + pos], h * K_elem[local_row][local_col]);
+          }
         }
       }
     }
   }
-  // clang-format on
 }
