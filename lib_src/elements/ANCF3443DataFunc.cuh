@@ -4,7 +4,8 @@
 // forward-declare solver type (pointer-only used here)
 struct SyncedNewtonSolver;
 
-__device__ __forceinline__ void compute_p(int, int, GPU_ANCF3443_Data *, const double *, double);
+__device__ __forceinline__ void compute_p(int, int, GPU_ANCF3443_Data *,
+                                          const double *, double);
 __device__ __forceinline__ void compute_internal_force(int, int,
                                                        GPU_ANCF3443_Data *);
 __device__ __forceinline__ void compute_constraint_data(GPU_ANCF3443_Data *);
@@ -203,7 +204,7 @@ __device__ __forceinline__ void ancf3443_calc_det_J_xi(
 
 __device__ __forceinline__ void compute_p(int elem_idx, int qp_idx,
                                           GPU_ANCF3443_Data *d_data,
-                                          const double* __restrict__ v_guess,
+                                          const double *__restrict__ v_guess,
                                           double dt) {
   // clang-format off
     // --- Compute C = F^T * F ---
@@ -470,58 +471,52 @@ __device__ __forceinline__ void clear_internal_force(
 }
 
 // --- CSR-version Hessian assembly for ANCF3443 ---
-static __device__ __forceinline__ int binary_search_column_csr_3443(const int *cols, int n_cols, int target) {
+static __device__ __forceinline__ int binary_search_column_csr_3443(
+    const int *cols, int n_cols, int target) {
   int left = 0, right = n_cols - 1;
   while (left <= right) {
     int mid = left + ((right - left) >> 1);
-    int v = cols[mid];
-    if (v == target) return mid;
-    if (v < target) left = mid + 1;
-    else right = mid - 1;
+    int v   = cols[mid];
+    if (v == target)
+      return mid;
+    if (v < target)
+      left = mid + 1;
+    else
+      right = mid - 1;
   }
   return -1;
 }
 
-template<typename ElementType>
-__device__ __forceinline__ void compute_hessian_assemble_csr(ElementType* d_data,
-    SyncedNewtonSolver* d_solver,
-    int elem_idx,
-    int qp_idx,
-    int* d_csr_row_offsets,
-    int* d_csr_col_indices,
-    double* d_csr_values,
+template <typename ElementType>
+__device__ __forceinline__ void compute_hessian_assemble_csr(
+    ElementType *d_data, SyncedNewtonSolver *d_solver, int elem_idx, int qp_idx,
+    int *d_csr_row_offsets, int *d_csr_col_indices, double *d_csr_values,
     double h);
 
 // Explicit specialization for GPU_ANCF3443_Data
-template<>
+template <>
 __device__ __forceinline__ void compute_hessian_assemble_csr<GPU_ANCF3443_Data>(
-    GPU_ANCF3443_Data* d_data,
-    SyncedNewtonSolver* d_solver,
-    int elem_idx,
-    int qp_idx,
-    int* d_csr_row_offsets,
-    int* d_csr_col_indices,
-    double* d_csr_values,
-    double h) {
-
+    GPU_ANCF3443_Data *d_data, SyncedNewtonSolver *d_solver, int elem_idx,
+    int qp_idx, int *d_csr_row_offsets, int *d_csr_col_indices,
+    double *d_csr_values, double h) {
   // Build local element K_elem (48x48) similarly to FEAT10/ANCF3243.
   // Use existing local nodal extraction provided in compute_hessian_assemble
   // (if you need the full constitutive formulas I can copy them in).
 
   double e[Quadrature::N_SHAPE_3443][3];
-  #pragma unroll
+#pragma unroll
   for (int i = 0; i < Quadrature::N_SHAPE_3443; i++) {
-    int node_local = i / 4;           // which physical node (0..3)
-    int dof_local  = i % 4;           // which local DOF
+    int node_local  = i / 4;  // which physical node (0..3)
+    int dof_local   = i % 4;  // which local DOF
     int node_global = d_data->element_connectivity()(elem_idx, node_local);
-    int coef_idx = node_global * 4 + dof_local;
-    e[i][0] = d_data->x12()(coef_idx);
-    e[i][1] = d_data->y12()(coef_idx);
-    e[i][2] = d_data->z12()(coef_idx);
+    int coef_idx    = node_global * 4 + dof_local;
+    e[i][0]         = d_data->x12()(coef_idx);
+    e[i][1]         = d_data->y12()(coef_idx);
+    e[i][2]         = d_data->z12()(coef_idx);
   }
 
   double grad_s[Quadrature::N_SHAPE_3443][3];
-  #pragma unroll
+#pragma unroll
   for (int i = 0; i < Quadrature::N_SHAPE_3443; i++) {
     grad_s[i][0] = d_data->ds_du_pre(qp_idx)(i, 0);
     grad_s[i][1] = d_data->ds_du_pre(qp_idx)(i, 1);
@@ -529,11 +524,11 @@ __device__ __forceinline__ void compute_hessian_assemble_csr<GPU_ANCF3443_Data>(
   }
 
   double F[3][3] = {{0.0}};
-  #pragma unroll
+#pragma unroll
   for (int i = 0; i < Quadrature::N_SHAPE_3443; i++) {
-    #pragma unroll
+#pragma unroll
     for (int row = 0; row < 3; row++) {
-      #pragma unroll
+#pragma unroll
       for (int col = 0; col < 3; col++) {
         F[row][col] += e[i][row] * grad_s[i][col];
       }
@@ -541,11 +536,11 @@ __device__ __forceinline__ void compute_hessian_assemble_csr<GPU_ANCF3443_Data>(
   }
 
   double C[3][3] = {{0.0}};
-  #pragma unroll
+#pragma unroll
   for (int i = 0; i < 3; i++) {
-    #pragma unroll
+#pragma unroll
     for (int j = 0; j < 3; j++) {
-      #pragma unroll
+#pragma unroll
       for (int k = 0; k < 3; k++) {
         C[i][j] += F[k][i] * F[k][j];
       }
@@ -556,11 +551,11 @@ __device__ __forceinline__ void compute_hessian_assemble_csr<GPU_ANCF3443_Data>(
   double trE = 0.5 * (trC - 3.0);
 
   double FFT[3][3] = {{0.0}};
-  #pragma unroll
+#pragma unroll
   for (int i = 0; i < 3; i++) {
-    #pragma unroll
+#pragma unroll
     for (int j = 0; j < 3; j++) {
-      #pragma unroll
+#pragma unroll
       for (int k = 0; k < 3; k++) {
         FFT[i][j] += F[i][k] * F[j][k];
       }
@@ -568,12 +563,12 @@ __device__ __forceinline__ void compute_hessian_assemble_csr<GPU_ANCF3443_Data>(
   }
 
   double Fh[Quadrature::N_SHAPE_3443][3];
-  #pragma unroll
+#pragma unroll
   for (int i = 0; i < Quadrature::N_SHAPE_3443; i++) {
-    #pragma unroll
+#pragma unroll
     for (int row = 0; row < 3; row++) {
       Fh[i][row] = 0.0;
-      #pragma unroll
+#pragma unroll
       for (int col = 0; col < 3; col++) {
         Fh[i][row] += F[row][col] * grad_s[i][col];
       }
@@ -583,28 +578,31 @@ __device__ __forceinline__ void compute_hessian_assemble_csr<GPU_ANCF3443_Data>(
   double lambda = d_data->lambda();
   double mu     = d_data->mu();
   double geom   = (d_data->L() * d_data->W() * d_data->H()) / 8.0;
-  double scale  = d_data->weight_xi()(qp_idx / (Quadrature::N_QP_4 * Quadrature::N_QP_3)) *
-                  d_data->weight_eta()((qp_idx / Quadrature::N_QP_3) % Quadrature::N_QP_4) *
-                  d_data->weight_zeta()(qp_idx % Quadrature::N_QP_3);
+  double scale =
+      d_data->weight_xi()(qp_idx / (Quadrature::N_QP_4 * Quadrature::N_QP_3)) *
+      d_data->weight_eta()((qp_idx / Quadrature::N_QP_3) % Quadrature::N_QP_4) *
+      d_data->weight_zeta()(qp_idx % Quadrature::N_QP_3);
   double dV = scale * geom;
 
   // Local K_elem (48 x 48)
-  const int Nloc = Quadrature::N_SHAPE_3443 * 3; // 16*3 = 48
-  // Because large stack arrays can be heavy, but follow pattern from other DataFunc
-  // Implement K_elem as a local array
+  const int Nloc = Quadrature::N_SHAPE_3443 * 3;  // 16*3 = 48
+  // Because large stack arrays can be heavy, but follow pattern from other
+  // DataFunc Implement K_elem as a local array
   double K_elem[48][48];
-  #pragma unroll
+#pragma unroll
   for (int ii = 0; ii < Nloc; ii++)
     for (int jj = 0; jj < Nloc; jj++)
       K_elem[ii][jj] = 0.0;
 
-  // Build K_elem using the same constitutive building block pattern
-  #pragma unroll
+// Build K_elem using the same constitutive building block pattern
+#pragma unroll
   for (int i = 0; i < Quadrature::N_SHAPE_3443; i++) {
-    #pragma unroll
+#pragma unroll
     for (int j = 0; j < Quadrature::N_SHAPE_3443; j++) {
-      double h_ij = grad_s[j][0] * grad_s[i][0] + grad_s[j][1] * grad_s[i][1] + grad_s[j][2] * grad_s[i][2];
-      double Fhj_dot_Fhi = Fh[j][0]*Fh[i][0] + Fh[j][1]*Fh[i][1] + Fh[j][2]*Fh[i][2];
+      double h_ij = grad_s[j][0] * grad_s[i][0] + grad_s[j][1] * grad_s[i][1] +
+                    grad_s[j][2] * grad_s[i][2];
+      double Fhj_dot_Fhi =
+          Fh[j][0] * Fh[i][0] + Fh[j][1] * Fh[i][1] + Fh[j][2] * Fh[i][2];
 
       for (int d = 0; d < 3; d++) {
         for (int eidx = 0; eidx < 3; eidx++) {
@@ -615,10 +613,11 @@ __device__ __forceinline__ void compute_hessian_assemble_csr<GPU_ANCF3443_Data>(
           double Etrm_de = mu * h_ij * FFT[d][eidx];
           double Ftrm_de = -mu * h_ij * (d == eidx ? 1.0 : 0.0);
 
-          double K_ij_de = (A_de + B_de + C1_de + D_de + Etrm_de + Ftrm_de) * dV;
+          double K_ij_de =
+              (A_de + B_de + C1_de + D_de + Etrm_de + Ftrm_de) * dV;
 
-          int row = 3 * i + d;
-          int col = 3 * j + eidx;
+          int row          = 3 * i + d;
+          int col          = 3 * j + eidx;
           K_elem[row][col] = K_ij_de;
         }
       }
@@ -629,29 +628,34 @@ __device__ __forceinline__ void compute_hessian_assemble_csr<GPU_ANCF3443_Data>(
   for (int local_row = 0; local_row < Quadrature::N_SHAPE_3443; local_row++) {
     int node_local_row = local_row / 4;
     int dof_local_row  = local_row % 4;
-    int node_global_row = d_data->element_connectivity()(elem_idx, node_local_row);
+    int node_global_row =
+        d_data->element_connectivity()(elem_idx, node_local_row);
     int coef_idx_row = node_global_row * 4 + dof_local_row;
 
     for (int r_dof = 0; r_dof < 3; r_dof++) {
-      int global_row = 3 * coef_idx_row + r_dof;
+      int global_row      = 3 * coef_idx_row + r_dof;
       int local_row_index = 3 * local_row + r_dof;
 
       int row_begin = d_csr_row_offsets[global_row];
-      int row_len = d_csr_row_offsets[global_row + 1] - row_begin;
+      int row_len   = d_csr_row_offsets[global_row + 1] - row_begin;
 
-      for (int local_col = 0; local_col < Quadrature::N_SHAPE_3443; local_col++) {
+      for (int local_col = 0; local_col < Quadrature::N_SHAPE_3443;
+           local_col++) {
         int node_local_col = local_col / 4;
         int dof_local_col  = local_col % 4;
-        int node_global_col = d_data->element_connectivity()(elem_idx, node_local_col);
+        int node_global_col =
+            d_data->element_connectivity()(elem_idx, node_local_col);
         int coef_idx_col = node_global_col * 4 + dof_local_col;
 
         for (int c_dof = 0; c_dof < 3; c_dof++) {
-          int global_col = 3 * coef_idx_col + c_dof;
+          int global_col      = 3 * coef_idx_col + c_dof;
           int local_col_index = 3 * local_col + c_dof;
 
-          int pos = binary_search_column_csr_3443(&d_csr_col_indices[row_begin], row_len, global_col);
+          int pos = binary_search_column_csr_3443(&d_csr_col_indices[row_begin],
+                                                  row_len, global_col);
           if (pos >= 0) {
-            atomicAdd(&d_csr_values[row_begin + pos], h * K_elem[local_row_index][local_col_index]);
+            atomicAdd(&d_csr_values[row_begin + pos],
+                      h * K_elem[local_row_index][local_col_index]);
           }
         }
       }
@@ -659,30 +663,30 @@ __device__ __forceinline__ void compute_hessian_assemble_csr<GPU_ANCF3443_Data>(
   }
 
   // --- Viscous tangent (Kelvin-Voigt) assembly: C_elem (Nloc*3 x Nloc*3) ---
-  const int Nloc3443 = Quadrature::N_SHAPE_3443; // typically 16
-  const int Ndof3443 = Nloc3443 * 3; // 48
+  const int Nloc3443 = Quadrature::N_SHAPE_3443;  // typically 16
+  const int Ndof3443 = Nloc3443 * 3;              // 48
   double C_elem_3443[48][48];
-  #pragma unroll
+#pragma unroll
   for (int ii = 0; ii < Ndof3443; ii++)
     for (int jj = 0; jj < Ndof3443; jj++)
       C_elem_3443[ii][jj] = 0.0;
 
-  double eta_d_3443 = d_data->eta_damp();
+  double eta_d_3443    = d_data->eta_damp();
   double lambda_d_3443 = d_data->lambda_damp();
 
-  #pragma unroll
+#pragma unroll
   for (int a = 0; a < Nloc3443; a++) {
-    double h_a0 = grad_s[a][0];
-    double h_a1 = grad_s[a][1];
-    double h_a2 = grad_s[a][2];
+    double h_a0  = grad_s[a][0];
+    double h_a1  = grad_s[a][1];
+    double h_a2  = grad_s[a][2];
     double Fh_a0 = Fh[a][0];
     double Fh_a1 = Fh[a][1];
     double Fh_a2 = Fh[a][2];
-    #pragma unroll
+#pragma unroll
     for (int b = 0; b < Nloc3443; b++) {
-      double h_b0 = grad_s[b][0];
-      double h_b1 = grad_s[b][1];
-      double h_b2 = grad_s[b][2];
+      double h_b0  = grad_s[b][0];
+      double h_b1  = grad_s[b][1];
+      double h_b2  = grad_s[b][2];
       double Fh_b0 = Fh[b][0];
       double Fh_b1 = Fh[b][1];
       double Fh_b2 = Fh[b][2];
@@ -690,20 +694,47 @@ __device__ __forceinline__ void compute_hessian_assemble_csr<GPU_ANCF3443_Data>(
       double hdot = h_a0 * h_b0 + h_a1 * h_b1 + h_a2 * h_b2;
 
       // build 3x3 block for (a,b)
-      double B00 = (eta_d_3443 * (Fh_b0 * Fh_a0) + eta_d_3443 * FFT[0][0] * hdot + lambda_d_3443 * (Fh_a0 * Fh_b0)) * dV;
-      double B01 = (eta_d_3443 * (Fh_b0 * Fh_a1) + eta_d_3443 * FFT[0][1] * hdot + lambda_d_3443 * (Fh_a0 * Fh_b1)) * dV;
-      double B02 = (eta_d_3443 * (Fh_b0 * Fh_a2) + eta_d_3443 * FFT[0][2] * hdot + lambda_d_3443 * (Fh_a0 * Fh_b2)) * dV;
+      double B00 =
+          (eta_d_3443 * (Fh_b0 * Fh_a0) + eta_d_3443 * FFT[0][0] * hdot +
+           lambda_d_3443 * (Fh_a0 * Fh_b0)) *
+          dV;
+      double B01 =
+          (eta_d_3443 * (Fh_b0 * Fh_a1) + eta_d_3443 * FFT[0][1] * hdot +
+           lambda_d_3443 * (Fh_a0 * Fh_b1)) *
+          dV;
+      double B02 =
+          (eta_d_3443 * (Fh_b0 * Fh_a2) + eta_d_3443 * FFT[0][2] * hdot +
+           lambda_d_3443 * (Fh_a0 * Fh_b2)) *
+          dV;
 
-      double B10 = (eta_d_3443 * (Fh_b1 * Fh_a0) + eta_d_3443 * FFT[1][0] * hdot + lambda_d_3443 * (Fh_a1 * Fh_b0)) * dV;
-      double B11 = (eta_d_3443 * (Fh_b1 * Fh_a1) + eta_d_3443 * FFT[1][1] * hdot + lambda_d_3443 * (Fh_a1 * Fh_b1)) * dV;
-      double B12 = (eta_d_3443 * (Fh_b1 * Fh_a2) + eta_d_3443 * FFT[1][2] * hdot + lambda_d_3443 * (Fh_a1 * Fh_b2)) * dV;
+      double B10 =
+          (eta_d_3443 * (Fh_b1 * Fh_a0) + eta_d_3443 * FFT[1][0] * hdot +
+           lambda_d_3443 * (Fh_a1 * Fh_b0)) *
+          dV;
+      double B11 =
+          (eta_d_3443 * (Fh_b1 * Fh_a1) + eta_d_3443 * FFT[1][1] * hdot +
+           lambda_d_3443 * (Fh_a1 * Fh_b1)) *
+          dV;
+      double B12 =
+          (eta_d_3443 * (Fh_b1 * Fh_a2) + eta_d_3443 * FFT[1][2] * hdot +
+           lambda_d_3443 * (Fh_a1 * Fh_b2)) *
+          dV;
 
-      double B20 = (eta_d_3443 * (Fh_b2 * Fh_a0) + eta_d_3443 * FFT[2][0] * hdot + lambda_d_3443 * (Fh_a2 * Fh_b0)) * dV;
-      double B21 = (eta_d_3443 * (Fh_b2 * Fh_a1) + eta_d_3443 * FFT[2][1] * hdot + lambda_d_3443 * (Fh_a2 * Fh_b1)) * dV;
-      double B22 = (eta_d_3443 * (Fh_b2 * Fh_a2) + eta_d_3443 * FFT[2][2] * hdot + lambda_d_3443 * (Fh_a2 * Fh_b2)) * dV;
+      double B20 =
+          (eta_d_3443 * (Fh_b2 * Fh_a0) + eta_d_3443 * FFT[2][0] * hdot +
+           lambda_d_3443 * (Fh_a2 * Fh_b0)) *
+          dV;
+      double B21 =
+          (eta_d_3443 * (Fh_b2 * Fh_a1) + eta_d_3443 * FFT[2][1] * hdot +
+           lambda_d_3443 * (Fh_a2 * Fh_b1)) *
+          dV;
+      double B22 =
+          (eta_d_3443 * (Fh_b2 * Fh_a2) + eta_d_3443 * FFT[2][2] * hdot +
+           lambda_d_3443 * (Fh_a2 * Fh_b2)) *
+          dV;
 
-      int row0 = 3 * a;
-      int col0 = 3 * b;
+      int row0                        = 3 * a;
+      int col0                        = 3 * b;
       C_elem_3443[row0 + 0][col0 + 0] = B00;
       C_elem_3443[row0 + 0][col0 + 1] = B01;
       C_elem_3443[row0 + 0][col0 + 2] = B02;
@@ -718,35 +749,37 @@ __device__ __forceinline__ void compute_hessian_assemble_csr<GPU_ANCF3443_Data>(
 
   // Scatter viscous C_elem_3443 to CSR (no h scaling)
   for (int local_row = 0; local_row < Nloc3443; local_row++) {
-    int node_local = local_row / 4;
-    int dof_local  = local_row % 4;
+    int node_local  = local_row / 4;
+    int dof_local   = local_row % 4;
     int node_global = d_data->element_connectivity()(elem_idx, node_local);
-    int coef_idx = node_global * 4 + dof_local;
+    int coef_idx    = node_global * 4 + dof_local;
 
     for (int r_dof = 0; r_dof < 3; r_dof++) {
-      int global_row = 3 * coef_idx + r_dof;
+      int global_row      = 3 * coef_idx + r_dof;
       int local_row_index = 3 * local_row + r_dof;
 
       int row_begin = d_csr_row_offsets[global_row];
-      int row_len = d_csr_row_offsets[global_row + 1] - row_begin;
+      int row_len   = d_csr_row_offsets[global_row + 1] - row_begin;
 
       for (int local_col = 0; local_col < Nloc3443; local_col++) {
         int node_local_col = local_col / 4;
         int dof_local_col  = local_col % 4;
-        int node_global_col = d_data->element_connectivity()(elem_idx, node_local_col);
+        int node_global_col =
+            d_data->element_connectivity()(elem_idx, node_local_col);
         int coef_idx_col = node_global_col * 4 + dof_local_col;
 
         for (int c_dof = 0; c_dof < 3; c_dof++) {
-          int global_col = 3 * coef_idx_col + c_dof;
+          int global_col      = 3 * coef_idx_col + c_dof;
           int local_col_index = 3 * local_col + c_dof;
 
-          int pos = binary_search_column_csr_3443(&d_csr_col_indices[row_begin], row_len, global_col);
+          int pos = binary_search_column_csr_3443(&d_csr_col_indices[row_begin],
+                                                  row_len, global_col);
           if (pos >= 0) {
-            atomicAdd(&d_csr_values[row_begin + pos], C_elem_3443[local_row_index][local_col_index]);
+            atomicAdd(&d_csr_values[row_begin + pos],
+                      C_elem_3443[local_row_index][local_col_index]);
           }
         }
       }
     }
   }
 }
-

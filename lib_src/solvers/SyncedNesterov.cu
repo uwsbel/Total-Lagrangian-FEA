@@ -165,11 +165,13 @@ __global__ void one_step_nesterov_kernel(
           if (tid < d_nesterov_solver->get_n_beam() *
                         d_nesterov_solver->gpu_n_total_qp()) {
             for (int idx = tid; idx < d_nesterov_solver->get_n_beam() *
-                                   d_nesterov_solver->gpu_n_total_qp();
+                                          d_nesterov_solver->gpu_n_total_qp();
                  idx += grid.size()) {
               int elem_idx = idx / d_nesterov_solver->gpu_n_total_qp();
               int qp_idx   = idx % d_nesterov_solver->gpu_n_total_qp();
-              compute_p(elem_idx, qp_idx, data, d_nesterov_solver->v_guess().data(), d_nesterov_solver->solver_time_step());
+              compute_p(elem_idx, qp_idx, data,
+                        d_nesterov_solver->v_guess().data(),
+                        d_nesterov_solver->solver_time_step());
             }
           }
 

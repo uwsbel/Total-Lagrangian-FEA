@@ -172,7 +172,7 @@ struct GPU_ANCF3243_Data : public ElementBase {
   }
 
   __device__ const Eigen::Map<Eigen::MatrixXd> Fdot(int elem_idx,
-                                                   int qp_idx) const {
+                                                    int qp_idx) const {
     return Eigen::Map<Eigen::MatrixXd>(
         d_Fdot + (elem_idx * Quadrature::N_TOTAL_QP_3_2_2 + qp_idx) * 9, 3, 3);
   }
@@ -184,7 +184,7 @@ struct GPU_ANCF3243_Data : public ElementBase {
   }
 
   __device__ const Eigen::Map<Eigen::MatrixXd> P_vis(int elem_idx,
-                                                    int qp_idx) const {
+                                                     int qp_idx) const {
     return Eigen::Map<Eigen::MatrixXd>(
         d_P_vis + (elem_idx * Quadrature::N_TOTAL_QP_3_2_2 + qp_idx) * 9, 3, 3);
   }
@@ -400,16 +400,14 @@ struct GPU_ANCF3243_Data : public ElementBase {
     HANDLE_ERROR(cudaMalloc(&d_node_values, n_coef * n_coef * sizeof(double)));
 
     HANDLE_ERROR(cudaMalloc(
-      &d_F, n_beam * Quadrature::N_TOTAL_QP_3_2_2 * 3 * 3 * sizeof(double)));
+        &d_F, n_beam * Quadrature::N_TOTAL_QP_3_2_2 * 3 * 3 * sizeof(double)));
     HANDLE_ERROR(cudaMalloc(
-      &d_P, n_beam * Quadrature::N_TOTAL_QP_3_2_2 * 3 * 3 * sizeof(double)));
+        &d_P, n_beam * Quadrature::N_TOTAL_QP_3_2_2 * 3 * 3 * sizeof(double)));
     // Kelvin-Voigt damping related buffers
-    HANDLE_ERROR(cudaMalloc(&d_Fdot,
-                n_beam * Quadrature::N_TOTAL_QP_3_2_2 * 3 * 3 *
-                  sizeof(double)));
-    HANDLE_ERROR(cudaMalloc(&d_P_vis,
-                n_beam * Quadrature::N_TOTAL_QP_3_2_2 * 3 * 3 *
-                  sizeof(double)));
+    HANDLE_ERROR(cudaMalloc(&d_Fdot, n_beam * Quadrature::N_TOTAL_QP_3_2_2 * 3 *
+                                         3 * sizeof(double)));
+    HANDLE_ERROR(cudaMalloc(&d_P_vis, n_beam * Quadrature::N_TOTAL_QP_3_2_2 *
+                                          3 * 3 * sizeof(double)));
     // damping parameters (single scalar copied to device)
     HANDLE_ERROR(cudaMalloc(&d_eta_damp, sizeof(double)));
     HANDLE_ERROR(cudaMalloc(&d_lambda_damp, sizeof(double)));
@@ -432,9 +430,9 @@ struct GPU_ANCF3243_Data : public ElementBase {
   }
 
   void Setup(double length, double width, double height, double rho0, double nu,
-             double E, double eta_damp, double lambda_damp, const Eigen::MatrixXd &h_B_inv,
-             const Eigen::VectorXd &gauss_xi_m, const Eigen::VectorXd &gauss_xi,
-             const Eigen::VectorXd &gauss_eta,
+             double E, double eta_damp, double lambda_damp,
+             const Eigen::MatrixXd &h_B_inv, const Eigen::VectorXd &gauss_xi_m,
+             const Eigen::VectorXd &gauss_xi, const Eigen::VectorXd &gauss_eta,
              const Eigen::VectorXd &gauss_zeta,
              const Eigen::VectorXd &weight_xi_m,
              const Eigen::VectorXd &weight_xi,
@@ -502,17 +500,19 @@ struct GPU_ANCF3243_Data : public ElementBase {
     cudaMemset(d_f_int, 0, n_coef * 3 * sizeof(double));
 
     cudaMemset(d_F, 0,
-           n_beam * Quadrature::N_TOTAL_QP_3_2_2 * 3 * 3 * sizeof(double));
+               n_beam * Quadrature::N_TOTAL_QP_3_2_2 * 3 * 3 * sizeof(double));
     cudaMemset(d_P, 0,
-           n_beam * Quadrature::N_TOTAL_QP_3_2_2 * 3 * 3 * sizeof(double));
-        // initialize damping buffers to zero
-        cudaMemset(d_Fdot, 0,
-          n_beam * Quadrature::N_TOTAL_QP_3_2_2 * 3 * 3 * sizeof(double));
-        cudaMemset(d_P_vis, 0,
-          n_beam * Quadrature::N_TOTAL_QP_3_2_2 * 3 * 3 * sizeof(double));
-        // copy damping scalars to device (single double each)
-        HANDLE_ERROR(cudaMemcpy(d_eta_damp, &eta_damp, sizeof(double), cudaMemcpyHostToDevice));
-        HANDLE_ERROR(cudaMemcpy(d_lambda_damp, &lambda_damp, sizeof(double), cudaMemcpyHostToDevice));
+               n_beam * Quadrature::N_TOTAL_QP_3_2_2 * 3 * 3 * sizeof(double));
+    // initialize damping buffers to zero
+    cudaMemset(d_Fdot, 0,
+               n_beam * Quadrature::N_TOTAL_QP_3_2_2 * 3 * 3 * sizeof(double));
+    cudaMemset(d_P_vis, 0,
+               n_beam * Quadrature::N_TOTAL_QP_3_2_2 * 3 * 3 * sizeof(double));
+    // copy damping scalars to device (single double each)
+    HANDLE_ERROR(cudaMemcpy(d_eta_damp, &eta_damp, sizeof(double),
+                            cudaMemcpyHostToDevice));
+    HANDLE_ERROR(cudaMemcpy(d_lambda_damp, &lambda_damp, sizeof(double),
+                            cudaMemcpyHostToDevice));
 
     HANDLE_ERROR(
         cudaMemcpy(d_H, &height, sizeof(double), cudaMemcpyHostToDevice));
@@ -701,10 +701,10 @@ struct GPU_ANCF3243_Data : public ElementBase {
 
   double *d_F, *d_P;
   // Kelvin-Voigt damping related device buffers
-  double *d_Fdot;     // time derivative of F (per element, per qp, 3x3)
-  double *d_P_vis;    // viscous Piola (per element, per qp, 3x3)
-  double *d_eta_damp; // per-element (or global) viscous coefficient
-  double *d_lambda_damp; // per-element (or global) second viscous coeff
+  double *d_Fdot;         // time derivative of F (per element, per qp, 3x3)
+  double *d_P_vis;        // viscous Piola (per element, per qp, 3x3)
+  double *d_eta_damp;     // per-element (or global) viscous coefficient
+  double *d_lambda_damp;  // per-element (or global) second viscous coeff
 
   double *d_H, *d_W, *d_L;
 

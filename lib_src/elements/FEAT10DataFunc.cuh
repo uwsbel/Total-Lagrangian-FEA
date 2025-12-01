@@ -353,56 +353,51 @@ __device__ __forceinline__ void compute_constraint_data(
 
 // --- CSR-version Hessian assembly for FEAT10 ---
 // Local binary-search helper (self-contained)
-static __device__ __forceinline__ int binary_search_column_csr(const int *cols, int n_cols, int target) {
+static __device__ __forceinline__ int binary_search_column_csr(const int* cols,
+                                                               int n_cols,
+                                                               int target) {
   int left = 0, right = n_cols - 1;
   while (left <= right) {
     int mid = left + ((right - left) >> 1);
-    int v = cols[mid];
-    if (v == target) return mid;
-    if (v < target) left = mid + 1;
-    else right = mid - 1;
+    int v   = cols[mid];
+    if (v == target)
+      return mid;
+    if (v < target)
+      left = mid + 1;
+    else
+      right = mid - 1;
   }
   return -1;
 }
 
 // Template declaration
-template<typename ElementType>
-__device__ __forceinline__ void compute_hessian_assemble_csr(ElementType* d_data,
-    SyncedNewtonSolver* d_solver,
-    int elem_idx,
-    int qp_idx,
-    int* d_csr_row_offsets,
-    int* d_csr_col_indices,
-    double* d_csr_values,
+template <typename ElementType>
+__device__ __forceinline__ void compute_hessian_assemble_csr(
+    ElementType* d_data, SyncedNewtonSolver* d_solver, int elem_idx, int qp_idx,
+    int* d_csr_row_offsets, int* d_csr_col_indices, double* d_csr_values,
     double h);
 
 // Explicit specialization for FEAT10
-template<>
+template <>
 __device__ __forceinline__ void compute_hessian_assemble_csr<GPU_FEAT10_Data>(
-    GPU_FEAT10_Data* d_data,
-    SyncedNewtonSolver* d_solver,
-    int elem_idx,
-    int qp_idx,
-    int* d_csr_row_offsets,
-    int* d_csr_col_indices,
-    double* d_csr_values,
-    double h) {
-
+    GPU_FEAT10_Data* d_data, SyncedNewtonSolver* d_solver, int elem_idx,
+    int qp_idx, int* d_csr_row_offsets, int* d_csr_col_indices,
+    double* d_csr_values, double h) {
   // Reuse all local computations from compute_hessian_assemble and then
   // scatter by searching the CSR row for each (global_row, global_col).
 
   // Get element connectivity
   int global_node_indices[10];
-  #pragma unroll
+#pragma unroll
   for (int node = 0; node < 10; node++) {
     global_node_indices[node] = d_data->element_connectivity()(elem_idx, node);
   }
 
   // Read current nodal positions
   double x_nodes[10][3];
-  #pragma unroll
+#pragma unroll
   for (int node = 0; node < 10; node++) {
-    int gn = global_node_indices[node];
+    int gn           = global_node_indices[node];
     x_nodes[node][0] = d_data->x12()(gn);
     x_nodes[node][1] = d_data->y12()(gn);
     x_nodes[node][2] = d_data->z12()(gn);
@@ -410,7 +405,7 @@ __device__ __forceinline__ void compute_hessian_assemble_csr<GPU_FEAT10_Data>(
 
   // grad_N
   double grad_N[10][3];
-  #pragma unroll
+#pragma unroll
   for (int a = 0; a < 10; a++) {
     grad_N[a][0] = d_data->grad_N_ref(elem_idx, qp_idx)(a, 0);
     grad_N[a][1] = d_data->grad_N_ref(elem_idx, qp_idx)(a, 1);
@@ -419,7 +414,7 @@ __device__ __forceinline__ void compute_hessian_assemble_csr<GPU_FEAT10_Data>(
 
   // Compute F, C, FFT, Fh etc. (same math as existing compute_hessian_assemble)
   double F[3][3] = {{0.0}};
-  #pragma unroll
+#pragma unroll
   for (int a = 0; a < 10; a++) {
     for (int i = 0; i < 3; i++) {
       for (int j = 0; j < 3; j++) {
@@ -429,11 +424,11 @@ __device__ __forceinline__ void compute_hessian_assemble_csr<GPU_FEAT10_Data>(
   }
 
   double C[3][3] = {{0.0}};
-  #pragma unroll
+#pragma unroll
   for (int i = 0; i < 3; i++) {
-    #pragma unroll
+#pragma unroll
     for (int j = 0; j < 3; j++) {
-      #pragma unroll
+#pragma unroll
       for (int k = 0; k < 3; k++) {
         C[i][j] += F[k][i] * F[k][j];
       }
@@ -444,11 +439,11 @@ __device__ __forceinline__ void compute_hessian_assemble_csr<GPU_FEAT10_Data>(
   double trE = 0.5 * (trC - 3.0);
 
   double FFT[3][3] = {{0.0}};
-  #pragma unroll
+#pragma unroll
   for (int i = 0; i < 3; i++) {
-    #pragma unroll
+#pragma unroll
     for (int j = 0; j < 3; j++) {
-      #pragma unroll
+#pragma unroll
       for (int k = 0; k < 3; k++) {
         FFT[i][j] += F[i][k] * F[j][k];
       }
@@ -456,12 +451,12 @@ __device__ __forceinline__ void compute_hessian_assemble_csr<GPU_FEAT10_Data>(
   }
 
   double Fh[10][3];
-  #pragma unroll
+#pragma unroll
   for (int i = 0; i < 10; i++) {
-    #pragma unroll
+#pragma unroll
     for (int row = 0; row < 3; row++) {
       Fh[i][row] = 0.0;
-      #pragma unroll
+#pragma unroll
       for (int col = 0; col < 3; col++) {
         Fh[i][row] += F[row][col] * grad_N[i][col];
       }
@@ -469,28 +464,30 @@ __device__ __forceinline__ void compute_hessian_assemble_csr<GPU_FEAT10_Data>(
   }
 
   double lambda = d_data->lambda();
-  double mu = d_data->mu();
+  double mu     = d_data->mu();
   double detJ   = d_data->detJ_ref(elem_idx, qp_idx);
   double wq     = d_data->tet5pt_weights(qp_idx);
   double dV     = detJ * wq;
 
   // Local K_elem 30x30
   double K_elem[30][30];
-  #pragma unroll
+#pragma unroll
   for (int ii = 0; ii < 30; ii++)
     for (int jj = 0; jj < 30; jj++)
       K_elem[ii][jj] = 0.0;
 
-  #pragma unroll
+#pragma unroll
   for (int i = 0; i < 10; i++) {
-    #pragma unroll
+#pragma unroll
     for (int j = 0; j < 10; j++) {
-      double hij = grad_N[j][0] * grad_N[i][0] + grad_N[j][1] * grad_N[i][1] + grad_N[j][2] * grad_N[i][2];
-      double Fhj_dot_Fhi = Fh[j][0]*Fh[i][0] + Fh[j][1]*Fh[i][1] + Fh[j][2]*Fh[i][2];
+      double hij = grad_N[j][0] * grad_N[i][0] + grad_N[j][1] * grad_N[i][1] +
+                   grad_N[j][2] * grad_N[i][2];
+      double Fhj_dot_Fhi =
+          Fh[j][0] * Fh[i][0] + Fh[j][1] * Fh[i][1] + Fh[j][2] * Fh[i][2];
 
-      #pragma unroll
+#pragma unroll
       for (int d = 0; d < 3; d++) {
-        #pragma unroll
+#pragma unroll
         for (int e = 0; e < 3; e++) {
           double A_de    = lambda * Fh[i][d] * Fh[j][e];
           double B_de    = lambda * trE * hij * (d == e ? 1.0 : 0.0);
@@ -499,10 +496,11 @@ __device__ __forceinline__ void compute_hessian_assemble_csr<GPU_FEAT10_Data>(
           double Etrm_de = mu * hij * FFT[d][e];
           double Ftrm_de = -mu * hij * (d == e ? 1.0 : 0.0);
 
-          double K_ij_de = (A_de + B_de + C1_de + D_de + Etrm_de + Ftrm_de) * dV;
+          double K_ij_de =
+              (A_de + B_de + C1_de + D_de + Etrm_de + Ftrm_de) * dV;
 
-          int row = 3 * i + d;
-          int col = 3 * j + e;
+          int row          = 3 * i + d;
+          int col          = 3 * j + e;
           K_elem[row][col] = K_ij_de;
         }
       }
@@ -514,7 +512,7 @@ __device__ __forceinline__ void compute_hessian_assemble_csr<GPU_FEAT10_Data>(
     int global_node_row = global_node_indices[local_row_node];
     for (int r_dof = 0; r_dof < 3; r_dof++) {
       int global_row = 3 * global_node_row + r_dof;
-      int local_row = 3 * local_row_node + r_dof;
+      int local_row  = 3 * local_row_node + r_dof;
 
       int row_begin = d_csr_row_offsets[global_row];
       int row_end   = d_csr_row_offsets[global_row + 1];
@@ -526,9 +524,11 @@ __device__ __forceinline__ void compute_hessian_assemble_csr<GPU_FEAT10_Data>(
           int global_col = 3 * global_node_col + c_dof;
           int local_col  = 3 * local_col_node + c_dof;
 
-          int pos = binary_search_column_csr(&d_csr_col_indices[row_begin], row_len, global_col);
+          int pos = binary_search_column_csr(&d_csr_col_indices[row_begin],
+                                             row_len, global_col);
           if (pos >= 0) {
-            atomicAdd(&d_csr_values[row_begin + pos], h * K_elem[local_row][local_col]);
+            atomicAdd(&d_csr_values[row_begin + pos],
+                      h * K_elem[local_row][local_col]);
           }
         }
       }
@@ -536,25 +536,26 @@ __device__ __forceinline__ void compute_hessian_assemble_csr<GPU_FEAT10_Data>(
   }
 
   // --- Viscous tangent (Kelvin-Voigt) assembly: C_elem (30x30) ---
-  // C_ab = (eta * outer(Fh_b, Fh_a) + eta * FFT * (h_a·h_b) + lambda_d * outer(Fh_a, Fh_b)) * dV
+  // C_ab = (eta * outer(Fh_b, Fh_a) + eta * FFT * (h_a·h_b) + lambda_d *
+  // outer(Fh_a, Fh_b)) * dV
   double C_elem[30][30];
-  #pragma unroll
+#pragma unroll
   for (int ii = 0; ii < 30; ii++)
     for (int jj = 0; jj < 30; jj++)
       C_elem[ii][jj] = 0.0;
 
-  double eta_d = d_data->eta_damp();
+  double eta_d    = d_data->eta_damp();
   double lambda_d = d_data->lambda_damp();
 
-  #pragma unroll
+#pragma unroll
   for (int a = 0; a < 10; a++) {
-    double *h_a = grad_N[a];
+    double* h_a  = grad_N[a];
     double Fh_a0 = Fh[a][0];
     double Fh_a1 = Fh[a][1];
     double Fh_a2 = Fh[a][2];
-    #pragma unroll
+#pragma unroll
     for (int b = 0; b < 10; b++) {
-      double *h_b = grad_N[b];
+      double* h_b  = grad_N[b];
       double Fh_b0 = Fh[b][0];
       double Fh_b1 = Fh[b][1];
       double Fh_b2 = Fh[b][2];
@@ -562,20 +563,38 @@ __device__ __forceinline__ void compute_hessian_assemble_csr<GPU_FEAT10_Data>(
       double hdot = h_a[0] * h_b[0] + h_a[1] * h_b[1] + h_a[2] * h_b[2];
 
       // Compute block C_ab (3x3)
-      double Cblock00 = (eta_d * (Fh_b0 * Fh_a0) + eta_d * FFT[0][0] * hdot + lambda_d * (Fh_a0 * Fh_b0)) * dV;
-      double Cblock01 = (eta_d * (Fh_b0 * Fh_a1) + eta_d * FFT[0][1] * hdot + lambda_d * (Fh_a0 * Fh_b1)) * dV;
-      double Cblock02 = (eta_d * (Fh_b0 * Fh_a2) + eta_d * FFT[0][2] * hdot + lambda_d * (Fh_a0 * Fh_b2)) * dV;
+      double Cblock00 = (eta_d * (Fh_b0 * Fh_a0) + eta_d * FFT[0][0] * hdot +
+                         lambda_d * (Fh_a0 * Fh_b0)) *
+                        dV;
+      double Cblock01 = (eta_d * (Fh_b0 * Fh_a1) + eta_d * FFT[0][1] * hdot +
+                         lambda_d * (Fh_a0 * Fh_b1)) *
+                        dV;
+      double Cblock02 = (eta_d * (Fh_b0 * Fh_a2) + eta_d * FFT[0][2] * hdot +
+                         lambda_d * (Fh_a0 * Fh_b2)) *
+                        dV;
 
-      double Cblock10 = (eta_d * (Fh_b1 * Fh_a0) + eta_d * FFT[1][0] * hdot + lambda_d * (Fh_a1 * Fh_b0)) * dV;
-      double Cblock11 = (eta_d * (Fh_b1 * Fh_a1) + eta_d * FFT[1][1] * hdot + lambda_d * (Fh_a1 * Fh_b1)) * dV;
-      double Cblock12 = (eta_d * (Fh_b1 * Fh_a2) + eta_d * FFT[1][2] * hdot + lambda_d * (Fh_a1 * Fh_b2)) * dV;
+      double Cblock10 = (eta_d * (Fh_b1 * Fh_a0) + eta_d * FFT[1][0] * hdot +
+                         lambda_d * (Fh_a1 * Fh_b0)) *
+                        dV;
+      double Cblock11 = (eta_d * (Fh_b1 * Fh_a1) + eta_d * FFT[1][1] * hdot +
+                         lambda_d * (Fh_a1 * Fh_b1)) *
+                        dV;
+      double Cblock12 = (eta_d * (Fh_b1 * Fh_a2) + eta_d * FFT[1][2] * hdot +
+                         lambda_d * (Fh_a1 * Fh_b2)) *
+                        dV;
 
-      double Cblock20 = (eta_d * (Fh_b2 * Fh_a0) + eta_d * FFT[2][0] * hdot + lambda_d * (Fh_a2 * Fh_b0)) * dV;
-      double Cblock21 = (eta_d * (Fh_b2 * Fh_a1) + eta_d * FFT[2][1] * hdot + lambda_d * (Fh_a2 * Fh_b1)) * dV;
-      double Cblock22 = (eta_d * (Fh_b2 * Fh_a2) + eta_d * FFT[2][2] * hdot + lambda_d * (Fh_a2 * Fh_b2)) * dV;
+      double Cblock20 = (eta_d * (Fh_b2 * Fh_a0) + eta_d * FFT[2][0] * hdot +
+                         lambda_d * (Fh_a2 * Fh_b0)) *
+                        dV;
+      double Cblock21 = (eta_d * (Fh_b2 * Fh_a1) + eta_d * FFT[2][1] * hdot +
+                         lambda_d * (Fh_a2 * Fh_b1)) *
+                        dV;
+      double Cblock22 = (eta_d * (Fh_b2 * Fh_a2) + eta_d * FFT[2][2] * hdot +
+                         lambda_d * (Fh_a2 * Fh_b2)) *
+                        dV;
 
-      int row0 = 3 * a;
-      int col0 = 3 * b;
+      int row0                   = 3 * a;
+      int col0                   = 3 * b;
       C_elem[row0 + 0][col0 + 0] = Cblock00;
       C_elem[row0 + 0][col0 + 1] = Cblock01;
       C_elem[row0 + 0][col0 + 2] = Cblock02;
@@ -593,7 +612,7 @@ __device__ __forceinline__ void compute_hessian_assemble_csr<GPU_FEAT10_Data>(
     int global_node_row = global_node_indices[local_row_node];
     for (int r_dof = 0; r_dof < 3; r_dof++) {
       int global_row = 3 * global_node_row + r_dof;
-      int local_row = 3 * local_row_node + r_dof;
+      int local_row  = 3 * local_row_node + r_dof;
 
       int row_begin = d_csr_row_offsets[global_row];
       int row_end   = d_csr_row_offsets[global_row + 1];
@@ -605,9 +624,11 @@ __device__ __forceinline__ void compute_hessian_assemble_csr<GPU_FEAT10_Data>(
           int global_col = 3 * global_node_col + c_dof;
           int local_col  = 3 * local_col_node + c_dof;
 
-          int pos = binary_search_column_csr(&d_csr_col_indices[row_begin], row_len, global_col);
+          int pos = binary_search_column_csr(&d_csr_col_indices[row_begin],
+                                             row_len, global_col);
           if (pos >= 0) {
-            atomicAdd(&d_csr_values[row_begin + pos], C_elem[local_row][local_col]);
+            atomicAdd(&d_csr_values[row_begin + pos],
+                      C_elem[local_row][local_col]);
           }
         }
       }

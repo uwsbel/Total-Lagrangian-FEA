@@ -477,9 +477,8 @@ __global__ void assemble_sparse_hessian_tangent(ElementType *d_data,
   // implemented in the element DataFunc headers. This keeps the kernel concise
   // and uses compile-time dispatch to pick the correct specialization.
   compute_hessian_assemble_csr<ElementType>(d_data, d_solver, elem_idx, qp_idx,
-                                            d_csr_row_offsets, d_csr_col_indices,
-                                            d_csr_values, h);
-
+                                            d_csr_row_offsets,
+                                            d_csr_col_indices, d_csr_values, h);
 }
 
 // Assemble Constraint Contribution: (h^2 * rho * J^T * J) into sparse H
@@ -641,7 +640,8 @@ __global__ void cudss_solve_compute_p(ElementType *d_data,
     int idx      = tid;
     int elem_idx = idx / d_newton_solver->gpu_n_total_qp();
     int qp_idx   = idx % d_newton_solver->gpu_n_total_qp();
-    compute_p(elem_idx, qp_idx, d_data, d_newton_solver->v_guess().data(), d_newton_solver->solver_time_step());
+    compute_p(elem_idx, qp_idx, d_data, d_newton_solver->v_guess().data(),
+              d_newton_solver->solver_time_step());
   }
 }
 

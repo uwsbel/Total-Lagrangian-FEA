@@ -177,11 +177,13 @@ __global__ void one_step_adamw_kernel_impl(ElementType *d_data,
           if (tid <
               d_adamw_solver->get_n_beam() * d_adamw_solver->gpu_n_total_qp()) {
             for (int idx = tid; idx < d_adamw_solver->get_n_beam() *
-                                   d_adamw_solver->gpu_n_total_qp();
+                                          d_adamw_solver->gpu_n_total_qp();
                  idx += grid.size()) {
               int elem_idx = idx / d_adamw_solver->gpu_n_total_qp();
               int qp_idx   = idx % d_adamw_solver->gpu_n_total_qp();
-              compute_p(elem_idx, qp_idx, d_data, d_adamw_solver->v_guess().data(), d_adamw_solver->solver_time_step());
+              compute_p(elem_idx, qp_idx, d_data,
+                        d_adamw_solver->v_guess().data(),
+                        d_adamw_solver->solver_time_step());
             }
           }
 
