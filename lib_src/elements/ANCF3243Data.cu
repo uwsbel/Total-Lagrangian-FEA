@@ -132,8 +132,8 @@ __global__ void calc_p_kernel(GPU_ANCF3243_Data *d_data) {
   if (elem_idx >= d_data->gpu_n_beam() ||
       qp_idx >= Quadrature::N_TOTAL_QP_3_2_2)
     return;
-
-  compute_p(elem_idx, qp_idx, d_data);
+  // Call compute_p with nullptr velocity and zero dt for standalone usage
+  compute_p(elem_idx, qp_idx, d_data, nullptr, 0.0);
 }
 
 void GPU_ANCF3243_Data::CalcP() {

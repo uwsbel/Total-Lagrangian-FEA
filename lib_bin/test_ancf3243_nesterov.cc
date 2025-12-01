@@ -89,12 +89,12 @@ int main() {
   h_f_ext(3 * gpu_3243_data.get_n_coef() - 10) = 3100.0;
   gpu_3243_data.SetExternalForce(h_f_ext);
 
-  gpu_3243_data.Setup(L, W, H, rho0, nu, E, h_B_inv, Quadrature::gauss_xi_m_6,
-                      Quadrature::gauss_xi_3, Quadrature::gauss_eta_2,
-                      Quadrature::gauss_zeta_2, Quadrature::weight_xi_m_6,
-                      Quadrature::weight_xi_3, Quadrature::weight_eta_2,
-                      Quadrature::weight_zeta_2, h_x12, h_y12, h_z12,
-                      h_element_connectivity);
+  gpu_3243_data.Setup(L, W, H, rho0, nu, E, 0.0, 0.0, h_B_inv,
+                      Quadrature::gauss_xi_m_6, Quadrature::gauss_xi_3,
+                      Quadrature::gauss_eta_2, Quadrature::gauss_zeta_2,
+                      Quadrature::weight_xi_m_6, Quadrature::weight_xi_3,
+                      Quadrature::weight_eta_2, Quadrature::weight_zeta_2,
+                      h_x12, h_y12, h_z12, h_element_connectivity);
 
   // ===================================================
   gpu_3243_data.CalcDsDuPre();

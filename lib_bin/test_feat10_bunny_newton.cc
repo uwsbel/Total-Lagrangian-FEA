@@ -90,7 +90,8 @@ int main() {
   const Eigen::VectorXd& tet5pt_weights_host = Quadrature::tet5pt_weights;
 
   // Call Setup with all required parameters
-  gpu_t10_data.Setup(rho0, nu, E,          // Material properties
+  gpu_t10_data.Setup(rho0, nu, E, 0.0,
+                     0.0,                  // Material properties + damping
                      tet5pt_x_host,        // Quadrature points
                      tet5pt_y_host,        // Quadrature points
                      tet5pt_z_host,        // Quadrature points
@@ -193,7 +194,15 @@ int main() {
   int output_interval = 10;  // 10 vtk per seconds
   int output_frame    = 0;
 
-  for (int i = 0; i < 20000; i++) {
+  for (int i = 0; i < 8000; i++) {
+    // Reset external force to zero after 5000 steps
+    if (i == 1000) {
+      Eigen::VectorXd h_zero(gpu_t10_data.get_n_coef() * 3);
+      h_zero.setZero();
+      gpu_t10_data.SetExternalForce(h_zero);
+      std::cout << "External force reset to zero at step " << i << std::endl;
+    }
+
     solver.Solve();
     if (i % output_interval == 0) {
       gpu_t10_data.WriteOutputVTK("output/bunny_adamw_step_" +

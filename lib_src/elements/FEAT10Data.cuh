@@ -134,6 +134,30 @@ struct GPU_FEAT10_Data : public ElementBase {
         d_P + (elem_idx * Quadrature::N_QP_T10_5 + qp_idx) * 9, 3, 3);
   }
 
+  // Time-derivative of deformation gradient (viscous computation)
+  __device__ Eigen::Map<Eigen::MatrixXd> Fdot(int elem_idx, int qp_idx) {
+    return Eigen::Map<Eigen::MatrixXd>(
+        d_Fdot + (elem_idx * Quadrature::N_QP_T10_5 + qp_idx) * 9, 3, 3);
+  }
+
+  __device__ const Eigen::Map<Eigen::MatrixXd> Fdot(int elem_idx,
+                                                    int qp_idx) const {
+    return Eigen::Map<Eigen::MatrixXd>(
+        d_Fdot + (elem_idx * Quadrature::N_QP_T10_5 + qp_idx) * 9, 3, 3);
+  }
+
+  // Viscous Piola stress storage
+  __device__ Eigen::Map<Eigen::MatrixXd> P_vis(int elem_idx, int qp_idx) {
+    return Eigen::Map<Eigen::MatrixXd>(
+        d_P_vis + (elem_idx * Quadrature::N_QP_T10_5 + qp_idx) * 9, 3, 3);
+  }
+
+  __device__ const Eigen::Map<Eigen::MatrixXd> P_vis(int elem_idx,
+                                                     int qp_idx) const {
+    return Eigen::Map<Eigen::MatrixXd>(
+        d_P_vis + (elem_idx * Quadrature::N_QP_T10_5 + qp_idx) * 9, 3, 3);
+  }
+
   __device__ Eigen::Map<Eigen::VectorXd> f_int(int global_node_idx) {
     return Eigen::Map<Eigen::VectorXd>(d_f_int + global_node_idx * 3, 3);
   }
@@ -205,6 +229,14 @@ struct GPU_FEAT10_Data : public ElementBase {
 
   __device__ double lambda() const {
     return *d_lambda;
+  }
+
+  __device__ double eta_damp() const {
+    return *d_eta_damp;
+  }
+
+  __device__ double lambda_damp() const {
+    return *d_lambda_damp;
   }
 
   __device__ double mu() const {
@@ -358,6 +390,11 @@ struct GPU_FEAT10_Data : public ElementBase {
         &d_F, n_elem * Quadrature::N_QP_T10_5 * 3 * 3 * sizeof(double)));
     HANDLE_ERROR(cudaMalloc(
         &d_P, n_elem * Quadrature::N_QP_T10_5 * 3 * 3 * sizeof(double)));
+    // Viscous-related buffers
+    HANDLE_ERROR(cudaMalloc(
+        &d_Fdot, n_elem * Quadrature::N_QP_T10_5 * 3 * 3 * sizeof(double)));
+    HANDLE_ERROR(cudaMalloc(
+        &d_P_vis, n_elem * Quadrature::N_QP_T10_5 * 3 * 3 * sizeof(double)));
     HANDLE_ERROR(cudaMalloc(&d_f_int, n_coef * 3 * sizeof(double)));
     HANDLE_ERROR(cudaMalloc(&d_f_ext, n_coef * 3 * sizeof(double)));
 
@@ -366,13 +403,16 @@ struct GPU_FEAT10_Data : public ElementBase {
     HANDLE_ERROR(cudaMalloc(&d_E, sizeof(double)));
     HANDLE_ERROR(cudaMalloc(&d_lambda, sizeof(double)));
     HANDLE_ERROR(cudaMalloc(&d_mu, sizeof(double)));
+    // damping parameters
+    HANDLE_ERROR(cudaMalloc(&d_eta_damp, sizeof(double)));
+    HANDLE_ERROR(cudaMalloc(&d_lambda_damp, sizeof(double)));
 
     //     // copy struct to device
     HANDLE_ERROR(cudaMalloc(&d_data, sizeof(GPU_FEAT10_Data)));
   }
 
-  void Setup(double rho0, double nu, double E,
-             const Eigen::VectorXd &tet5pt_x_host,
+  void Setup(double rho0, double nu, double E, double eta_damp,
+             double lambda_damp, const Eigen::VectorXd &tet5pt_x_host,
              const Eigen::VectorXd &tet5pt_y_host,
              const Eigen::VectorXd &tet5pt_z_host,
              const Eigen::VectorXd &tet5pt_weights_host,
@@ -428,11 +468,21 @@ struct GPU_FEAT10_Data : public ElementBase {
                n_elem * Quadrature::N_QP_T10_5 * 3 * 3 * sizeof(double));
     cudaMemset(d_P, 0,
                n_elem * Quadrature::N_QP_T10_5 * 3 * 3 * sizeof(double));
+    // initialize viscous buffers to zero
+    cudaMemset(d_Fdot, 0,
+               n_elem * Quadrature::N_QP_T10_5 * 3 * 3 * sizeof(double));
+    cudaMemset(d_P_vis, 0,
+               n_elem * Quadrature::N_QP_T10_5 * 3 * 3 * sizeof(double));
 
     HANDLE_ERROR(
         cudaMemcpy(d_rho0, &rho0, sizeof(double), cudaMemcpyHostToDevice));
     HANDLE_ERROR(cudaMemcpy(d_nu, &nu, sizeof(double), cudaMemcpyHostToDevice));
     HANDLE_ERROR(cudaMemcpy(d_E, &E, sizeof(double), cudaMemcpyHostToDevice));
+    // copy damping parameters
+    HANDLE_ERROR(cudaMemcpy(d_eta_damp, &eta_damp, sizeof(double),
+                            cudaMemcpyHostToDevice));
+    HANDLE_ERROR(cudaMemcpy(d_lambda_damp, &lambda_damp, sizeof(double),
+                            cudaMemcpyHostToDevice));
 
     // Compute material constants
     double mu = E / (2 * (1 + nu));  // Shear modulus μ
@@ -500,6 +550,8 @@ struct GPU_FEAT10_Data : public ElementBase {
 
     HANDLE_ERROR(cudaFree(d_F));
     HANDLE_ERROR(cudaFree(d_P));
+    HANDLE_ERROR(cudaFree(d_Fdot));
+    HANDLE_ERROR(cudaFree(d_P_vis));
     HANDLE_ERROR(cudaFree(d_f_int));
     HANDLE_ERROR(cudaFree(d_f_ext));
 
@@ -508,6 +560,8 @@ struct GPU_FEAT10_Data : public ElementBase {
     HANDLE_ERROR(cudaFree(d_E));
     HANDLE_ERROR(cudaFree(d_lambda));
     HANDLE_ERROR(cudaFree(d_mu));
+    HANDLE_ERROR(cudaFree(d_eta_damp));
+    HANDLE_ERROR(cudaFree(d_lambda_damp));
 
     HANDLE_ERROR(cudaFree(d_data));
 
@@ -558,9 +612,14 @@ struct GPU_FEAT10_Data : public ElementBase {
   // Deformation gradient and Piola stress
   double *d_F;  // (n_elem, n_qp, 3, 3)
   double *d_P;  // (n_elem, n_qp, 3, 3)
+  // Time-derivative of deformation gradient and viscous Piola
+  double *d_Fdot;   // (n_elem, n_qp, 3, 3)
+  double *d_P_vis;  // (n_elem, n_qp, 3, 3)
 
   // Material properties
   double *d_E, *d_nu, *d_rho0, *d_lambda, *d_mu;
+  // Damping parameters
+  double *d_eta_damp, *d_lambda_damp;
 
   // Constraint data
   double *d_constraint, *d_constraint_jac;
