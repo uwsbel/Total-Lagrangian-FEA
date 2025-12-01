@@ -176,8 +176,8 @@ __global__ void one_step_adamw_kernel_impl(ElementType *d_data,
           // Compute P (stress)
           if (tid <
               d_adamw_solver->get_n_beam() * d_adamw_solver->gpu_n_total_qp()) {
-              for (int idx = tid; idx < d_adamw_solver->get_n_beam() *
-                                          d_adamw_solver->gpu_n_total_qp();
+            for (int idx = tid; idx < d_adamw_solver->get_n_beam() *
+                                   d_adamw_solver->gpu_n_total_qp();
                  idx += grid.size()) {
               int elem_idx = idx / d_adamw_solver->gpu_n_total_qp();
               int qp_idx   = idx % d_adamw_solver->gpu_n_total_qp();
