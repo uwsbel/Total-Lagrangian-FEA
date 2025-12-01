@@ -207,7 +207,9 @@ __global__ void calc_p_kernel(GPU_FEAT10_Data *d_data) {
   if (elem_idx >= d_data->gpu_n_elem() || qp_idx >= Quadrature::N_QP_T10_5)
     return;
 
-  compute_p(elem_idx, qp_idx, d_data);
+  // No solver context for standalone CalcP: pass null v_guess (no viscous
+  // contribution)
+  compute_p(elem_idx, qp_idx, d_data, nullptr, 0.0);
 }
 
 void GPU_FEAT10_Data::CalcP() {

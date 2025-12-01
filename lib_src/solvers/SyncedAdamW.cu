@@ -181,7 +181,9 @@ __global__ void one_step_adamw_kernel_impl(ElementType *d_data,
                  idx += grid.size()) {
               int elem_idx = idx / d_adamw_solver->gpu_n_total_qp();
               int qp_idx   = idx % d_adamw_solver->gpu_n_total_qp();
-              compute_p(elem_idx, qp_idx, d_data);
+              compute_p(elem_idx, qp_idx, d_data,
+                        d_adamw_solver->v_guess().data(),
+                        d_adamw_solver->solver_time_step());
             }
           }
 

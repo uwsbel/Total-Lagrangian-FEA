@@ -169,7 +169,9 @@ __global__ void one_step_nesterov_kernel(
                  idx += grid.size()) {
               int elem_idx = idx / d_nesterov_solver->gpu_n_total_qp();
               int qp_idx   = idx % d_nesterov_solver->gpu_n_total_qp();
-              compute_p(elem_idx, qp_idx, data);
+              compute_p(elem_idx, qp_idx, data,
+                        d_nesterov_solver->v_guess().data(),
+                        d_nesterov_solver->solver_time_step());
             }
           }
 
