@@ -16,7 +16,7 @@ rho0  = 2700.0
 # Kelvin–Voigt damping parameters (reference config)
 # ----------------------------
 eta_damp = 1.0e5   # Pa·s, shear-like viscosity
-lam_damp = 1.0e5   # Pa·s, bulk-like viscosity
+lam_damp = 1.0e5   # Pa·s, bulk (volumetric) viscosity
 
 # ----------------------------
 # Quadrature (5-point Keast)
