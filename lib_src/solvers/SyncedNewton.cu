@@ -637,11 +637,11 @@ __global__ void cudss_solve_compute_p(ElementType *d_data,
                                       SyncedNewtonSolver *d_newton_solver) {
   int tid = blockIdx.x * blockDim.x + threadIdx.x;
 
-  if (tid < d_newton_solver->get_n_beam() * d_newton_solver->gpu_n_total_qp()) {
+    if (tid < d_newton_solver->get_n_beam() * d_newton_solver->gpu_n_total_qp()) {
     int idx      = tid;
     int elem_idx = idx / d_newton_solver->gpu_n_total_qp();
     int qp_idx   = idx % d_newton_solver->gpu_n_total_qp();
-    compute_p(elem_idx, qp_idx, d_data);
+    compute_p(elem_idx, qp_idx, d_data, d_newton_solver->v_guess().data(), d_newton_solver->solver_time_step());
   }
 }
 

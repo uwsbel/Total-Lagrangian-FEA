@@ -90,13 +90,13 @@ int main() {
   const Eigen::VectorXd& tet5pt_weights_host = Quadrature::tet5pt_weights;
 
   // Call Setup with all required parameters
-  gpu_t10_data.Setup(rho0, nu, E,          // Material properties
-                     tet5pt_x_host,        // Quadrature points
-                     tet5pt_y_host,        // Quadrature points
-                     tet5pt_z_host,        // Quadrature points
-                     tet5pt_weights_host,  // Quadrature weights
-                     h_x12, h_y12, h_z12,  // Node coordinates
-                     elements);            // Element connectivity
+  gpu_t10_data.Setup(rho0, nu, E, 0.0, 0.0,  // Material properties + damping
+                     tet5pt_x_host,          // Quadrature points
+                     tet5pt_y_host,          // Quadrature points
+                     tet5pt_z_host,          // Quadrature points
+                     tet5pt_weights_host,    // Quadrature weights
+                     h_x12, h_y12, h_z12,    // Node coordinates
+                     elements);              // Element connectivity
 
   gpu_t10_data.CalcDnDuPre();
 

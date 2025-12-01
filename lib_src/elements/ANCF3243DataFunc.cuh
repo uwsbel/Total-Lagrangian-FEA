@@ -4,7 +4,7 @@
 // forward-declare solver type (pointer-only used here)
 struct SyncedNewtonSolver;
 
-__device__ __forceinline__ void compute_p(int, int, GPU_ANCF3243_Data *);
+__device__ __forceinline__ void compute_p(int, int, GPU_ANCF3243_Data *, const double *, double);
 __device__ __forceinline__ void compute_internal_force(int, int,
                                                        GPU_ANCF3243_Data *);
 __device__ __forceinline__ void compute_constraint_data(GPU_ANCF3243_Data *);
@@ -108,7 +108,9 @@ __device__ __forceinline__ void ancf3243_calc_det_J_xi(
 }
 
 __device__ __forceinline__ void compute_p(int elem_idx, int qp_idx,
-                                          GPU_ANCF3243_Data *d_data) {
+                                          GPU_ANCF3243_Data *d_data,
+                                          const double* __restrict__ v_guess,
+                                          double dt) {
   // clang-format off
     // --- Compute C = F^T * F ---
 
@@ -221,6 +223,76 @@ __device__ __forceinline__ void compute_p(int elem_idx, int qp_idx,
         {
             d_data->P(elem_idx, qp_idx)(i, j) = factor * d_data->F(elem_idx, qp_idx)(i, j) + d_data->mu() * (FFF[i][j] - d_data->F(elem_idx, qp_idx)(i, j));
         }
+    // Compute Fdot = sum_i v_i ⊗ ∇s_i
+    double Fdot[3][3] = {{0.0}};
+    #pragma unroll
+    for (int i = 0; i < Quadrature::N_SHAPE_3243; i++) {
+      double v_i[3] = {0.0};
+      // coef index mapping used above
+      const int node_local  = (i < 4) ? 0 : 1;
+      const int dof_local   = i % 4;
+      const int node_global = d_data->element_node(elem_idx, node_local);
+      const int coef_idx    = node_global * 4 + dof_local;
+      if (v_guess != nullptr) {
+        v_i[0] = v_guess[coef_idx * 3 + 0];
+        v_i[1] = v_guess[coef_idx * 3 + 1];
+        v_i[2] = v_guess[coef_idx * 3 + 2];
+      }
+      #pragma unroll
+      for (int row = 0; row < 3; row++) {
+        #pragma unroll
+        for (int col = 0; col < 3; col++) {
+          // grad_s not stored locally here; read from precomputed ds_du_pre
+          double grad_si_col = d_data->ds_du_pre(qp_idx)(i, col);
+          Fdot[row][col] += v_i[row] * grad_si_col;
+        }
+      }
+    }
+
+    // Edot = 0.5*(Fdot^T * F + F^T * Fdot)
+    double FdotT_F[3][3] = {{0.0}};
+    double Ft_Fdot[3][3] = {{0.0}};
+    // reuse Ft declared earlier (transpose of F)
+    #pragma unroll
+    for (int i = 0; i < 3; i++) for (int j = 0; j < 3; j++) Ft[i][j] = d_data->F(elem_idx, qp_idx)(j, i);
+    #pragma unroll
+    for (int i = 0; i < 3; i++) {
+      for (int j = 0; j < 3; j++) {
+        for (int k = 0; k < 3; k++) {
+          FdotT_F[i][j] += Fdot[k][i] * d_data->F(elem_idx, qp_idx)(k, j);
+          Ft_Fdot[i][j] += Ft[i][k] * Fdot[k][j];
+        }
+      }
+    }
+    double Edot[3][3] = {{0.0}};
+    #pragma unroll
+    for (int i = 0; i < 3; i++) for (int j = 0; j < 3; j++) Edot[i][j] = 0.5 * (FdotT_F[i][j] + Ft_Fdot[i][j]);
+
+    double trEdot = Edot[0][0] + Edot[1][1] + Edot[2][2];
+    double eta = d_data->eta_damp();
+    double lambda_d = d_data->lambda_damp();
+    double S_vis[3][3] = {{0.0}};
+    #pragma unroll
+    for (int i = 0; i < 3; i++) {
+      for (int j = 0; j < 3; j++) {
+        S_vis[i][j] = 2.0 * eta * Edot[i][j] + lambda_d * trEdot * (i == j ? 1.0 : 0.0);
+      }
+    }
+    double P_vis[3][3] = {{0.0}};
+    #pragma unroll
+    for (int i = 0; i < 3; i++) {
+      for (int j = 0; j < 3; j++) {
+        for (int k = 0; k < 3; k++) {
+          P_vis[i][j] += d_data->F(elem_idx, qp_idx)(i, k) * S_vis[k][j];
+        }
+      }
+    }
+    // store Fdot and P_vis
+    #pragma unroll
+    for (int i = 0; i < 3; i++) for (int j = 0; j < 3; j++) {
+      d_data->Fdot(elem_idx, qp_idx)(i, j) = Fdot[i][j];
+      d_data->P_vis(elem_idx, qp_idx)(i, j) = P_vis[i][j];
+    }
   // clang-format on
 }
 
@@ -483,6 +555,95 @@ __device__ __forceinline__ void compute_hessian_assemble_csr<GPU_ANCF3243_Data>(
           int pos = binary_search_column_csr_3243(&d_csr_col_indices[row_begin], row_len, global_col);
           if (pos >= 0) {
             atomicAdd(&d_csr_values[row_begin + pos], h * K_elem[local_row][local_col]);
+          }
+        }
+      }
+    }
+  }
+
+  // --- Viscous tangent (Kelvin-Voigt) assembly: C_elem (Nloc*3 x Nloc*3) ---
+  const int Nloc = Quadrature::N_SHAPE_3243;
+  const int Ndof = Nloc * 3;
+  double C_elem_loc[24][24];
+  #pragma unroll
+  for (int ii = 0; ii < Ndof; ii++)
+    for (int jj = 0; jj < Ndof; jj++)
+      C_elem_loc[ii][jj] = 0.0;
+
+  double eta_d = d_data->eta_damp();
+  double lambda_d = d_data->lambda_damp();
+
+  #pragma unroll
+  for (int a = 0; a < Nloc; a++) {
+    double h_a0 = grad_s[a][0];
+    double h_a1 = grad_s[a][1];
+    double h_a2 = grad_s[a][2];
+    double Fh_a0 = Fh[a][0];
+    double Fh_a1 = Fh[a][1];
+    double Fh_a2 = Fh[a][2];
+    #pragma unroll
+    for (int b = 0; b < Nloc; b++) {
+      double h_b0 = grad_s[b][0];
+      double h_b1 = grad_s[b][1];
+      double h_b2 = grad_s[b][2];
+      double Fh_b0 = Fh[b][0];
+      double Fh_b1 = Fh[b][1];
+      double Fh_b2 = Fh[b][2];
+
+      double hdot = h_a0 * h_b0 + h_a1 * h_b1 + h_a2 * h_b2;
+
+      // build 3x3 block
+      double B00 = (eta_d * (Fh_b0 * Fh_a0) + eta_d * FFT[0][0] * hdot + lambda_d * (Fh_a0 * Fh_b0)) * dV;
+      double B01 = (eta_d * (Fh_b0 * Fh_a1) + eta_d * FFT[0][1] * hdot + lambda_d * (Fh_a0 * Fh_b1)) * dV;
+      double B02 = (eta_d * (Fh_b0 * Fh_a2) + eta_d * FFT[0][2] * hdot + lambda_d * (Fh_a0 * Fh_b2)) * dV;
+      double B10 = (eta_d * (Fh_b1 * Fh_a0) + eta_d * FFT[1][0] * hdot + lambda_d * (Fh_a1 * Fh_b0)) * dV;
+      double B11 = (eta_d * (Fh_b1 * Fh_a1) + eta_d * FFT[1][1] * hdot + lambda_d * (Fh_a1 * Fh_b1)) * dV;
+      double B12 = (eta_d * (Fh_b1 * Fh_a2) + eta_d * FFT[1][2] * hdot + lambda_d * (Fh_a1 * Fh_b2)) * dV;
+      double B20 = (eta_d * (Fh_b2 * Fh_a0) + eta_d * FFT[2][0] * hdot + lambda_d * (Fh_a2 * Fh_b0)) * dV;
+      double B21 = (eta_d * (Fh_b2 * Fh_a1) + eta_d * FFT[2][1] * hdot + lambda_d * (Fh_a2 * Fh_b1)) * dV;
+      double B22 = (eta_d * (Fh_b2 * Fh_a2) + eta_d * FFT[2][2] * hdot + lambda_d * (Fh_a2 * Fh_b2)) * dV;
+
+      int row0 = 3 * a;
+      int col0 = 3 * b;
+      C_elem_loc[row0 + 0][col0 + 0] = B00;
+      C_elem_loc[row0 + 0][col0 + 1] = B01;
+      C_elem_loc[row0 + 0][col0 + 2] = B02;
+      C_elem_loc[row0 + 1][col0 + 0] = B10;
+      C_elem_loc[row0 + 1][col0 + 1] = B11;
+      C_elem_loc[row0 + 1][col0 + 2] = B12;
+      C_elem_loc[row0 + 2][col0 + 0] = B20;
+      C_elem_loc[row0 + 2][col0 + 1] = B21;
+      C_elem_loc[row0 + 2][col0 + 2] = B22;
+    }
+  }
+
+  // Scatter viscous C_elem_loc to CSR (no h scaling)
+  for (int local_row_idx2 = 0; local_row_idx2 < Nloc; local_row_idx2++) {
+    const int node_local_row  = (local_row_idx2 < 4) ? 0 : 1;
+    const int dof_local_row   = local_row_idx2 % 4;
+    const int node_global_row = d_data->element_node(elem_idx, node_local_row);
+    const int coef_idx_row    = node_global_row * 4 + dof_local_row;
+
+    for (int r_dof = 0; r_dof < 3; r_dof++) {
+      int global_row = 3 * coef_idx_row + r_dof;
+      int local_row = 3 * local_row_idx2 + r_dof;
+
+      int row_begin = d_csr_row_offsets[global_row];
+      int row_len   = d_csr_row_offsets[global_row + 1] - row_begin;
+
+      for (int local_col_idx = 0; local_col_idx < Nloc; local_col_idx++) {
+        const int node_local_col  = (local_col_idx < 4) ? 0 : 1;
+        const int dof_local_col   = local_col_idx % 4;
+        const int node_global_col = d_data->element_node(elem_idx, node_local_col);
+        const int coef_idx_col    = node_global_col * 4 + dof_local_col;
+
+        for (int c_dof = 0; c_dof < 3; c_dof++) {
+          int global_col = 3 * coef_idx_col + c_dof;
+          int local_col  = 3 * local_col_idx + c_dof;
+
+          int pos = binary_search_column_csr_3243(&d_csr_col_indices[row_begin], row_len, global_col);
+          if (pos >= 0) {
+            atomicAdd(&d_csr_values[row_begin + pos], C_elem_loc[local_row][local_col]);
           }
         }
       }
