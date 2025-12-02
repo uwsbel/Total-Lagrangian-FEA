@@ -172,7 +172,7 @@ for i, coord in enumerate(dof_coords):
         force_dofs.append(i)
 
 # Calculate Force Per Node (Matching C++ Logic)
-total_force = 5000.0
+total_force = 250000.0
 num_force_nodes = len(force_dofs)
 force_per_node = total_force / num_force_nodes if num_force_nodes > 0 else 0.0
 
@@ -192,16 +192,16 @@ bs = dofmap.index_map_bs  # Block size (should be 3)
 # For simple serial script, we can access the array directly via the Function wrapper
 # but treating it as a raw PETSc vector is safer for the solver.
 for node_idx in force_dofs:
-    # Set X-component (index 0 in the block)
-    # The C++ code sets: h_f_ext(3 * node_idx + 0) = force_per_node
-    f_temp.x.array[node_idx * bs + 0] = force_per_node
+    # Set Z-component (index 2 in the block) - negative for -z direction
+    # The C++ code sets: h_f_ext(3 * node_idx + 2) = -force_per_node
+    f_temp.x.array[node_idx * bs + 2] = -force_per_node
 
 # Move data to the PETSc vector
 f_ext_vector = f_temp.x.petsc_vec.copy()
 f_ext_vector.ghostUpdate(addv=PETSc.InsertMode.INSERT, mode=PETSc.ScatterMode.FORWARD)
 
 print(f"Load applied at x=3:")
-print(f"  Total force: {total_force} N (x direction)")
+print(f"  Total force: {total_force} N (-z direction)")
 print(f"  Number of nodes at x=3: {num_force_nodes}")
 print(f"  Force per node: {force_per_node:.6f} N")
 print(f"  Total force applied: {force_per_node * num_force_nodes:.1f} N")
@@ -209,12 +209,12 @@ print(f"  Distribution: Equal distribution across all nodes")
 
 
 # ============================================================================
-# TRACKED NODE - Node at (3, 2, 0) for monitoring during simulation
+# TRACKED NODE - Top corner at free end
 # ============================================================================
 print("\nTRACKED NODE SETUP")
 
-# Find the DOF node at position (3, 2, 0)
-tracked_node_position = np.array([3.0, 2.0, 0.0])
+# Tracked node: Top corner at free end (3, 2, 1)
+tracked_node_position = np.array([3.0, 2.0, 1.0])
 tracked_node_dof = None
 tracked_node_coord = None
 
@@ -368,8 +368,8 @@ print("\nSTARTING DYNAMIC ANALYSIS")
 u_old.x.array[:] = 0.0
 v_old.x.array[:] = 0.0
 
-# History for tracked node
-node_x_history = []
+# History for tracked node (x, y, z positions)
+node_xyz_history = []
 
 # Time stepping loop
 for n in range(n_steps):
@@ -385,12 +385,16 @@ for n in range(n_steps):
     # Update velocity using Backward Euler
     v_new = (u.x.array - u_old.x.array) / dt
     
-    # Track node x-position (absolute position = initial + displacement)
+    # Track node x, y, z positions (absolute position = initial + displacement)
     if tracked_node_dof is not None:
-        # Get displacement at tracked node (x-component)
+        # Get displacement at tracked node (all components)
         u_x_at_node = u.x.array[tracked_node_dof * block_size + 0]
+        u_y_at_node = u.x.array[tracked_node_dof * block_size + 1]
+        u_z_at_node = u.x.array[tracked_node_dof * block_size + 2]
         x_position = tracked_node_coord[0] + u_x_at_node
-        node_x_history.append(x_position)
+        y_position = tracked_node_coord[1] + u_y_at_node
+        z_position = tracked_node_coord[2] + u_z_at_node
+        node_xyz_history.append([x_position, y_position, z_position])
     
     # Update old values for next time step
     u_old.x.array[:] = u.x.array[:]
@@ -401,7 +405,8 @@ for n in range(n_steps):
         max_disp = np.max(np.linalg.norm(u.x.array.reshape(-1, 3), axis=1))
         max_vel = np.max(np.linalg.norm(v_old.x.array.reshape(-1, 3), axis=1))
         if tracked_node_dof is not None:
-            print(f"Step {n}: tracked node x = {node_x_history[-1]:.17f}")
+            x_pos, y_pos, z_pos = node_xyz_history[-1]
+            print(f"Step {n}: tracked node position = ({x_pos:.17f}, {y_pos:.17f}, {z_pos:.17f})")
         print(f"  Time {t:.4f}, Iterations {num_its}")
         print(f"  Max displacement: {max_disp:.6e}, Max velocity: {max_vel:.6e}")
 
@@ -417,11 +422,10 @@ if tracked_node_dof is not None:
     
     csv_path = os.path.join(output_dir, f"node_x_history_fenics_res{RES}.csv")
     with open(csv_path, 'w') as f:
-        f.write("step,x_position\n")
-        for i, x_val in enumerate(node_x_history):
-            f.write(f"{i},{x_val:.17f}\n")
+        f.write("step,x_position,y_position,z_position\n")
+        for i, (x_val, y_val, z_val) in enumerate(node_xyz_history):
+            f.write(f"{i},{x_val:.17f},{y_val:.17f},{z_val:.17f}\n")
     
-    print(f"Wrote tracked node x-position history to {csv_path}")
+    print(f"Wrote tracked node x,y,z position history to {csv_path}")
     print(f"  Node position: ({tracked_node_coord[0]:.1f}, {tracked_node_coord[1]:.1f}, {tracked_node_coord[2]:.1f})")
-    print(f"  Format: step,x_position")
-    print(f"  Total steps: {len(node_x_history)}\n")
+    print(f"  Total steps: {len(node_xyz_history)}\n")

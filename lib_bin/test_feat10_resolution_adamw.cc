@@ -97,7 +97,7 @@ int main() {
   gpu_t10_data.SetNodalFixed(h_fixed_nodes);
 
   // set external force
-  // set 5000N force in x direction for all nodes with x = 3(count all number of
+  // set 250000N force in -z direction for all nodes with x = 3(count all number of
   // nodes and equally distribute)
   Eigen::VectorXd h_f_ext(gpu_t10_data.get_n_coef() * 3);
   h_f_ext.setZero();
@@ -112,9 +112,9 @@ int main() {
 
   // Distribute 5000N equally across these nodes in x direction
   if (force_node_indices.size() > 0) {
-    double force_per_node = 5000.0 / force_node_indices.size();
+    double force_per_node = 250000.0 / force_node_indices.size();
     for (int node_idx : force_node_indices) {
-      h_f_ext(3 * node_idx + 0) = force_per_node;  // x direction
+      h_f_ext(3 * node_idx + 2) = -force_per_node;  // -z direction
     }
   }
 
@@ -229,8 +229,10 @@ int main() {
   solver.Setup();
   solver.SetParameters(&params);
 
-  // Vector to store x position of node 353 at each step
+  // Vectors to store x, y, z positions of tracked node at each step
   std::vector<double> node_x_history;
+  std::vector<double> node_y_history;
+  std::vector<double> node_z_history;
 
   for (int i = 0; i < 50; i++) {
     solver.Solve();
@@ -241,21 +243,34 @@ int main() {
 
     if (plot_target_node < x12_current.size()) {
       node_x_history.push_back(x12_current(plot_target_node));
+      node_y_history.push_back(y12_current(plot_target_node));
+      node_z_history.push_back(z12_current(plot_target_node));
       std::cout << "Step " << i << ": node " << plot_target_node
-                << " x = " << x12_current(plot_target_node) << std::endl;
+                << " x = " << x12_current(plot_target_node)
+                << " y = " << y12_current(plot_target_node)
+                << " z = " << z12_current(plot_target_node) << std::endl;
     }
   }
 
   // Write to CSV file
-  std::ofstream csv_file("node_x_history.csv");
+  std::string csv_filename;
+  if (resolution == RES_0) {
+    csv_filename = "node_x_history_res0.csv";
+  } else if (resolution == RES_2) {
+    csv_filename = "node_x_history_res2.csv";
+  } else if (resolution == RES_4) {
+    csv_filename = "node_x_history_res4.csv";
+  }
+  std::ofstream csv_file(csv_filename);
   csv_file << std::fixed << std::setprecision(17);
-  csv_file << "step,x_position\n";
+  csv_file << "step,x_position,y_position,z_position\n";
   for (size_t i = 0; i < node_x_history.size(); i++) {
-    csv_file << i << "," << node_x_history[i] << "\n";
+    csv_file << i << "," << node_x_history[i] << ","
+             << node_y_history[i] << "," << node_z_history[i] << "\n";
   }
   csv_file.close();
   std::cout << "Wrote node " << plot_target_node
-            << " x-position history to node_x_history.csv" << std::endl;
+            << " x,y,z-position history to " << csv_filename << std::endl;
 
   // // Set highest precision for cout
   std::cout << std::fixed << std::setprecision(17);
