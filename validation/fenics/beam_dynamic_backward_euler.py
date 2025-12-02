@@ -7,10 +7,9 @@ import numpy as np
 import ufl
 
 from dolfinx import fem, mesh, plot, log, default_scalar_type
-from dolfinx.fem.petsc import NonlinearProblem
+from dolfinx.fem.petsc import NonlinearProblem, assemble_residual
+from petsc4py import PETSc
 from tetgen_mesh_loader import load_tetgen_mesh_from_files
-
-import pyvista as pv
 
 
 # ============================================================================
@@ -157,32 +156,49 @@ print(f"  Free scalar DOFs: {total_vector_dofs - len(boundary_dofs) * block_size
 
 
 # ============================================================================
-# APPLIED LOADS - Distribute 5000N at x=3 face
+# 1. PREPARE THE EXTERNAL FORCE VECTOR (DIRECT POINT LOADS)
 # ============================================================================
 print("\nAPPLIED LOADS SETUP")
 
-# Find all function space DOF nodes at x = 3
+# Identify DOFs on the face x = L
+dof_coords = V.tabulate_dof_coordinates()
 force_dofs = []
+
+# Find indices of nodes at x=L
+# Note: In a VectorFunctionSpace, tabulate_dof_coordinates returns the 
+# coordinate of the "node" associated with the block.
 for i, coord in enumerate(dof_coords):
-    if abs(coord[0] - L) < tol:  # x = 3
+    if abs(coord[0] - L) < tol:
         force_dofs.append(i)
 
-# Total force to apply (in x direction)
-total_force = 5000.0  # N
-
-# Distribute equally across all nodes at x=3
+# Calculate Force Per Node (Matching C++ Logic)
+total_force = 5000.0
 num_force_nodes = len(force_dofs)
 force_per_node = total_force / num_force_nodes if num_force_nodes > 0 else 0.0
 
-# Create nodal force function
-f_nodal = fem.Function(V)
-f_nodal.x.array[:] = 0.0
+print(f"Applying Lumped Force: {force_per_node} N per node on {num_force_nodes} nodes.")
 
-# Apply forces at x=3 nodes
-for dof_idx in force_dofs:
-    # Apply force in x-direction (component 0)
-    # For blocked vector space, DOF index directly gives us the node
-    f_nodal.x.array[dof_idx * block_size + 0] = force_per_node
+# Create a global PETSc vector for the external force
+# We use the same index map as the function space
+f_temp = fem.Function(V)
+f_temp.x.array[:] = 0.0
+
+# Apply the force directly to the vector indices
+# We must map the local 'force_dofs' to the global PETSc vector indices
+dofmap = V.dofmap
+bs = dofmap.index_map_bs  # Block size (should be 3)
+
+# Get local-to-global map if running in parallel (or serial)
+# For simple serial script, we can access the array directly via the Function wrapper
+# but treating it as a raw PETSc vector is safer for the solver.
+for node_idx in force_dofs:
+    # Set X-component (index 0 in the block)
+    # The C++ code sets: h_f_ext(3 * node_idx + 0) = force_per_node
+    f_temp.x.array[node_idx * bs + 0] = force_per_node
+
+# Move data to the PETSc vector
+f_ext_vector = f_temp.x.petsc_vec.copy()
+f_ext_vector.ghostUpdate(addv=PETSc.InsertMode.INSERT, mode=PETSc.ScatterMode.FORWARD)
 
 print(f"Load applied at x=3:")
 print(f"  Total force: {total_force} N (x direction)")
@@ -190,14 +206,6 @@ print(f"  Number of nodes at x=3: {num_force_nodes}")
 print(f"  Force per node: {force_per_node:.6f} N")
 print(f"  Total force applied: {force_per_node * num_force_nodes:.1f} N")
 print(f"  Distribution: Equal distribution across all nodes")
-
-# List the loaded DOF nodes
-# print(f"\n  DOF nodes with applied load at x=3:")
-# print(f"  {'DOF Index':<12} {'X':<12} {'Y':<12} {'Z':<12} {'Force_x (N)':<12}")
-# print("  " + "-"*88)
-# for dof_idx in sorted(force_dofs):
-#     coord = dof_coords[dof_idx]
-#     print(f"  {dof_idx:<12} {coord[0]:<12.6f} {coord[1]:<12.6f} {coord[2]:<12.6f} {force_per_node:<12.6f}")
 
 
 # ============================================================================
@@ -268,7 +276,7 @@ P = lambda_factor * F + mu * (FFtF - F)
 # ============================================================================
 # TIME INTEGRATION SETUP (Backward Euler method)
 # ============================================================================
-dt = 1e-1  # Time step (0.1 seconds)
+dt = 1e-3  # Time step (0.1 seconds)
 n_steps = 50  # Number of time steps
 t_final = n_steps * dt  # Total simulation time: 5.0 seconds
 
@@ -283,7 +291,7 @@ print(f"Total simulation time: {t_final} s")
 # VARIATIONAL FORM (Backward Euler)
 # ============================================================================
 # Quadrature degree reduced to 3 (matching C++ more closely)
-metadata = {"quadrature_degree": 3}
+metadata = {"quadrature_degree": 5}
 dx = ufl.Measure("dx", domain=domain, metadata=metadata)
 
 # Backward Euler time discretization:
@@ -294,26 +302,47 @@ v_current = (u - u_old) / dt
 a_current = (v_current - v_old) / dt
 
 # Backward Euler variational form:
-# ρ ∫ a·v dx + ∫ ∇v:P dx = ∫ v·B dx + v·f_nodal
+# REMOVED: - ufl.inner(v, f_nodal) * dx
+# We now only calculate Mass (Inertia) and Stiffness (Internal Stress) here.
 F_form = (rho * ufl.inner(a_current, v) * dx +
           ufl.inner(ufl.grad(v), P) * dx -
-          ufl.inner(v, B) * dx -
-          ufl.inner(v, f_nodal) * dx)
+          ufl.inner(v, B) * dx)
 
 
 # ============================================================================
-# SOLVER SETUP
+# 3. CUSTOM SOLVER PROBLEM
 # ============================================================================
-# Tolerances matching C++ (1e-6 outer_tol)
-problem = NonlinearProblem(
+class PointLoadProblem(NonlinearProblem):
+    def __init__(self, F, u, f_ext_vector, bcs=None, **kwargs):
+        super().__init__(F, u, bcs=bcs, **kwargs)
+        self.f_ext_vector = f_ext_vector
+        self._bcs = bcs if bcs is not None else []
+        
+        # Set up custom residual function callback for SNES
+        # This callback will be called by SNES during Newton iterations
+        def residual_callback(snes, x, b, ctx=None):
+            # First, assemble the standard residual (Mass + Stiffness) into b
+            # assemble_residual handles SNES context and boundary conditions properly
+            assemble_residual(self.u, self.F, self.J, self._bcs, snes, x, b)
+            
+            # Then subtract the external force vector (b = F_int - F_ext)
+            b.axpy(-1.0, self.f_ext_vector)
+        
+        # Set the custom residual function
+        # self.solver is the SNES object
+        self.solver.setFunction(residual_callback, self.b)
+
+# Initialize the custom problem
+problem = PointLoadProblem(
     F_form,
     u,
+    f_ext_vector=f_ext_vector,
     bcs=[bc_fixed],
     petsc_options={
         "snes_type": "newtonls",
-        "snes_atol": 1e-6,  # Matching C++ outer_tol
-        "snes_rtol": 1e-6,  # Matching C++ outer_tol
-        "snes_stol": 1e-6,  # Matching C++ outer_tol
+        "snes_atol": 1e-6,
+        "snes_rtol": 1e-6,
+        "snes_stol": 1e-6,
         "ksp_type": "preonly",
         "pc_type": "lu",
         "pc_factor_mat_solver_type": "mumps",
@@ -386,7 +415,7 @@ if tracked_node_dof is not None:
     output_dir = os.path.join(script_dir, "output")
     os.makedirs(output_dir, exist_ok=True)
     
-    csv_path = os.path.join(output_dir, "node_x_history_fenics.csv")
+    csv_path = os.path.join(output_dir, f"node_x_history_fenics_res{RES}.csv")
     with open(csv_path, 'w') as f:
         f.write("step,x_position\n")
         for i, x_val in enumerate(node_x_history):
