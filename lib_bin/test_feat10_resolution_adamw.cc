@@ -234,7 +234,7 @@ int main() {
   std::vector<double> node_y_history;
   std::vector<double> node_z_history;
 
-  for (int i = 0; i < 50; i++) {
+  for (int i = 0; i < 500; i++) {
     solver.Solve();
 
     // Retrieve current positions
@@ -255,11 +255,11 @@ int main() {
   // Write to CSV file
   std::string csv_filename;
   if (resolution == RES_0) {
-    csv_filename = "node_x_history_res0.csv";
+    csv_filename = "node_x_history_res0_adamw.csv";
   } else if (resolution == RES_2) {
-    csv_filename = "node_x_history_res2.csv";
+    csv_filename = "node_x_history_res2_adamw.csv";
   } else if (resolution == RES_4) {
-    csv_filename = "node_x_history_res4.csv";
+    csv_filename = "node_x_history_res4_adamw.csv";
   }
   std::ofstream csv_file(csv_filename);
   csv_file << std::fixed << std::setprecision(17);

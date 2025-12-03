@@ -346,6 +346,25 @@ cc_binary(
     ],
 )
 
+cc_binary(
+    name = "test_feat10_resolution_nesterov",
+    srcs = ["lib_bin/test_feat10_resolution_nesterov.cc"],
+    copts = ["--std=c++17"],
+    linkopts = [
+        "-L/usr/local/cuda/lib64",
+        "-lcusparse",
+        "-lcudart",
+    ],
+    deps = [
+        ":FEAT10Data",
+        ":cpu_utils",
+        ":solvers_syncednesterov",
+        ":solvers_syncedadamw",
+        ":solvers_syncednewton",
+        "@eigen//:eigen",
+    ],
+)
+
 
 
 cc_binary(

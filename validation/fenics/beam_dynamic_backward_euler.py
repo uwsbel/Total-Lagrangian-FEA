@@ -277,7 +277,7 @@ P = lambda_factor * F + mu * (FFtF - F)
 # TIME INTEGRATION SETUP (Backward Euler method)
 # ============================================================================
 dt = 1e-3  # Time step (0.1 seconds)
-n_steps = 50  # Number of time steps
+n_steps = 500  # Number of time steps
 t_final = n_steps * dt  # Total simulation time: 5.0 seconds
 
 print("\nTIME INTEGRATION SETUP")

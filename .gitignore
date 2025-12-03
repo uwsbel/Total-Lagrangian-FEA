@@ -2,3 +2,9 @@ bazel-*
 .vscode
 __pycache__/
 *.py[cod]
+/*.csv
+validation/fenics/temp/*
+/validation/fenics/output/*
+/validation/fenics/**/*.gif
+/validation/fenics/**/*.vtk
+/validation/fenics/**/*.png

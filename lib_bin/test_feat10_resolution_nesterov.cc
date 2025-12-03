@@ -7,7 +7,7 @@
 
 #include "../../lib_utils/quadrature_utils.h"
 #include "../lib_src/elements/FEAT10Data.cuh"
-#include "../lib_src/solvers/SyncedNewton.cuh"
+#include "../lib_src/solvers/SyncedNesterov.cuh"
 #include "../lib_utils/cpu_utils.h"
 
 const double E    = 7e8;   // Young's modulus
@@ -110,7 +110,7 @@ int main() {
     }
   }
 
-  // Distribute 250000N equally across these nodes in -z direction
+  // Distribute 5000N equally across these nodes in x direction
   if (force_node_indices.size() > 0) {
     double force_per_node = 250000.0 / force_node_indices.size();
     for (int node_idx : force_node_indices) {
@@ -223,8 +223,8 @@ int main() {
   std::cout << f_int.transpose() << std::endl;
   std::cout << "done retrieving internal force vector" << std::endl;
 
-  SyncedNewtonParams params = {1e-2, 1e-6, 1e14, 5, 10, 1e-3};
-  SyncedNewtonSolver solver(&gpu_t10_data, gpu_t10_data.get_n_constraint());
+  SyncedNesterovParams params = {1.0e-8, 1e14, 1.0e-6, 1.0e-6, 5, 500, 1.0e-3};
+  SyncedNesterovSolver solver(&gpu_t10_data, gpu_t10_data.get_n_constraint());
   solver.Setup();
   solver.SetParameters(&params);
 
@@ -233,10 +233,9 @@ int main() {
   std::vector<double> node_y_history;
   std::vector<double> node_z_history;
 
-  solver.AnalyzeHessianSparsity();
-
   for (int i = 0; i < 500; i++) {
     solver.Solve();
+
     // Retrieve current positions
     Eigen::VectorXd x12_current, y12_current, z12_current;
     gpu_t10_data.RetrievePositionToCPU(x12_current, y12_current, z12_current);
@@ -255,18 +254,18 @@ int main() {
   // Write to CSV file
   std::string csv_filename;
   if (resolution == RES_0) {
-    csv_filename = "node_x_history_res0_newton.csv";
+    csv_filename = "node_x_history_res0_nesterov.csv";
   } else if (resolution == RES_2) {
-    csv_filename = "node_x_history_res2_newton.csv";
+    csv_filename = "node_x_history_res2_nesterov.csv";
   } else if (resolution == RES_4) {
-    csv_filename = "node_x_history_res4_newton.csv";
+    csv_filename = "node_x_history_res4_nesterov.csv";
   }
   std::ofstream csv_file(csv_filename);
   csv_file << std::fixed << std::setprecision(17);
   csv_file << "step,x_position,y_position,z_position\n";
   for (size_t i = 0; i < node_x_history.size(); i++) {
-    csv_file << i << "," << node_x_history[i] << "," << node_y_history[i]
-             << "," << node_z_history[i] << "\n";
+    csv_file << i << "," << node_x_history[i] << ","
+             << node_y_history[i] << "," << node_z_history[i] << "\n";
   }
   csv_file.close();
   std::cout << "Wrote node " << plot_target_node
@@ -305,3 +304,4 @@ int main() {
 
   return 0;
 }
+
