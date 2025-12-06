@@ -437,6 +437,56 @@ __device__ __forceinline__ void compute_internal_force(
   // clang-format on
 }
 
+// ----------------------------------------------------------------------------
+// Per-quadrature-point version: one thread handles all 16 shape funcs for one (elem, qp).
+// Call with:  idx ∈ [0, n_elem * N_QP)
+//   elem_idx = idx / N_QP
+//   qp_idx   = idx % N_QP
+// ----------------------------------------------------------------------------
+__device__ __forceinline__ void compute_internal_force_per_qp(
+    int elem_idx, int qp_idx, GPU_ANCF3443_Data *d_data) {
+  
+  // Load P tensor once for this (elem, qp)
+  double P[3][3];
+  #pragma unroll
+  for (int i = 0; i < 3; i++) {
+    #pragma unroll
+    for (int j = 0; j < 3; j++) {
+      P[i][j] = d_data->P(elem_idx, qp_idx)(i, j);
+    }
+  }
+
+  double geom = (d_data->L() * d_data->W() * d_data->H()) / 8.0;
+  double scale = d_data->weight_xi()(qp_idx / (Quadrature::N_QP_4 * Quadrature::N_QP_3)) *
+                 d_data->weight_eta()((qp_idx / Quadrature::N_QP_3) % Quadrature::N_QP_4) *
+                 d_data->weight_zeta()(qp_idx % Quadrature::N_QP_3);
+  double dV = scale * geom;
+
+  // Loop over all 16 shape functions
+  #pragma unroll
+  for (int node_idx = 0; node_idx < Quadrature::N_SHAPE_3443; node_idx++) {
+    int global_node_idx =
+        d_data->element_connectivity()(elem_idx, node_idx / 4) * 4 +
+        (node_idx % 4);
+
+    double grad_s[3];
+    grad_s[0] = d_data->ds_du_pre(qp_idx)(node_idx, 0);
+    grad_s[1] = d_data->ds_du_pre(qp_idx)(node_idx, 1);
+    grad_s[2] = d_data->ds_du_pre(qp_idx)(node_idx, 2);
+
+    #pragma unroll
+    for (int r = 0; r < 3; ++r) {
+      double f_r = 0.0;
+      #pragma unroll
+      for (int c = 0; c < 3; ++c) {
+        f_r += P[r][c] * grad_s[c];
+      }
+      f_r *= dV;
+      atomicAdd(&d_data->f_int(global_node_idx)(r), f_r);
+    }
+  }
+}
+
 __device__ __forceinline__ void compute_constraint_data(
     GPU_ANCF3443_Data *d_data) {
   int thread_idx = blockIdx.x * blockDim.x + threadIdx.x;

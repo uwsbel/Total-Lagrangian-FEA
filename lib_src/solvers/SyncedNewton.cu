@@ -659,11 +659,12 @@ __global__ void cudss_solve_compute_internal_force(
     ElementType *d_data, SyncedNewtonSolver *d_newton_solver) {
   int tid = blockIdx.x * blockDim.x + threadIdx.x;
 
-  if (tid < d_newton_solver->get_n_beam() * d_newton_solver->gpu_n_shape()) {
+  // Per-QP parallelization: each thread handles all nodes for one (elem, qp)
+  if (tid < d_newton_solver->get_n_beam() * d_newton_solver->gpu_n_total_qp()) {
     int idx      = tid;
-    int elem_idx = idx / d_newton_solver->gpu_n_shape();
-    int node_idx = idx % d_newton_solver->gpu_n_shape();
-    compute_internal_force(elem_idx, node_idx, d_data);
+    int elem_idx = idx / d_newton_solver->gpu_n_total_qp();
+    int qp_idx   = idx % d_newton_solver->gpu_n_total_qp();
+    compute_internal_force_per_qp(elem_idx, qp_idx, d_data);
   }
 }
 
@@ -864,7 +865,7 @@ void SyncedNewtonSolver::OneStepNewtonCuDSS() {
   int numBlocks_clear_internal_force =
       (n_coef_ * 3 + threadsPerBlock - 1) / threadsPerBlock;
   int numBlocks_internal_force =
-      (n_beam_ * n_shape_ + threadsPerBlock - 1) / threadsPerBlock;
+      (n_beam_ * n_total_qp_ + threadsPerBlock - 1) / threadsPerBlock;
   int numBlocks_grad_l = (n_coef_ * 3 + threadsPerBlock - 1) / threadsPerBlock;
   int numBlocks_constraints_eval =
       (n_constraints_ / 3 + threadsPerBlock - 1) / threadsPerBlock;

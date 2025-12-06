@@ -184,15 +184,16 @@ __global__ void one_step_nesterov_kernel(
 
           grid.sync();
 
-          // Compute internal forces
+          // Compute internal forces - per QP parallelization
           if (tid < d_nesterov_solver->get_n_beam() *
-                        d_nesterov_solver->gpu_n_shape()) {
-            for (int idx = tid; idx < d_nesterov_solver->get_n_beam() *
-                                          d_nesterov_solver->gpu_n_shape();
-                 idx += grid.size()) {
-              int elem_idx = idx / d_nesterov_solver->gpu_n_shape();
-              int node_idx = idx % d_nesterov_solver->gpu_n_shape();
-              compute_internal_force(elem_idx, node_idx, data);
+                        d_nesterov_solver->gpu_n_total_qp()) {
+            for (unsigned int idx = (unsigned int)tid;
+                 idx < (unsigned int)(d_nesterov_solver->get_n_beam() *
+                                       d_nesterov_solver->gpu_n_total_qp());
+                 idx += (unsigned int)grid.size()) {
+              int elem_idx = idx / d_nesterov_solver->gpu_n_total_qp();
+              int qp_idx   = idx % d_nesterov_solver->gpu_n_total_qp();
+              compute_internal_force_per_qp(elem_idx, qp_idx, data);
             }
           }
 

@@ -131,7 +131,6 @@ __device__ __forceinline__ void compute_p(int elem_idx, int qp_idx,
   double Edot[3][3] = {{0.0}};
   // Edot = 0.5*(Fdot^T * F + F^T * Fdot)
   double Ft[3][3];
-  double FtF_tmp[3][3] = {{0.0}}; // temporary
   #pragma unroll
   for (int i = 0; i < 3; i++) {
     for (int j = 0; j < 3; j++) {
@@ -317,6 +316,56 @@ __device__ __forceinline__ void compute_internal_force(
   }
 
   // clang-format on
+}
+
+// ----------------------------------------------------------------------------
+// Per-quadrature-point version: one thread handles all 10 nodes for one (elem, qp).
+// Call with:  idx ∈ [0, n_elem * N_QP)
+//   elem_idx = idx / N_QP
+//   qp_idx   = idx % N_QP
+// ----------------------------------------------------------------------------
+__device__ __forceinline__ void compute_internal_force_per_qp(
+    int elem_idx, int qp_idx, GPU_FEAT10_Data* d_data) {
+  
+  // Load P tensor once for this (elem, qp) — shared across all 10 nodes
+  double P[3][3];
+  #pragma unroll
+  for (int i = 0; i < 3; i++) {
+    #pragma unroll
+    for (int j = 0; j < 3; j++) {
+      P[i][j] = d_data->P(elem_idx, qp_idx)(i, j);
+    }
+  }
+
+  // Integration weight (same for all nodes at this QP)
+  double dV = d_data->detJ_ref(elem_idx, qp_idx) * d_data->tet5pt_weights(qp_idx);
+
+  // Loop over all 10 nodes and compute their contributions from this QP
+  #pragma unroll
+  for (int node_local = 0; node_local < 10; node_local++) {
+    int global_node_idx = d_data->element_connectivity()(elem_idx, node_local);
+
+    // Shape-function gradient for this node at this QP
+    double grad_N[3];
+    grad_N[0] = d_data->grad_N_ref(elem_idx, qp_idx)(node_local, 0);
+    grad_N[1] = d_data->grad_N_ref(elem_idx, qp_idx)(node_local, 1);
+    grad_N[2] = d_data->grad_N_ref(elem_idx, qp_idx)(node_local, 2);
+
+    // f_contribution = P @ grad_N * dV
+    #pragma unroll
+    for (int i = 0; i < 3; i++) {
+      double f_i = 0.0;
+      #pragma unroll
+      for (int j = 0; j < 3; j++) {
+        f_i += P[i][j] * grad_N[j];
+      }
+      f_i *= dV;
+
+      // Atomic accumulate
+      int global_dof_idx = 3 * global_node_idx + i;
+      atomicAdd(&(d_data->f_int()(global_dof_idx)), f_i);
+    }
+  }
 }
 
 __device__ __forceinline__ void clear_internal_force(GPU_FEAT10_Data* d_data) {
