@@ -16,6 +16,18 @@ cuda_library(
     ],
     visibility = ["//visibility:public"],
 )
+
+cuda_library(
+    name = "collision_narrowphase",
+    srcs = ["lib_src/collision/Narrowphase.cu"],
+    hdrs = ["lib_src/collision/Narrowphase.cuh"],
+    copts = ["--std=c++17", "-O3", "--use_fast_math", "--extra-device-vectorization"],
+    linkopts = ["-lcudart"],
+    deps = [
+        "@eigen//:eigen",
+    ],
+    visibility = ["//visibility:public"],
+)
 # ========================================
 
 # ========================================
@@ -38,6 +50,31 @@ cc_library(
     hdrs = ["lib_utils/mesh_utils.h"],
     copts = ["--std=c++17"],
     deps = ["@eigen//:eigen"],
+    visibility = ["//visibility:public"],
+)
+
+# mesh manager for multi-mesh handling
+cc_library(
+    name = "mesh_manager",
+    srcs = ["lib_utils/mesh_manager.cc"],
+    hdrs = ["lib_utils/mesh_manager.h"],
+    copts = ["--std=c++17"],
+    deps = [
+        ":cpu_utils",
+        "@eigen//:eigen",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+# visualization utilities for contact patch export
+cc_library(
+    name = "visualization_utils",
+    hdrs = ["lib_utils/visualization_utils.h"],
+    copts = ["--std=c++17"],
+    deps = [
+        ":collision_narrowphase",
+        "@eigen//:eigen",
+    ],
     visibility = ["//visibility:public"],
 )
 
@@ -487,10 +524,16 @@ cc_test(
     name = "utest_collision",
     srcs = ["lib_utest/utest_collision.cc"],
     copts = ["--std=c++17"],
+    data = glob([
+        "data/meshes/**",
+    ]),
     deps = [
         ":cpu_utils",
         ":collision_broadphase",
+        ":collision_narrowphase",
         ":mesh_utils",
+        ":mesh_manager",
+        ":visualization_utils",
         "@eigen//:eigen",
         "@googletest//:gtest_main",
     ],

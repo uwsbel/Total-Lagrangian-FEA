@@ -14,8 +14,8 @@
 #pragma once
 
 struct AABB {
-  float3 min;
-  float3 max;
+  double3 min;
+  double3 max;
   int objectId;
 };
 
@@ -88,9 +88,9 @@ struct Broadphase {
   Broadphase* d_bp;
 
   // Sorting data for sweep and prune
-  float* d_sortKeys;     // Sort keys (e.g., min.x values)
+  double* d_sortKeys;     // Sort keys (e.g., min.x values)
   int* d_sortIndices;    // Original indices
-  float* d_sortedKeys;   // Sorted keys (output)
+  double* d_sortedKeys;   // Sorted keys (output)
   int* d_sortedIndices;  // Sorted indices (output)
   AABB* d_sortedAABBs;   // Sorted AABBs
   void* d_tempStorage;   // Temporary storage for CUB

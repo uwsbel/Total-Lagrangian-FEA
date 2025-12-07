@@ -53,9 +53,9 @@ void Broadphase::Initialize(const Eigen::MatrixXd& nodes,
   cudaMalloc(&d_aabbs, n_elems * sizeof(AABB));
 
   // Allocate sorting arrays (input and output buffers)
-  cudaMalloc(&d_sortKeys, n_elems * sizeof(float));
+  cudaMalloc(&d_sortKeys, n_elems * sizeof(double));
   cudaMalloc(&d_sortIndices, n_elems * sizeof(int));
-  cudaMalloc(&d_sortedKeys, n_elems * sizeof(float));
+  cudaMalloc(&d_sortedKeys, n_elems * sizeof(double));
   cudaMalloc(&d_sortedIndices, n_elems * sizeof(int));
   cudaMalloc(&d_sortedAABBs, n_elems * sizeof(AABB));
 
@@ -163,27 +163,27 @@ __global__ void computeAABBKernel(Broadphase* bp, AABB* aabbs, int n_elems) {
   // Get first node ID using element getter
   int first_node_id = bp->element_node(elem_idx, 0);
 
-  // Access node coordinates using getters
-  float3 min_pt =
-      make_float3(bp->node_x(first_node_id), bp->node_y(first_node_id),
-                  bp->node_z(first_node_id));
-  float3 max_pt = min_pt;
+  // Access node coordinates using getters - use double precision
+  double3 min_pt =
+      make_double3(bp->node_x(first_node_id), bp->node_y(first_node_id),
+                   bp->node_z(first_node_id));
+  double3 max_pt = min_pt;
 
   // Iterate through all nodes of the element
   for (int i = 1; i < bp->nodesPerElement; i++) {
     int node_id = bp->element_node(elem_idx, i);
 
-    float x = bp->node_x(node_id);
-    float y = bp->node_y(node_id);
-    float z = bp->node_z(node_id);
+    double x = bp->node_x(node_id);
+    double y = bp->node_y(node_id);
+    double z = bp->node_z(node_id);
 
-    min_pt.x = fminf(min_pt.x, x);
-    min_pt.y = fminf(min_pt.y, y);
-    min_pt.z = fminf(min_pt.z, z);
+    min_pt.x = fmin(min_pt.x, x);
+    min_pt.y = fmin(min_pt.y, y);
+    min_pt.z = fmin(min_pt.z, z);
 
-    max_pt.x = fmaxf(max_pt.x, x);
-    max_pt.y = fmaxf(max_pt.y, y);
-    max_pt.z = fmaxf(max_pt.z, z);
+    max_pt.x = fmax(max_pt.x, x);
+    max_pt.y = fmax(max_pt.y, y);
+    max_pt.z = fmax(max_pt.z, z);
   }
 
   // Store AABB
@@ -252,7 +252,7 @@ void Broadphase::RetrieveAABBandPrints() {
 }
 
 // Kernel to extract sort keys from AABBs
-__global__ void extractSortKeysKernel(const AABB* aabbs, float* keys,
+__global__ void extractSortKeysKernel(const AABB* aabbs, double* keys,
                                       int* indices, int axis, int n) {
   int idx = blockIdx.x * blockDim.x + threadIdx.x;
   if (idx < n) {
@@ -316,12 +316,12 @@ void Broadphase::PrintSortedAABBs(int axis) {
 
   // Copy sorted AABBs and indices to host
   std::vector<AABB> h_sortedAABBs(numObjects);
-  std::vector<float> h_sortedKeys(numObjects);
+  std::vector<double> h_sortedKeys(numObjects);
   std::vector<int> h_sortedIndices(numObjects);
 
   cudaMemcpy(h_sortedAABBs.data(), d_sortedAABBs, numObjects * sizeof(AABB),
              cudaMemcpyDeviceToHost);
-  cudaMemcpy(h_sortedKeys.data(), d_sortedKeys, numObjects * sizeof(float),
+  cudaMemcpy(h_sortedKeys.data(), d_sortedKeys, numObjects * sizeof(double),
              cudaMemcpyDeviceToHost);
   cudaMemcpy(h_sortedIndices.data(), d_sortedIndices, numObjects * sizeof(int),
              cudaMemcpyDeviceToHost);
@@ -343,10 +343,10 @@ void Broadphase::PrintSortedAABBs(int axis) {
     std::cout << "  ObjectId: " << aabb.objectId << std::endl;
 
     // Verify sort key matches AABB min value
-    float expected_key = (axis == 0)   ? aabb.min.x
-                         : (axis == 1) ? aabb.min.y
-                                       : aabb.min.z;
-    if (fabs(expected_key - h_sortedKeys[i]) > 1e-6) {
+    double expected_key = (axis == 0)   ? aabb.min.x
+                          : (axis == 1) ? aabb.min.y
+                                        : aabb.min.z;
+    if (fabs(expected_key - h_sortedKeys[i]) > 1e-12) {
       std::cout << "  ⚠️  WARNING: Sort key mismatch! Expected " << expected_key
                 << " but got " << h_sortedKeys[i] << std::endl;
     }
@@ -615,10 +615,10 @@ void Broadphase::PrintCollisionPairs() {
   std::cout << "\n========== Collision Pairs (Non-Neighbors) ==========\n"
             << std::endl;
 
-  for (int i = 0; i < numCollisions; i++) {
-    std::cout << "Pair " << i << ": Element " << h_collisionPairs[i].idA
-              << " <-> Element " << h_collisionPairs[i].idB << std::endl;
-  }
+  // for (int i = 0; i < numCollisions; i++) {
+  //   std::cout << "Pair " << i << ": Element " << h_collisionPairs[i].idA
+  //             << " <-> Element " << h_collisionPairs[i].idB << std::endl;
+  // }
 
   std::cout << "Total non-neighbor collisions: " << numCollisions << std::endl;
 
