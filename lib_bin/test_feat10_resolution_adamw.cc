@@ -14,7 +14,7 @@ const double E    = 7e8;   // Young's modulus
 const double nu   = 0.33;  // Poisson's ratio
 const double rho0 = 2700;  // Density
 
-enum MESH_RESOLUTION { RES_0, RES_2, RES_4 };
+enum MESH_RESOLUTION { RES_0, RES_2, RES_4, RES_8, RES_16 };
 
 int main() {
   // Read mesh data
@@ -43,6 +43,18 @@ int main() {
     n_elems = ANCFCPUUtils::FEAT10_read_elements(
         "data/meshes/T10/resolution/beam_3x2x1_res4.1.ele", elements);
     plot_target_node = 353;
+  } else if (resolution == RES_8) {
+    n_nodes = ANCFCPUUtils::FEAT10_read_nodes(
+        "data/meshes/T10/resolution/beam_3x2x1_res8.1.node", nodes);
+    n_elems = ANCFCPUUtils::FEAT10_read_elements(
+        "data/meshes/T10/resolution/beam_3x2x1_res8.1.ele", elements);
+    plot_target_node = 1408;
+  } else if (resolution == RES_16) {
+    n_nodes = ANCFCPUUtils::FEAT10_read_nodes(
+        "data/meshes/T10/resolution/beam_3x2x1_res16.1.node", nodes);
+    n_elems = ANCFCPUUtils::FEAT10_read_elements(
+        "data/meshes/T10/resolution/beam_3x2x1_res16.1.ele", elements);
+    plot_target_node = 5630;
   }
 
   std::cout << "mesh read nodes: " << n_nodes << std::endl;
