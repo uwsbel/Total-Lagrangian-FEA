@@ -345,48 +345,58 @@ void SyncedAdamWSolver::OneStepAdamW() {
   HANDLE_ERROR(cudaEventCreate(&stop));
 
   int threads = 128;
-
   cudaDeviceProp props;
   HANDLE_ERROR(cudaGetDeviceProperties(&props, 0));
 
-  int N            = 3 * n_coef_;
-  int blocksNeeded = (N + threads - 1) / threads;
+  int N_dof              = 3 * n_coef_;
+  int blocksNeededDof    = (N_dof + threads - 1) / threads;
+  int n_constraint_nodes = n_constraints_ / 3;
+  int blocksNeededConstr = (n_constraint_nodes + threads - 1) / threads;
+  int blocksNeeded       = std::max(blocksNeededDof, blocksNeededConstr);
+
+  int maxBlocksPerSm = 0;
+
+  if (type_ == TYPE_3243) {
+    HANDLE_ERROR(cudaOccupancyMaxActiveBlocksPerMultiprocessor(
+        &maxBlocksPerSm, one_step_adamw_kernel_impl<GPU_ANCF3243_Data>, threads,
+        0));
+  } else if (type_ == TYPE_3443) {
+    HANDLE_ERROR(cudaOccupancyMaxActiveBlocksPerMultiprocessor(
+        &maxBlocksPerSm, one_step_adamw_kernel_impl<GPU_ANCF3443_Data>, threads,
+        0));
+  } else if (type_ == TYPE_T10) {
+    HANDLE_ERROR(cudaOccupancyMaxActiveBlocksPerMultiprocessor(
+        &maxBlocksPerSm, one_step_adamw_kernel_impl<GPU_FEAT10_Data>, threads,
+        0));
+  }
+
+  int maxCoopBlocks = maxBlocksPerSm * props.multiProcessorCount;
+
+  if (blocksNeeded > maxCoopBlocks) {
+    std::cerr << "SyncedAdamW: problem size too large for cooperative launch on "
+              << props.name << ". Requested blocks: " << blocksNeeded
+              << ", max cooperative blocks: " << maxCoopBlocks
+              << ", n_coef: " << n_coef_
+              << ", n_constraints: " << n_constraints_ << std::endl;
+    std::abort();
+  }
+
+  int blocks = blocksNeeded;
 
   HANDLE_ERROR(cudaEventRecord(start));
 
   // Launch appropriate templated kernel based on element type
   if (type_ == TYPE_3243) {
-    int maxBlocksPerSm = 0;
-    HANDLE_ERROR(cudaOccupancyMaxActiveBlocksPerMultiprocessor(
-        &maxBlocksPerSm, one_step_adamw_kernel_impl<GPU_ANCF3243_Data>, threads,
-        0));
-    int blocks =
-        std::min(blocksNeeded, maxBlocksPerSm * props.multiProcessorCount);
-
     void *args[] = {&d_data_, &d_adamw_solver_};
     HANDLE_ERROR(cudaLaunchCooperativeKernel(
         (void *)one_step_adamw_kernel_impl<GPU_ANCF3243_Data>, blocks, threads,
         args));
   } else if (type_ == TYPE_3443) {
-    int maxBlocksPerSm = 0;
-    HANDLE_ERROR(cudaOccupancyMaxActiveBlocksPerMultiprocessor(
-        &maxBlocksPerSm, one_step_adamw_kernel_impl<GPU_ANCF3443_Data>, threads,
-        0));
-    int blocks =
-        std::min(blocksNeeded, maxBlocksPerSm * props.multiProcessorCount);
-
     void *args[] = {&d_data_, &d_adamw_solver_};
     HANDLE_ERROR(cudaLaunchCooperativeKernel(
         (void *)one_step_adamw_kernel_impl<GPU_ANCF3443_Data>, blocks, threads,
         args));
   } else if (type_ == TYPE_T10) {
-    int maxBlocksPerSm = 0;
-    HANDLE_ERROR(cudaOccupancyMaxActiveBlocksPerMultiprocessor(
-        &maxBlocksPerSm, one_step_adamw_kernel_impl<GPU_FEAT10_Data>, threads,
-        0));
-    int blocks =
-        std::min(blocksNeeded, maxBlocksPerSm * props.multiProcessorCount);
-
     void *args[] = {&d_data_, &d_adamw_solver_};
     HANDLE_ERROR(cudaLaunchCooperativeKernel(
         (void *)one_step_adamw_kernel_impl<GPU_FEAT10_Data>, blocks, threads,
