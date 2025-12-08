@@ -45,15 +45,15 @@ int main() {
     plot_target_node = 353;
   } else if (resolution == RES_8) {
     n_nodes = ANCFCPUUtils::FEAT10_read_nodes(
-        "data/meshes/T10/beam_3x2x1_res8.1.node", nodes);
+        "data/meshes/T10/resolution/beam_3x2x1_res8.1.node", nodes);
     n_elems = ANCFCPUUtils::FEAT10_read_elements(
-        "data/meshes/T10/beam_3x2x1_res8.1.ele", elements);
+        "data/meshes/T10/resolution/beam_3x2x1_res8.1.ele", elements);
     plot_target_node = 1408;
   } else if (resolution == RES_16) {
     n_nodes = ANCFCPUUtils::FEAT10_read_nodes(
-        "data/meshes/T10/beam_3x2x1_res16.1.node", nodes);
+        "data/meshes/T10/resolution/beam_3x2x1_res16.1.node", nodes);
     n_elems = ANCFCPUUtils::FEAT10_read_elements(
-        "data/meshes/T10/beam_3x2x1_res16.1.ele", elements);
+        "data/meshes/T10/resolution/beam_3x2x1_res16.1.ele", elements);
     plot_target_node = 5630;
   }
 
