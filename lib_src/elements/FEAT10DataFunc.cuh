@@ -131,7 +131,6 @@ __device__ __forceinline__ void compute_p(int elem_idx, int qp_idx,
   double Edot[3][3] = {{0.0}};
   // Edot = 0.5*(Fdot^T * F + F^T * Fdot)
   double Ft[3][3];
-  double FtF_tmp[3][3] = {{0.0}}; // temporary
   #pragma unroll
   for (int i = 0; i < 3; i++) {
     for (int j = 0; j < 3; j++) {
