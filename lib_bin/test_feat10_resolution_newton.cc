@@ -23,7 +23,7 @@ int main() {
   int plot_target_node;
   int n_nodes, n_elems;
 
-  MESH_RESOLUTION resolution = RES_8;
+  MESH_RESOLUTION resolution = RES_0;
 
   if (resolution == RES_0) {
     n_nodes = ANCFCPUUtils::FEAT10_read_nodes(
