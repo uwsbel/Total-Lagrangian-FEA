@@ -7,7 +7,7 @@
 
 #include "../../lib_utils/quadrature_utils.h"
 #include "../lib_src/elements/FEAT10Data.cuh"
-#include "../lib_src/solvers/SyncedAdamW.cuh"
+#include "../lib_src/solvers/SyncedAdamWshmem.cuh"
 #include "../lib_utils/cpu_utils.h"
 
 const double E    = 7e8;   // Young's modulus
@@ -87,7 +87,7 @@ int main() {
   }
 
   // print fixed nodes
-  std::cout << "Fixed nodes (z == 0):" << std::endl;
+  std::cout << "Fixed nodes (x == 0):" << std::endl;
   for (int i = 0; i < h_fixed_nodes.size(); ++i) {
     std::cout << h_fixed_nodes(i) << " ";
   }
@@ -223,39 +223,50 @@ int main() {
   std::cout << f_int.transpose() << std::endl;
   std::cout << "done retrieving internal force vector" << std::endl;
 
-  SyncedAdamWParams params = {2e-4, 0.9,  0.999, 1e-8, 1e-4, 0.995, 1e-1,
-                              1e-6, 1e14, 5,     500,  1e-3, 20};
-  SyncedAdamWSolver solver(&gpu_t10_data, gpu_t10_data.get_n_constraint());
+  // Use shared memory optimized solver
+  SyncedAdamWshmemParams params = {2e-4, 0.9,  0.999, 1e-8, 1e-4, 0.995, 1e-1,
+                                   1e-6, 1e14, 5,     500,  1e-3, 20};
+  SyncedAdamWshmemSolver solver(&gpu_t10_data, gpu_t10_data.get_n_constraint());
   solver.Setup();
   solver.SetParameters(&params);
 
-  // Vector to store x position of node 353 at each step
+  std::cout << "\n========== Starting Shared Memory AdamW Solver ==========" << std::endl;
+
+  // Vector to store x position of target node at each step
   std::vector<double> node_x_history;
 
-  for (int i = 0; i < 50; i++) {
-    solver.Solve();
+  // Multi-step configuration
+  const int steps_per_kernel = 10;  // Number of steps per kernel launch
+  const int total_steps = 50;
+  const int num_batches = (total_steps + steps_per_kernel - 1) / steps_per_kernel;
 
-    // Retrieve current positions
+  for (int batch = 0; batch < num_batches; batch++) {
+    int steps_this_batch = std::min(steps_per_kernel, total_steps - batch * steps_per_kernel);
+    std::cout << "\n----- Batch " << batch << " (" << steps_this_batch << " steps) -----" << std::endl;
+    
+    solver.Solve(steps_this_batch);
+
+    // Retrieve current positions after batch
     Eigen::VectorXd x12_current, y12_current, z12_current;
     gpu_t10_data.RetrievePositionToCPU(x12_current, y12_current, z12_current);
 
     if (plot_target_node < x12_current.size()) {
       node_x_history.push_back(x12_current(plot_target_node));
-      std::cout << "Step " << i << ": node " << plot_target_node
+      std::cout << "After batch " << batch << ": node " << plot_target_node
                 << " x = " << x12_current(plot_target_node) << std::endl;
     }
   }
 
   // Write to CSV file
-  std::ofstream csv_file("node_x_history.csv");
+  std::ofstream csv_file("node_x_history_shmem.csv");
   csv_file << std::fixed << std::setprecision(17);
-  csv_file << "step,x_position\n";
+  csv_file << "batch,x_position\n";
   for (size_t i = 0; i < node_x_history.size(); i++) {
     csv_file << i << "," << node_x_history[i] << "\n";
   }
   csv_file.close();
   std::cout << "Wrote node " << plot_target_node
-            << " x-position history to node_x_history.csv" << std::endl;
+            << " x-position history (per batch) to node_x_history_shmem.csv" << std::endl;
 
   // // Set highest precision for cout
   std::cout << std::fixed << std::setprecision(17);
@@ -263,6 +274,7 @@ int main() {
   Eigen::VectorXd x12, y12, z12;
   gpu_t10_data.RetrievePositionToCPU(x12, y12, z12);
 
+  std::cout << "\n========== Final Positions ==========" << std::endl;
   std::cout << "x12:" << std::endl;
   for (int i = 0; i < x12.size(); i++) {
     std::cout << x12(i) << " ";

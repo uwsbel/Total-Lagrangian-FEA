@@ -159,6 +159,25 @@ cuda_library(
     visibility = ["//visibility:public"],
 )
 
+cuda_library(
+    name = "solvers_syncedadamwshmem",
+    srcs = [
+        "lib_src/solvers/SyncedAdamWshmem.cu",
+    ],
+    hdrs = [
+        "lib_src/solvers/SolverBase.h",
+        "lib_src/solvers/SyncedAdamWshmem.cuh",
+    ],
+    copts = ["--std=c++17", "-O3", "--use_fast_math", "--extra-device-vectorization"],
+    deps = [
+        ":FEAT10Data",
+        ":cuda_utils",
+        ":cpu_utils",
+        "@eigen//:eigen",
+    ],
+    visibility = ["//visibility:public"],
+)
+
 # ========================================
 
 # ========================================
@@ -307,6 +326,23 @@ cc_binary(
 )
 
 cc_binary(
+    name = "test_feat10_adamw_shmem",
+    srcs = ["lib_bin/test_feat10_adamw_shmem.cc"],
+    copts = ["--std=c++17"],
+    linkopts = [
+        "-L/usr/local/cuda/lib64",
+        "-lcusparse",
+        "-lcudart",
+    ],
+    deps = [
+        ":FEAT10Data",
+        ":cpu_utils",
+        ":solvers_syncedadamwshmem",
+        "@eigen//:eigen",
+    ],
+)
+
+cc_binary(
     name = "test_feat10_resolution_adamw",
     srcs = ["lib_bin/test_feat10_resolution_adamw.cc"],
     copts = ["--std=c++17"],
@@ -342,6 +378,23 @@ cc_binary(
         ":solvers_syncednesterov",
         ":solvers_syncedadamw",
         ":solvers_syncednewton",
+        "@eigen//:eigen",
+    ],
+)
+
+cc_binary(
+    name = "test_feat10_resolution_adamw_shmem",
+    srcs = ["lib_bin/test_feat10_resolution_adamw_shmem.cc"],
+    copts = ["--std=c++17"],
+    linkopts = [
+        "-L/usr/local/cuda/lib64",
+        "-lcusparse",
+        "-lcudart",
+    ],
+    deps = [
+        ":FEAT10Data",
+        ":cpu_utils",
+        ":solvers_syncedadamwshmem",
         "@eigen//:eigen",
     ],
 )
