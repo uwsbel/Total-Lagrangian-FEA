@@ -434,7 +434,7 @@ if __name__ == "__main__":
 
     # 1) Save full data as NPZ
     out_npz = f"{args.out_prefix}.npz"
-    np.savez_compressed(
+    np.savez(
         out_npz,
         verts=verts,
         tets=tets,

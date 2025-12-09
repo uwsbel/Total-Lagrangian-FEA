@@ -5,8 +5,6 @@
 #include <iostream>
 #include <unordered_set>
 #include <vector>
-
-// Add this include at the top:
 #include "../../lib_utils/cuda_utils.h"
 #include "../../lib_utils/quadrature_utils.h"
 

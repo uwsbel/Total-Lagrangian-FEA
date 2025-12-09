@@ -44,11 +44,6 @@ class VisualizationUtils {
       }
     }
 
-    if (numPolygons == 0) {
-      std::cerr << "Warning: No valid patches to export" << std::endl;
-      return false;
-    }
-
     file << std::setprecision(15) << std::scientific;
 
     // VTP XML header
@@ -58,6 +53,28 @@ class VisualizationUtils {
     file << "  <PolyData>\n";
     file << "    <Piece NumberOfPoints=\"" << totalVerts
          << "\" NumberOfPolys=\"" << numPolygons << "\">\n";
+
+    // Handle empty patches case - write minimal valid VTP structure
+    if (numPolygons == 0) {
+      file << "      <Points>\n";
+      file << "        <DataArray type=\"Float64\" NumberOfComponents=\"3\" "
+              "format=\"ascii\">\n";
+      file << "        </DataArray>\n";
+      file << "      </Points>\n";
+      file << "      <Polys>\n";
+      file << "        <DataArray type=\"Int32\" Name=\"connectivity\" "
+              "format=\"ascii\">\n";
+      file << "        </DataArray>\n";
+      file << "        <DataArray type=\"Int32\" Name=\"offsets\" "
+              "format=\"ascii\">\n";
+      file << "        </DataArray>\n";
+      file << "      </Polys>\n";
+      file << "    </Piece>\n";
+      file << "  </PolyData>\n";
+      file << "</VTKFile>\n";
+      file.close();
+      return true;
+    }
 
     // Points (vertices)
     file << "      <Points>\n";
@@ -520,6 +537,119 @@ class VisualizationUtils {
     file.close();
     std::cout << "Exported " << numArrows << " normal arrows to " << filename
               << std::endl;
+    return true;
+  }
+
+  /**
+   * Export mesh with displacement field to VTU format.
+   * Includes displacement magnitude (scalar) and displacement vector.
+   *
+   * @param nodes Node coordinates (n_nodes x 3)
+   * @param elements Element connectivity (n_elements x nodes_per_element)
+   * @param displacement Displacement vector (3 * n_nodes), layout: [dx0, dy0, dz0, dx1, ...]
+   * @param filename Output VTU filename
+   * @return true if export successful
+   */
+  static bool ExportMeshWithDisplacement(const Eigen::MatrixXd& nodes,
+                                         const Eigen::MatrixXi& elements,
+                                         const Eigen::VectorXd& displacement,
+                                         const std::string& filename) {
+    std::ofstream file(filename);
+    if (!file.is_open()) {
+      std::cerr << "Error: Cannot open file " << filename << " for writing"
+                << std::endl;
+      return false;
+    }
+
+    int numNodes    = nodes.rows();
+    int numElements = elements.rows();
+
+    file << std::setprecision(15) << std::scientific;
+
+    // VTU XML header
+    file << "<?xml version=\"1.0\"?>\n";
+    file << "<VTKFile type=\"UnstructuredGrid\" version=\"1.0\" "
+            "byte_order=\"LittleEndian\">\n";
+    file << "  <UnstructuredGrid>\n";
+    file << "    <Piece NumberOfPoints=\"" << numNodes << "\" NumberOfCells=\""
+         << numElements << "\">\n";
+
+    // Points (node coordinates)
+    file << "      <Points>\n";
+    file << "        <DataArray type=\"Float64\" NumberOfComponents=\"3\" "
+            "format=\"ascii\">\n";
+    for (int i = 0; i < numNodes; ++i) {
+      file << "          " << nodes(i, 0) << " " << nodes(i, 1) << " "
+           << nodes(i, 2) << "\n";
+    }
+    file << "        </DataArray>\n";
+    file << "      </Points>\n";
+
+    // Point data (displacement magnitude and vector)
+    file << "      <PointData Scalars=\"displacement_magnitude\" "
+            "Vectors=\"displacement\">\n";
+
+    // Displacement magnitude
+    file << "        <DataArray type=\"Float64\" Name=\"displacement_magnitude\" "
+            "format=\"ascii\">\n";
+    for (int i = 0; i < numNodes; ++i) {
+      double dx  = (i * 3 < displacement.size()) ? displacement(i * 3) : 0.0;
+      double dy  = (i * 3 + 1 < displacement.size()) ? displacement(i * 3 + 1) : 0.0;
+      double dz  = (i * 3 + 2 < displacement.size()) ? displacement(i * 3 + 2) : 0.0;
+      double mag = std::sqrt(dx * dx + dy * dy + dz * dz);
+      file << "          " << mag << "\n";
+    }
+    file << "        </DataArray>\n";
+
+    // Displacement vector
+    file << "        <DataArray type=\"Float64\" Name=\"displacement\" "
+            "NumberOfComponents=\"3\" format=\"ascii\">\n";
+    for (int i = 0; i < numNodes; ++i) {
+      double dx = (i * 3 < displacement.size()) ? displacement(i * 3) : 0.0;
+      double dy = (i * 3 + 1 < displacement.size()) ? displacement(i * 3 + 1) : 0.0;
+      double dz = (i * 3 + 2 < displacement.size()) ? displacement(i * 3 + 2) : 0.0;
+      file << "          " << dx << " " << dy << " " << dz << "\n";
+    }
+    file << "        </DataArray>\n";
+    file << "      </PointData>\n";
+
+    // Cells (element connectivity)
+    // For T10 elements, use only first 4 nodes (corners) for visualization
+    file << "      <Cells>\n";
+    file << "        <DataArray type=\"Int32\" Name=\"connectivity\" "
+            "format=\"ascii\">\n";
+    for (int i = 0; i < numElements; ++i) {
+      file << "          ";
+      // Use first 4 nodes (linear tet for visualization)
+      for (int j = 0; j < 4; ++j) {
+        file << elements(i, j) << " ";
+      }
+      file << "\n";
+    }
+    file << "        </DataArray>\n";
+
+    // Offsets
+    file << "        <DataArray type=\"Int32\" Name=\"offsets\" "
+            "format=\"ascii\">\n";
+    for (int i = 0; i < numElements; ++i) {
+      file << "          " << (i + 1) * 4 << "\n";
+    }
+    file << "        </DataArray>\n";
+
+    // Cell types (10 = VTK_TETRA)
+    file << "        <DataArray type=\"UInt8\" Name=\"types\" "
+            "format=\"ascii\">\n";
+    for (int i = 0; i < numElements; ++i) {
+      file << "          10\n";
+    }
+    file << "        </DataArray>\n";
+
+    file << "      </Cells>\n";
+    file << "    </Piece>\n";
+    file << "  </UnstructuredGrid>\n";
+    file << "</VTKFile>\n";
+
+    file.close();
     return true;
   }
 };

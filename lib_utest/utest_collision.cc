@@ -125,68 +125,18 @@ TEST_F(TestCollision, NarrowphaseContactPatches) {
   // p(x) = Eh * max(0, R - ||x - center||)
   // Each mesh has its own center based on its current (transformed) position
 
-  const auto& instance0 = mesh_manager.GetMeshInstance(mesh0);
-  const auto& instance1 = mesh_manager.GetMeshInstance(mesh1);
+  // In this codebase, we no longer compute pressure fields analytically.
+  // Instead, we load per-node scalar fields from external NPZ files.
 
-  // Compute center of mesh 0 (in global coordinates)
-  Eigen::Vector3d center0 = Eigen::Vector3d::Zero();
-  for (int i = 0; i < instance0.num_nodes; ++i) {
-    int global_idx = instance0.node_offset + i;
-    center0 += nodes.row(global_idx).transpose();
-  }
-  center0 /= instance0.num_nodes;
+  bool ok0 = mesh_manager.LoadScalarFieldFromNpz(
+      mesh0, "data/meshes/T10/sphere.1.uncompressed.npz", "p_vertex");
+  bool ok1 = mesh_manager.LoadScalarFieldFromNpz(
+      mesh1, "data/meshes/T10/sphere.1.uncompressed.npz", "p_vertex");
+  ASSERT_TRUE(ok0);
+  ASSERT_TRUE(ok1);
 
-  // Compute center of mesh 1 (in global coordinates, after translation)
-  Eigen::Vector3d center1 = Eigen::Vector3d::Zero();
-  for (int i = 0; i < instance1.num_nodes; ++i) {
-    int global_idx = instance1.node_offset + i;
-    center1 += nodes.row(global_idx).transpose();
-  }
-  center1 /= instance1.num_nodes;
-
-  // Estimate radius from mesh 0
-  double R = 0.0;
-  for (int i = 0; i < instance0.num_nodes; ++i) {
-    int global_idx = instance0.node_offset + i;
-    double dist    = (nodes.row(global_idx).transpose() - center0).norm();
-    R              = std::max(R, dist);
-  }
-
-  double Eh = 1.0;  // Hydroelastic modulus
-
-  std::cout << "Mesh 0 center: (" << center0.x() << ", " << center0.y() << ", "
-            << center0.z() << ")" << std::endl;
-  std::cout << "Mesh 1 center: (" << center1.x() << ", " << center1.y() << ", "
-            << center1.z() << ")" << std::endl;
-  std::cout << "Estimated radius R: " << R << std::endl;
-
-  // Compute pressure field for mesh 0: p(x) = Eh * max(0, R - ||x - center0||)
-  Eigen::VectorXd pressure0(instance0.num_nodes);
-  for (int i = 0; i < instance0.num_nodes; ++i) {
-    int global_idx = instance0.node_offset + i;
-    double dist    = (nodes.row(global_idx).transpose() - center0).norm();
-    pressure0(i)   = Eh * std::max(0.0, R - dist);
-  }
-  mesh_manager.SetScalarField(mesh0, pressure0);
-
-  // Compute pressure field for mesh 1: p(x) = Eh * max(0, R - ||x - center1||)
-  // Note: This uses center1 (the translated center), not center0!
-  Eigen::VectorXd pressure1(instance1.num_nodes);
-  for (int i = 0; i < instance1.num_nodes; ++i) {
-    int global_idx = instance1.node_offset + i;
-    double dist    = (nodes.row(global_idx).transpose() - center1).norm();
-    pressure1(i)   = Eh * std::max(0.0, R - dist);
-  }
-  mesh_manager.SetScalarField(mesh1, pressure1);
-
-  // Get unified scalar field
   const Eigen::VectorXd& pressure = mesh_manager.GetAllScalarFields();
-  std::cout << "Computed hydroelastic pressure fields" << std::endl;
   std::cout << "Scalar field size: " << pressure.size() << std::endl;
-  std::cout << "Pressure 0 range: [" << pressure0.minCoeff() << ", "
-            << pressure0.maxCoeff() << "]" << std::endl;
-  std::cout << "Pressure 1 range: [" << pressure1.minCoeff() << ", "
-            << pressure1.maxCoeff() << "]" << std::endl;
 
   // ===== Broadphase =====
   broadphase.Initialize(nodes, elements);
@@ -287,6 +237,91 @@ TEST_F(TestCollision, NarrowphaseContactPatches) {
   }
 }
 
+TEST_F(TestCollision, ExternalForcesFromContactPatches) {
+  ANCFCPUUtils::MeshManager mesh_manager;
+  Broadphase broadphase;
+  Narrowphase narrowphase;
+
+  int mesh0 = mesh_manager.LoadMesh("data/meshes/T10/sphere.1.node",
+                                    "data/meshes/T10/sphere.1.ele", "sphere_0");
+  ASSERT_GE(mesh0, 0);
+
+  int mesh1 = mesh_manager.LoadMesh("data/meshes/T10/sphere.1.node",
+                                    "data/meshes/T10/sphere.1.ele", "sphere_1");
+  ASSERT_GE(mesh1, 0);
+
+  mesh_manager.TranslateMesh(mesh1, 0.2, 0.0, 0.1);
+
+  const Eigen::MatrixXd& nodes    = mesh_manager.GetAllNodes();
+  const Eigen::MatrixXi& elements = mesh_manager.GetAllElements();
+
+  // In this test, we use externally provided scalar fields from NPZ
+  bool ok0 = mesh_manager.LoadScalarFieldFromNpz(
+      mesh0, "data/meshes/T10/sphere.1.uncompressed.npz", "p_vertex");
+  bool ok1 = mesh_manager.LoadScalarFieldFromNpz(
+      mesh1, "data/meshes/T10/sphere.1.uncompressed.npz", "p_vertex");
+  ASSERT_TRUE(ok0);
+  ASSERT_TRUE(ok1);
+
+  const Eigen::VectorXd& pressure = mesh_manager.GetAllScalarFields();
+
+  broadphase.Initialize(nodes, elements);
+  broadphase.CreateAABB();
+  broadphase.BuildNeighborMap();
+  broadphase.SortAABBs(0);
+  broadphase.DetectCollisions();
+
+  std::vector<std::pair<int, int>> collisionPairs;
+  for (const auto& cp : broadphase.h_collisionPairs) {
+    collisionPairs.emplace_back(cp.idA, cp.idB);
+  }
+
+  Eigen::VectorXi elementMeshIds(mesh_manager.GetTotalElements());
+  for (int i = 0; i < mesh_manager.GetNumMeshes(); ++i) {
+    const auto& instance = mesh_manager.GetMeshInstance(i);
+    for (int e = 0; e < instance.num_elements; ++e) {
+      elementMeshIds(instance.element_offset + e) = i;
+    }
+  }
+
+  narrowphase.Initialize(nodes, elements, pressure, elementMeshIds);
+  narrowphase.SetCollisionPairs(collisionPairs);
+  narrowphase.ComputeContactPatches();
+  narrowphase.RetrieveResults();
+
+  auto validPatches = narrowphase.GetValidPatches();
+  ASSERT_GT(validPatches.size(), 0u);
+
+  Eigen::VectorXd f_ext =
+      ComputeExternalForcesFromContactPatches(nodes, elements, validPatches);
+
+  ASSERT_EQ(f_ext.size(), 3 * nodes.rows());
+
+  double total_norm = f_ext.norm();
+  EXPECT_GT(total_norm, 0.0);
+
+  std::cout << "\n--- External contact forces (nodal) ---" << std::endl;
+  std::cout << "Total nodes: " << nodes.rows() << std::endl;
+  std::cout << "f_ext size:  " << f_ext.size() << std::endl;
+  std::cout << "||f_ext||:   " << total_norm << std::endl;
+
+  int max_print_nodes = std::min<int>(nodes.rows(), 20);
+  for (int i = 0; i < max_print_nodes; ++i) {
+    Eigen::Vector3d fi = f_ext.segment<3>(3 * i);
+    std::cout << "node " << i << ": ("
+              << fi.x() << ", " << fi.y() << ", " << fi.z() << ")" << std::endl;
+  }
+
+  Eigen::Vector3d net_F = Eigen::Vector3d::Zero();
+  for (int i = 0; i < nodes.rows(); ++i) {
+    net_F += f_ext.segment<3>(3 * i);
+  }
+
+  EXPECT_NEAR(net_F.x(), 0.0, 1e-6);
+  EXPECT_NEAR(net_F.y(), 0.0, 1e-6);
+  EXPECT_NEAR(net_F.z(), 0.0, 1e-6);
+}
+
 TEST_F(TestCollision, ThreeSpheresContactPatches) {
   // Three spheres collision test
   // Sphere 0: at origin
@@ -326,50 +361,19 @@ TEST_F(TestCollision, ThreeSpheresContactPatches) {
   const Eigen::MatrixXd& nodes    = mesh_manager.GetAllNodes();
   const Eigen::MatrixXi& elements = mesh_manager.GetAllElements();
 
-  // Compute hydroelastic pressure fields for each mesh
-  double Eh = 1.0;  // Hydroelastic modulus
-
-  // First, compute centers and estimate radius
-  std::vector<Eigen::Vector3d> centers(3);
-  for (int m = 0; m < 3; ++m) {
-    const auto& instance = mesh_manager.GetMeshInstance(m);
-    centers[m]           = Eigen::Vector3d::Zero();
-    for (int i = 0; i < instance.num_nodes; ++i) {
-      int global_idx = instance.node_offset + i;
-      centers[m] += nodes.row(global_idx).transpose();
-    }
-    centers[m] /= instance.num_nodes;
-    std::cout << "Mesh " << m << " center: (" << centers[m].x() << ", "
-              << centers[m].y() << ", " << centers[m].z() << ")" << std::endl;
-  }
-
-  // Estimate radius from mesh 0
-  const auto& instance0 = mesh_manager.GetMeshInstance(mesh0);
-  double R              = 0.0;
-  for (int i = 0; i < instance0.num_nodes; ++i) {
-    int global_idx = instance0.node_offset + i;
-    double dist    = (nodes.row(global_idx).transpose() - centers[0]).norm();
-    R              = std::max(R, dist);
-  }
-  std::cout << "Estimated radius R: " << R << std::endl;
-
-  // Compute pressure fields for all three meshes
-  for (int m = 0; m < 3; ++m) {
-    const auto& instance = mesh_manager.GetMeshInstance(m);
-    Eigen::VectorXd pressure_m(instance.num_nodes);
-    for (int i = 0; i < instance.num_nodes; ++i) {
-      int global_idx = instance.node_offset + i;
-      double dist    = (nodes.row(global_idx).transpose() - centers[m]).norm();
-      pressure_m(i)  = Eh * std::max(0.0, R - dist);
-    }
-    mesh_manager.SetScalarField(m, pressure_m);
-    std::cout << "Pressure " << m << " range: [" << pressure_m.minCoeff()
-              << ", " << pressure_m.maxCoeff() << "]" << std::endl;
-  }
+  // In this test, we also use externally provided scalar fields from NPZ
+  bool ok0 = mesh_manager.LoadScalarFieldFromNpz(
+      mesh0, "data/meshes/T10/sphere.1.uncompressed.npz", "p_vertex");
+  bool ok1 = mesh_manager.LoadScalarFieldFromNpz(
+      mesh1, "data/meshes/T10/sphere.1.uncompressed.npz", "p_vertex");
+  bool ok2 = mesh_manager.LoadScalarFieldFromNpz(
+      mesh2, "data/meshes/T10/sphere.1.uncompressed.npz", "p_vertex");
+  ASSERT_TRUE(ok0);
+  ASSERT_TRUE(ok1);
+  ASSERT_TRUE(ok2);
 
   // Get unified scalar field
   const Eigen::VectorXd& pressure = mesh_manager.GetAllScalarFields();
-  std::cout << "Computed hydroelastic pressure fields" << std::endl;
   std::cout << "Scalar field size: " << pressure.size() << std::endl;
 
   // ===== Broadphase =====

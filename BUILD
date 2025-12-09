@@ -482,6 +482,31 @@ cc_binary(
     ],
 )
 
+cc_binary(
+    name = "test_sphere_drop_collision",
+    srcs = ["lib_bin/test_sphere_drop_collision.cc"],
+    copts = ["--std=c++17"],
+    linkopts = [
+        "-L/usr/local/cuda/lib64",
+        "-lcusparse",
+        "-lcudart",
+        "-lcudss",
+        "-lcublas",
+    ],
+    deps = [
+        ":FEAT10Data",
+        ":cpu_utils",
+        ":collision_broadphase",
+        ":collision_narrowphase",
+        ":mesh_manager",
+        ":visualization_utils",
+        ":solvers_syncednesterov",
+        ":solvers_syncedadamw",
+        ":solvers_syncednewton",
+        "@eigen//:eigen",
+    ],
+)
+
 
 # ========================================
 

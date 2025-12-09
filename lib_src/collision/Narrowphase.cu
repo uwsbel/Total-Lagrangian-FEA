@@ -340,7 +340,71 @@ __device__ void clipPolygonWithTet(const ClipPolygon& poly_in,
     next             = tmp;
   }
 
-  poly_out = *current;
+  // Reorder vertices by angle around centroid to ensure proper polygon winding
+  if (current->count >= 3) {
+    // Compute centroid
+    double3 cent = make_double3(0, 0, 0);
+    for (int i = 0; i < current->count; i++) {
+      cent = cent + current->verts[i];
+    }
+    cent = (1.0 / current->count) * cent;
+
+    // Compute polygon normal from first 3 vertices
+    double3 n_poly = cross(current->verts[1] - current->verts[0],
+                           current->verts[2] - current->verts[0]);
+    double n_len = length(n_poly);
+    if (n_len > NP_EPS) {
+      n_poly = (1.0 / n_len) * n_poly;
+    } else {
+      // Fallback: use Z-axis
+      n_poly = make_double3(0, 0, 1);
+    }
+
+    // Build in-plane coordinate system
+    double3 u_dir = current->verts[0] - cent;
+    u_dir = u_dir - dot(u_dir, n_poly) * n_poly;
+    double u_len = length(u_dir);
+    if (u_len < NP_EPS) {
+      u_dir = make_double3(1, 0, 0);
+      u_dir = u_dir - dot(u_dir, n_poly) * n_poly;
+      u_len = length(u_dir);
+      if (u_len < NP_EPS) {
+        u_dir = make_double3(0, 1, 0);
+        u_dir = u_dir - dot(u_dir, n_poly) * n_poly;
+        u_len = length(u_dir);
+      }
+    }
+    u_dir = (1.0 / u_len) * u_dir;
+    double3 v_dir = cross(n_poly, u_dir);
+
+    // Compute angles and sort
+    double angles[MAX_POLYGON_VERTS];
+    int order[MAX_POLYGON_VERTS];
+    for (int i = 0; i < current->count; i++) {
+      double3 rel = current->verts[i] - cent;
+      angles[i] = atan2(dot(rel, v_dir), dot(rel, u_dir));
+      order[i] = i;
+    }
+
+    // Bubble sort by angle
+    for (int i = 0; i < current->count - 1; i++) {
+      for (int j = i + 1; j < current->count; j++) {
+        if (angles[order[j]] < angles[order[i]]) {
+          int tmp = order[i];
+          order[i] = order[j];
+          order[j] = tmp;
+        }
+      }
+    }
+
+    // Store reordered vertices
+    poly_out.clear();
+    for (int i = 0; i < current->count; i++) {
+      poly_out.addVertex(current->verts[order[i]]);
+    }
+  } else {
+    poly_out = *current;
+  }
 }
 
 // ----------------------------------------------------------------------------
@@ -780,4 +844,109 @@ void Narrowphase::Destroy() {
   h_contactPatches.clear();
   numPatches        = 0;
   numCollisionPairs = 0;
+}
+
+namespace {
+
+Eigen::Vector4d ComputeBarycentricCoordinates(const Eigen::Vector3d& x,
+                                              const Eigen::Vector3d& v0,
+                                              const Eigen::Vector3d& v1,
+                                              const Eigen::Vector3d& v2,
+                                              const Eigen::Vector3d& v3) {
+  Eigen::Matrix3d M;
+  M.col(0) = v1 - v0;
+  M.col(1) = v2 - v0;
+  M.col(2) = v3 - v0;
+  Eigen::Vector3d rhs = x - v0;
+  Eigen::Vector3d lambda123 = M.colPivHouseholderQr().solve(rhs);
+  Eigen::Vector4d lambda;
+  lambda[1] = lambda123[0];
+  lambda[2] = lambda123[1];
+  lambda[3] = lambda123[2];
+  lambda[0] = 1.0 - lambda[1] - lambda[2] - lambda[3];
+  return lambda;
+}
+
+}  // namespace
+
+Eigen::VectorXd ComputeExternalForcesFromContactPatches(
+    const Eigen::MatrixXd& nodes,
+    const Eigen::MatrixXi& elements,
+    const std::vector<ContactPatch>& patches) {
+  const int n_nodes = static_cast<int>(nodes.rows());
+  const int nodesPerElement = static_cast<int>(elements.cols());
+  Eigen::VectorXd f_ext = Eigen::VectorXd::Zero(3 * n_nodes);
+
+  if (nodesPerElement < 4) {
+    return f_ext;
+  }
+
+  const double area_eps = 1e-18;
+
+  for (const auto& patch : patches) {
+    if (!patch.isValid) {
+      continue;
+    }
+    if (!patch.validOrientation) {
+      continue;
+    }
+    if (patch.area <= area_eps) {
+      continue;
+    }
+
+    Eigen::Vector3d normal(patch.normal.x, patch.normal.y, patch.normal.z);
+    Eigen::Vector3d centroid(patch.centroid.x, patch.centroid.y,
+                             patch.centroid.z);
+    double p_eq = patch.p_equilibrium;
+    double A = patch.area;
+
+    Eigen::Vector3d F_patch = p_eq * A * normal;
+
+    int tetA = patch.tetA_idx;
+    int tetB = patch.tetB_idx;
+    if (tetA < 0 || tetA >= elements.rows() ||
+        tetB < 0 || tetB >= elements.rows()) {
+      continue;
+    }
+
+    Eigen::Vector4i elemA;
+    Eigen::Vector4i elemB;
+    for (int i = 0; i < 4; ++i) {
+      elemA[i] = elements(tetA, i);
+      elemB[i] = elements(tetB, i);
+    }
+
+    Eigen::Vector3d vA0 = nodes.row(elemA[0]).transpose();
+    Eigen::Vector3d vA1 = nodes.row(elemA[1]).transpose();
+    Eigen::Vector3d vA2 = nodes.row(elemA[2]).transpose();
+    Eigen::Vector3d vA3 = nodes.row(elemA[3]).transpose();
+
+    Eigen::Vector3d vB0 = nodes.row(elemB[0]).transpose();
+    Eigen::Vector3d vB1 = nodes.row(elemB[1]).transpose();
+    Eigen::Vector3d vB2 = nodes.row(elemB[2]).transpose();
+    Eigen::Vector3d vB3 = nodes.row(elemB[3]).transpose();
+
+    Eigen::Vector4d N_A = ComputeBarycentricCoordinates(centroid, vA0, vA1,
+                                                        vA2, vA3);
+    Eigen::Vector4d N_B = ComputeBarycentricCoordinates(centroid, vB0, vB1,
+                                                        vB2, vB3);
+
+    // Contact force is repulsive: normal points from A to B
+    // tetA is pushed opposite to normal (away from B) -> -F_patch
+    // tetB is pushed along normal (away from A) -> +F_patch
+    for (int i = 0; i < 4; ++i) {
+      int nodeA = elemA[i];
+      int nodeB = elemB[i];
+      if (nodeA >= 0 && nodeA < n_nodes) {
+        Eigen::Vector3d fA = N_A[i] * (-F_patch);  // Push A away from B
+        f_ext.segment<3>(3 * nodeA) += fA;
+      }
+      if (nodeB >= 0 && nodeB < n_nodes) {
+        Eigen::Vector3d fB = N_B[i] * F_patch;     // Push B away from A
+        f_ext.segment<3>(3 * nodeB) += fB;
+      }
+    }
+  }
+
+  return f_ext;
 }

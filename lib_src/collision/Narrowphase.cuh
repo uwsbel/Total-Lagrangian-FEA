@@ -193,6 +193,13 @@ struct Narrowphase {
 #endif
 };
 
+// Host-side helper to compute nodal external forces from contact patches.
+// Returns a vector of size 3 * n_nodes laid out as [fx0, fy0, fz0, fx1, ...].
+Eigen::VectorXd ComputeExternalForcesFromContactPatches(
+    const Eigen::MatrixXd& nodes,
+    const Eigen::MatrixXi& elements,
+    const std::vector<ContactPatch>& patches);
+
 // ============================================================================
 // Device helper functions (declared here, defined in .cu)
 // ============================================================================
