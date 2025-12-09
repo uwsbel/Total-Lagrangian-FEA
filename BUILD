@@ -6,7 +6,10 @@ load("@rules_cuda//cuda:defs.bzl", "cuda_library")
 cuda_library(
     name = "collision_broadphase",
     srcs = ["lib_src/collision/Broadphase.cu"],
-    hdrs = ["lib_src/collision/Broadphase.cuh"],
+    hdrs = [
+        "lib_src/collision/Broadphase.cuh",
+        "lib_src/collision/BroadphaseFunc.cuh",
+    ],
     copts = ["--std=c++17", "-O3", "--use_fast_math", "--extra-device-vectorization"],
     linkopts = ["-lcudart"],
     deps = [
@@ -20,7 +23,10 @@ cuda_library(
 cuda_library(
     name = "collision_narrowphase",
     srcs = ["lib_src/collision/Narrowphase.cu"],
-    hdrs = ["lib_src/collision/Narrowphase.cuh"],
+    hdrs = [
+        "lib_src/collision/Narrowphase.cuh",
+        "lib_src/collision/NarrowphaseFunc.cuh",
+    ],
     copts = ["--std=c++17", "-O3", "--use_fast_math", "--extra-device-vectorization"],
     linkopts = ["-lcudart"],
     deps = [
