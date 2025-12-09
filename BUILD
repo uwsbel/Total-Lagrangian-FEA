@@ -2,6 +2,35 @@ load("@rules_cuda//cuda:defs.bzl", "cuda_library")
 # ========================================
 
 # ========================================
+# collision library section
+cuda_library(
+    name = "collision_broadphase",
+    srcs = ["lib_src/collision/Broadphase.cu"],
+    hdrs = ["lib_src/collision/Broadphase.cuh"],
+    copts = ["--std=c++17", "-O3", "--use_fast_math", "--extra-device-vectorization"],
+    linkopts = ["-lcudart"],
+    deps = [
+        ":cpu_utils",
+        ":cuda_utils",
+        "@eigen//:eigen",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+cuda_library(
+    name = "collision_narrowphase",
+    srcs = ["lib_src/collision/Narrowphase.cu"],
+    hdrs = ["lib_src/collision/Narrowphase.cuh"],
+    copts = ["--std=c++17", "-O3", "--use_fast_math", "--extra-device-vectorization"],
+    linkopts = ["-lcudart"],
+    deps = [
+        "@eigen//:eigen",
+    ],
+    visibility = ["//visibility:public"],
+)
+# ========================================
+
+# ========================================
 # utility library section (put this first since ANCF3243Data depends on it)
 cc_library(
     name = "cpu_utils",
@@ -21,6 +50,31 @@ cc_library(
     hdrs = ["lib_utils/mesh_utils.h"],
     copts = ["--std=c++17"],
     deps = ["@eigen//:eigen"],
+    visibility = ["//visibility:public"],
+)
+
+# mesh manager for multi-mesh handling
+cc_library(
+    name = "mesh_manager",
+    srcs = ["lib_utils/mesh_manager.cc"],
+    hdrs = ["lib_utils/mesh_manager.h"],
+    copts = ["--std=c++17"],
+    deps = [
+        ":cpu_utils",
+        "@eigen//:eigen",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+# visualization utilities for contact patch export
+cc_library(
+    name = "visualization_utils",
+    hdrs = ["lib_utils/visualization_utils.h"],
+    copts = ["--std=c++17"],
+    deps = [
+        ":collision_narrowphase",
+        "@eigen//:eigen",
+    ],
     visibility = ["//visibility:public"],
 )
 
@@ -428,6 +482,31 @@ cc_binary(
     ],
 )
 
+cc_binary(
+    name = "test_sphere_drop_collision",
+    srcs = ["lib_bin/test_sphere_drop_collision.cc"],
+    copts = ["--std=c++17"],
+    linkopts = [
+        "-L/usr/local/cuda/lib64",
+        "-lcusparse",
+        "-lcudart",
+        "-lcudss",
+        "-lcublas",
+    ],
+    deps = [
+        ":FEAT10Data",
+        ":cpu_utils",
+        ":collision_broadphase",
+        ":collision_narrowphase",
+        ":mesh_manager",
+        ":visualization_utils",
+        ":solvers_syncednesterov",
+        ":solvers_syncedadamw",
+        ":solvers_syncednewton",
+        "@eigen//:eigen",
+    ],
+)
+
 
 # ========================================
 
@@ -465,6 +544,26 @@ cc_test(
         "@googletest//:gtest_main",
     ],
 )
+
+cc_test(
+    name = "utest_collision",
+    srcs = ["lib_utest/utest_collision.cc"],
+    copts = ["--std=c++17"],
+    data = glob([
+        "data/meshes/**",
+    ]),
+    deps = [
+        ":cpu_utils",
+        ":collision_broadphase",
+        ":collision_narrowphase",
+        ":mesh_utils",
+        ":mesh_manager",
+        ":visualization_utils",
+        "@eigen//:eigen",
+        "@googletest//:gtest_main",
+    ],
+)
+
 
 cc_test(
     name = "utest_sparse_mass",
