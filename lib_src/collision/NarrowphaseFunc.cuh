@@ -1,5 +1,19 @@
 #pragma once
 
+/*==============================================================
+ *==============================================================
+ * Project: RoboDyna
+ * Author:  Json Zhou
+ * Email:   zzhou292@wisc.edu
+ * File:    NarrowphaseFunc.cuh
+ * Brief:   CUDA device utilities and kernels for narrowphase contact
+ *          computation. Implements affine pressure fields, plane–tet
+ *          intersection, polygon clipping, patch area/centroid evaluation,
+ *          iso-pressure contact patch generation, and GPU assembly of nodal
+ *          external forces via atomic additions.
+ *==============================================================
+ *==============================================================*/
+
 #include "Narrowphase.cuh"
 
 // Device / kernel functions for Narrowphase
@@ -467,6 +481,11 @@ __global__ void computeContactPatchesKernel(Narrowphase* np,
   int tetA = collisionPairs[2 * idx];
   int tetB = collisionPairs[2 * idx + 1];
 
+  // Bounds check element indices
+  if (tetA < 0 || tetA >= np->n_elems || tetB < 0 || tetB >= np->n_elems) {
+    return;
+  }
+
   // Get mesh IDs for each element
   // Normal direction: from lower mesh ID to higher mesh ID
   int meshIdA = np->d_elementMeshIds[tetA];
@@ -495,8 +514,11 @@ __global__ void computeContactPatchesKernel(Narrowphase* np,
   double pA[4];
   for (int i = 0; i < 4; i++) {
     int node_id = np->element_node(tetA, i);
-    vA[i]       = np->getNode(node_id);
-    pA[i]       = np->getPressure(node_id);
+    if (node_id < 0 || node_id >= np->n_nodes) {
+      return;  // Invalid node index
+    }
+    vA[i] = np->getNode(node_id);
+    pA[i] = np->getPressure(node_id);
   }
 
   // Get tet B vertices and pressures
@@ -504,8 +526,11 @@ __global__ void computeContactPatchesKernel(Narrowphase* np,
   double pB[4];
   for (int i = 0; i < 4; i++) {
     int node_id = np->element_node(tetB, i);
-    vB[i]       = np->getNode(node_id);
-    pB[i]       = np->getPressure(node_id);
+    if (node_id < 0 || node_id >= np->n_nodes) {
+      return;  // Invalid node index
+    }
+    vB[i] = np->getNode(node_id);
+    pB[i] = np->getPressure(node_id);
   }
 
   // Phase 1: Build affine pressure fields
@@ -593,4 +618,157 @@ __global__ void computeContactPatchesKernel(Narrowphase* np,
   patch.p_equilibrium    = p_eq;
   patch.isValid          = true;
   patch.validOrientation = valid_orientation;
+}
+
+// ----------------------------------------------------------------------------
+// Device helper: Compute barycentric coordinates for a point in a tetrahedron
+// ----------------------------------------------------------------------------
+
+/**
+ * Compute barycentric coordinates of point x in tetrahedron (v0, v1, v2, v3).
+ * Returns lambda[0..3] such that x = sum(lambda[i] * v[i]).
+ */
+__device__ void computeBarycentricCoordinates(double3 x, double3 v0, double3 v1,
+                                              double3 v2, double3 v3,
+                                              double lambda[4]) {
+  // Build matrix M = [e1 | e2 | e3] where ei are column vectors
+  // M has edge vectors as columns: M[row][col] = edge_col[row]
+  // We need to solve M * lambda123 = rhs
+  double3 e1 = v1 - v0;
+  double3 e2 = v2 - v0;
+  double3 e3 = v3 - v0;
+
+  // M matrix (row-major storage): M[i][j] = column j, row i
+  // Row 0: [e1.x, e2.x, e3.x]
+  // Row 1: [e1.y, e2.y, e3.y]
+  // Row 2: [e1.z, e2.z, e3.z]
+  double M[3][3] = {{e1.x, e2.x, e3.x}, {e1.y, e2.y, e3.y}, {e1.z, e2.z, e3.z}};
+
+  double3 rhs = x - v0;
+  double b[3] = {rhs.x, rhs.y, rhs.z};
+
+  double lambda123[3];
+  if (solve3x3(M, b, lambda123)) {
+    lambda[1] = lambda123[0];
+    lambda[2] = lambda123[1];
+    lambda[3] = lambda123[2];
+    lambda[0] = 1.0 - lambda[1] - lambda[2] - lambda[3];
+  } else {
+    // Degenerate tet - use equal weights
+    lambda[0] = lambda[1] = lambda[2] = lambda[3] = 0.25;
+  }
+}
+
+// ----------------------------------------------------------------------------
+// Kernel: Compute external forces from contact patches using atomicAdd
+// ----------------------------------------------------------------------------
+
+/**
+ * GPU kernel to compute nodal external forces from contact patches.
+ * Each thread processes one patch and atomically adds forces to d_f_ext.
+ *
+ * @param patches       Device array of contact patches (already computed)
+ * @param numPatches    Number of patches
+ * @param d_nodes       Device node coordinates (n_nodes * 3, column-major)
+ * @param d_elements    Device element connectivity (n_elems * nodesPerElement,
+ * column-major)
+ * @param n_nodes       Number of nodes
+ * @param n_elems       Number of elements
+ * @param d_f_ext       Output: external forces (3 * n_nodes), zeroed before
+ * kernel launch
+ */
+__global__ void computeExternalForcesKernel(const ContactPatch* patches,
+                                            int numPatches,
+                                            const double* d_nodes,
+                                            const int* d_elements, int n_nodes,
+                                            int n_elems, double* d_f_ext) {
+  int idx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (idx >= numPatches)
+    return;
+
+  const ContactPatch& patch = patches[idx];
+
+  // Skip invalid patches
+  if (!patch.isValid)
+    return;
+  if (!patch.validOrientation)
+    return;
+
+  const double area_eps = 1e-18;
+  if (patch.area <= area_eps)
+    return;
+
+  // Get patch data
+  double3 normal   = patch.normal;
+  double3 centroid = patch.centroid;
+  double p_eq      = patch.p_equilibrium;
+  double A         = patch.area;
+
+  // Compute patch force
+  double3 F_patch = (p_eq * A) * normal;
+
+  int tetA = patch.tetA_idx;
+  int tetB = patch.tetB_idx;
+
+  // Bounds check
+  if (tetA < 0 || tetA >= n_elems || tetB < 0 || tetB >= n_elems)
+    return;
+
+  // Get element node IDs (column-major: elem_id + local_node * n_elems)
+  int elemA[4], elemB[4];
+  for (int i = 0; i < 4; i++) {
+    elemA[i] = d_elements[tetA + i * n_elems];
+    elemB[i] = d_elements[tetB + i * n_elems];
+  }
+
+  // Bounds check node IDs before accessing d_nodes
+  for (int i = 0; i < 4; i++) {
+    if (elemA[i] < 0 || elemA[i] >= n_nodes || elemB[i] < 0 ||
+        elemB[i] >= n_nodes) {
+      return;  // Invalid node index
+    }
+  }
+
+  // Get tet vertices (column-major nodes: node_id for x, node_id + n_nodes for
+  // y, etc.)
+  double3 vA[4], vB[4];
+  for (int i = 0; i < 4; i++) {
+    int nA = elemA[i];
+    int nB = elemB[i];
+    vA[i]  = make_double3(d_nodes[nA], d_nodes[nA + n_nodes],
+                          d_nodes[nA + 2 * n_nodes]);
+    vB[i]  = make_double3(d_nodes[nB], d_nodes[nB + n_nodes],
+                          d_nodes[nB + 2 * n_nodes]);
+  }
+
+  // Compute barycentric coordinates
+  double N_A[4], N_B[4];
+  computeBarycentricCoordinates(centroid, vA[0], vA[1], vA[2], vA[3], N_A);
+  computeBarycentricCoordinates(centroid, vB[0], vB[1], vB[2], vB[3], N_B);
+
+  // Distribute forces to nodes using atomicAdd
+  // tetA is pushed opposite to normal (away from B) -> -F_patch
+  // tetB is pushed along normal (away from A) -> +F_patch
+  for (int i = 0; i < 4; i++) {
+    int nodeA = elemA[i];
+    int nodeB = elemB[i];
+
+    if (nodeA >= 0 && nodeA < n_nodes) {
+      double fAx = N_A[i] * (-F_patch.x);
+      double fAy = N_A[i] * (-F_patch.y);
+      double fAz = N_A[i] * (-F_patch.z);
+      atomicAdd(&d_f_ext[3 * nodeA + 0], fAx);
+      atomicAdd(&d_f_ext[3 * nodeA + 1], fAy);
+      atomicAdd(&d_f_ext[3 * nodeA + 2], fAz);
+    }
+
+    if (nodeB >= 0 && nodeB < n_nodes) {
+      double fBx = N_B[i] * F_patch.x;
+      double fBy = N_B[i] * F_patch.y;
+      double fBz = N_B[i] * F_patch.z;
+      atomicAdd(&d_f_ext[3 * nodeB + 0], fBx);
+      atomicAdd(&d_f_ext[3 * nodeB + 1], fBy);
+      atomicAdd(&d_f_ext[3 * nodeB + 2], fBz);
+    }
+  }
 }

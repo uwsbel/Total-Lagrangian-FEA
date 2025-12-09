@@ -1,3 +1,15 @@
+/**
+ * FEAT10 Cube Nesterov Test
+ *
+ * Author: Json Zhou
+ * Email:  zzhou292@wisc.edu
+ *
+ * This driver loads a FEAT10 cube mesh, clamps nodes on the base plane,
+ * applies a point load, and advances the system using the synchronized
+ * Nesterov solver. It is intended to test FEAT10 mass and internal force
+ * assembly together with the Nesterov integrator on a simple solid block.
+ */
+
 #include <cuda_runtime.h>
 
 #include <Eigen/Dense>

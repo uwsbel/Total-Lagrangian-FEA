@@ -1,3 +1,16 @@
+/**
+ * FEAT10 Soft Beam Resolution Study (AdamW)
+ *
+ * Author: Json Zhou
+ * Email:  zzhou292@wisc.edu
+ *
+ * This variant of the FEAT10 beam resolution test uses soft TPU/EVA-like
+ * material parameters and smaller end loads, advanced with the synchronized
+ * AdamW solver. It studies how mesh resolution (RES_0, RES_2, RES_4)
+ * affects the deflection history of a tracked node and writes its motion to
+ * CSV for comparison.
+ */
+
 #include <cuda_runtime.h>
 
 #include <Eigen/Dense>

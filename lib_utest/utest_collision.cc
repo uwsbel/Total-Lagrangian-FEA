@@ -1,3 +1,16 @@
+/**
+ * Collision Pipeline Unit Tests
+ *
+ * Author: Json Zhou
+ * Email:  zzhou292@wisc.edu
+ *
+ * This suite exercises the GPU collision pipeline, including broadphase AABB
+ * generation and neighbor map construction, multi-mesh collision detection,
+ * narrowphase hydroelastic contact patch computation, external force
+ * assembly, and export of patches/meshes for visualization. It provides
+ * regression coverage for two-sphere and three-sphere contact scenarios.
+ */
+
 #include <gtest/gtest.h>
 
 #include <Eigen/Dense>
@@ -292,8 +305,8 @@ TEST_F(TestCollision, ExternalForcesFromContactPatches) {
   auto validPatches = narrowphase.GetValidPatches();
   ASSERT_GT(validPatches.size(), 0u);
 
-  Eigen::VectorXd f_ext =
-      ComputeExternalForcesFromContactPatches(nodes, elements, validPatches);
+  // Use GPU version to compute external forces
+  Eigen::VectorXd f_ext = narrowphase.ComputeExternalForcesGPU();
 
   ASSERT_EQ(f_ext.size(), 3 * nodes.rows());
 
@@ -308,8 +321,8 @@ TEST_F(TestCollision, ExternalForcesFromContactPatches) {
   int max_print_nodes = std::min<int>(nodes.rows(), 20);
   for (int i = 0; i < max_print_nodes; ++i) {
     Eigen::Vector3d fi = f_ext.segment<3>(3 * i);
-    std::cout << "node " << i << ": ("
-              << fi.x() << ", " << fi.y() << ", " << fi.z() << ")" << std::endl;
+    std::cout << "node " << i << ": (" << fi.x() << ", " << fi.y() << ", "
+              << fi.z() << ")" << std::endl;
   }
 
   Eigen::Vector3d net_F = Eigen::Vector3d::Zero();

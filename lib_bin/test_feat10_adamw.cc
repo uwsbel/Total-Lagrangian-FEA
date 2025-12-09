@@ -1,3 +1,16 @@
+/**
+ * FEAT10 Cube AdamW Test
+ *
+ * Author: Json Zhou
+ * Email:  zzhou292@wisc.edu
+ *
+ * This driver reads a FEAT10 tetrahedral cube mesh, fixes nodes on the
+ * support plane, applies a concentrated load to a selected node, and runs
+ * the synchronized AdamW solver. It is used to verify FEAT10 mass and
+ * internal force assembly, constraint handling, and basic AdamW time
+ * integration on a small solid.
+ */
+
 #include <cuda_runtime.h>
 
 #include <Eigen/Dense>

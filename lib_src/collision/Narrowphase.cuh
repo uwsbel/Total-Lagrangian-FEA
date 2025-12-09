@@ -1,3 +1,17 @@
+/*==============================================================
+ *==============================================================
+ * Project: RoboDyna
+ * Author:  Json Zhou
+ * Email:   zzhou292@wisc.edu
+ * File:    Narrowphase.cuh
+ * Brief:   Declares the Narrowphase class and supporting data structures for
+ *          pressure-based contact detection between tetrahedra. Defines the
+ *          ContactPatch representation, intermediate clipping polygons, GPU
+ *          mesh and pressure storage, and host API for computing patches and
+ *          external contact forces.
+ *==============================================================
+ *==============================================================*/
+
 #pragma once
 
 #include <cuda_runtime.h>
@@ -44,8 +58,8 @@ struct ContactPatch {
   int tetB_idx;
 
   // Validity flags
-  bool isValid;            // True if patch has >= 3 vertices
-  bool validOrientation;   // True if g_A > 0 and g_B > 0 (Drake convention)
+  bool isValid;           // True if patch has >= 3 vertices
+  bool validOrientation;  // True if g_A > 0 and g_B > 0 (Drake convention)
 
   __host__ __device__ ContactPatch()
       : numVertices(0),
@@ -72,7 +86,9 @@ struct ClipPolygon {
 
   __host__ __device__ ClipPolygon() : count(0) {}
 
-  __device__ void clear() { count = 0; }
+  __device__ void clear() {
+    count = 0;
+  }
 
   __device__ void addVertex(double3 v) {
     if (count < MAX_POLYGON_VERTS) {
@@ -94,15 +110,16 @@ struct Narrowphase {
   ContactPatch* d_contactPatches;
 
   // Mesh data pointers (shared with Broadphase or copied)
-  double* d_nodes;        // (n_nodes * 3) node coordinates
-  int* d_elements;        // (n_elems * nodesPerElement) element connectivity
-  double* d_pressure;     // (n_nodes) pressure values at each node
+  double* d_nodes;     // (n_nodes * 3) node coordinates
+  int* d_elements;     // (n_elems * nodesPerElement) element connectivity
+  double* d_pressure;  // (n_nodes) pressure values at each node
   int n_nodes;
   int n_elems;
-  int nodesPerElement;    // Should be 4 for linear tets (corners only)
-  
+  int nodesPerElement;  // Should be 4 for linear tets (corners only)
+
   // Element-to-mesh mapping: elementMeshIds[elem_idx] = mesh_id
-  // Used for correct normal direction (normal points from lower mesh ID to higher)
+  // Used for correct normal direction (normal points from lower mesh ID to
+  // higher)
   int* d_elementMeshIds;  // (n_elems) mesh ID for each element
 
   // Collision pair data (from broadphase)
@@ -111,6 +128,10 @@ struct Narrowphase {
 
   // Device pointer to this struct for kernel access
   Narrowphase* d_np;
+
+  // External forces buffer (reused across calls)
+  double* d_f_ext;  // (3 * n_nodes) external forces on device
+  int f_ext_size;   // Current allocated size (3 * n_nodes)
 
   // Constructor / Destructor
   Narrowphase();
@@ -125,12 +146,11 @@ struct Narrowphase {
    * @param nodes Node coordinates (n_nodes x 3)
    * @param elements Element connectivity (n_elems x nodesPerElement)
    * @param pressure Pressure values at each node (n_nodes)
-   * @param elementMeshIds Mesh ID for each element (n_elems). Used for normal direction.
-   *                       Normal points from lower mesh ID to higher mesh ID.
-   *                       If empty, all elements are treated as mesh 0.
+   * @param elementMeshIds Mesh ID for each element (n_elems). Used for normal
+   * direction. Normal points from lower mesh ID to higher mesh ID. If empty,
+   * all elements are treated as mesh 0.
    */
-  void Initialize(const Eigen::MatrixXd& nodes,
-                  const Eigen::MatrixXi& elements,
+  void Initialize(const Eigen::MatrixXd& nodes, const Eigen::MatrixXi& elements,
                   const Eigen::VectorXd& pressure,
                   const Eigen::VectorXi& elementMeshIds = Eigen::VectorXi());
 
@@ -167,10 +187,33 @@ struct Narrowphase {
    */
   void Destroy();
 
+  /**
+   * Compute external forces from contact patches on GPU.
+   * Uses already-on-device patch data (d_contactPatches) without CPU transfer.
+   * Forces are computed using atomicAdd and returned as Eigen vector.
+   *
+   * @return External forces vector of size 3 * n_nodes [fx0, fy0, fz0, fx1,
+   * ...]
+   */
+  Eigen::VectorXd ComputeExternalForcesGPU();
+
+  /**
+   * Get device pointer to external forces buffer.
+   * Call ComputeExternalForcesGPU() first to populate the buffer.
+   * Buffer layout: [fx0, fy0, fz0, fx1, fy1, fz1, ...]
+   *
+   * @return Device pointer to external forces (3 * n_nodes doubles)
+   */
+  double* GetExternalForcesDevicePtr() const {
+    return d_f_ext;
+  }
+
   // ========== Device accessors (for use in kernels) ==========
 #if defined(__CUDACC__)
   // Node coordinate accessors (column-major)
-  __device__ double node_x(int node_id) const { return d_nodes[node_id]; }
+  __device__ double node_x(int node_id) const {
+    return d_nodes[node_id];
+  }
   __device__ double node_y(int node_id) const {
     return d_nodes[node_id + n_nodes];
   }
@@ -192,13 +235,6 @@ struct Narrowphase {
   }
 #endif
 };
-
-// Host-side helper to compute nodal external forces from contact patches.
-// Returns a vector of size 3 * n_nodes laid out as [fx0, fy0, fz0, fx1, ...].
-Eigen::VectorXd ComputeExternalForcesFromContactPatches(
-    const Eigen::MatrixXd& nodes,
-    const Eigen::MatrixXi& elements,
-    const std::vector<ContactPatch>& patches);
 
 // ============================================================================
 // Device helper functions (declared here, defined in .cu)

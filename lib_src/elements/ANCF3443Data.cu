@@ -2,6 +2,19 @@
 
 #include <iomanip>
 
+/*==============================================================
+ *==============================================================
+ * Project: RoboDyna
+ * Author:  Json Zhou
+ * Email:   zzhou292@wisc.edu
+ * File:    ANCF3443Data.cu
+ * Brief:   Implements GPU data management and element kernels for ANCF 3443
+ *          shell elements. Handles allocation, initialization, and evaluation
+ *          of mass, stiffness, internal forces, and constraints for shell
+ *          kinematics.
+ *==============================================================
+ *==============================================================*/
+
 #include "ANCF3443Data.cuh"
 #include "ANCF3443DataFunc.cuh"
 namespace cg = cooperative_groups;

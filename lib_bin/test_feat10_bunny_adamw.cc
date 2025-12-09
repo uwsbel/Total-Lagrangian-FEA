@@ -1,3 +1,17 @@
+/**
+ * FEAT10 Bunny AdamW Test
+ *
+ * Author: Json Zhou
+ * Email:  zzhou292@wisc.edu
+ *
+ * This simulation loads a FEAT10 tetrahedral mesh of the Stanford bunny,
+ * fixes nodes near the base, applies distributed loads on nodes above a
+ * height threshold, and advances the model using the synchronized AdamW
+ * solver. It is used to probe large-deformation behavior and stability of
+ * the AdamW integrator on a complex solid geometry, with periodic VTK
+ * output for visualization.
+ */
+
 #include <cuda_runtime.h>
 
 #include <Eigen/Dense>

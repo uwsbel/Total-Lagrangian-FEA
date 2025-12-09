@@ -1,3 +1,17 @@
+/*==============================================================
+ *==============================================================
+ * Project: RoboDyna
+ * Author:  Json Zhou
+ * Email:   zzhou292@wisc.edu
+ * File:    SyncedNesterov.cu
+ * Brief:   Implements a GPU-synchronized Nesterov accelerated gradient
+ *          integrator. Defines the cooperative kernel that performs multiple
+ *          inner/outer iterations, computing gradients, applying Nesterov
+ *          momentum, updating positions, and enforcing constraints for
+ *          ANCF3243, ANCF3443, and FEAT10 elements.
+ *==============================================================
+ *==============================================================*/
+
 #include <cooperative_groups.h>
 
 #include "../elements/ANCF3243Data.cuh"

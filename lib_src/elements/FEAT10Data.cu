@@ -4,6 +4,19 @@
 #include <iomanip>
 #include <iostream>
 
+/*==============================================================
+ *==============================================================
+ * Project: RoboDyna
+ * Author:  Json Zhou
+ * Email:   zzhou292@wisc.edu
+ * File:    FEAT10Data.cu
+ * Brief:   Implements GPU-side data management and element kernels for
+ *          10-node tetrahedral FEAT10 elements. Handles allocation,
+ *          initialization, mass and stiffness assembly, internal/external
+ *          force evaluation, and optional constraint coupling.
+ *==============================================================
+ *==============================================================*/
+
 #include "FEAT10Data.cuh"
 #include "FEAT10DataFunc.cuh"
 

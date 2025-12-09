@@ -1,3 +1,16 @@
+/**
+ * ANCF3443 Shell Nesterov Test
+ *
+ * Author: Json Zhou
+ * Email:  zzhou292@wisc.edu
+ *
+ * This test configures a pair of ANCF3443 shell beams, applies clamped
+ * boundary conditions and external loading, and advances the system using
+ * the synchronized Nesterov solver. It is primarily for debugging shell
+ * constraints, stress computation, and Nesterov convergence on shell
+ * kinematics.
+ */
+
 #include <cuda_runtime.h>
 
 #include <Eigen/Dense>
@@ -15,7 +28,7 @@ const double rho0 = 2700;  // Density
 
 int main() {
   // initialize GPU data structure
-  int n_beam = 2;  // this is working
+  int n_beam = 2;
   GPU_ANCF3443_Data gpu_3443_data(n_beam);
   gpu_3443_data.Initialize();
 

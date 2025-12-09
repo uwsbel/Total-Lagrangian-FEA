@@ -1,3 +1,15 @@
+/**
+ * FEAT10 Mesh I/O Unit Tests
+ *
+ * Author: Json Zhou
+ * Email:  zzhou292@wisc.edu
+ *
+ * These tests exercise FEAT10 mesh reading utilities by loading beam and
+ * bunny tetrahedral meshes from disk and printing basic statistics and
+ * matrices. They provide a quick regression check that FEAT10 node/element
+ * files are parsed correctly before running larger simulations.
+ */
+
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
 

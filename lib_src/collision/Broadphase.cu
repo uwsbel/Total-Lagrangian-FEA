@@ -1,3 +1,17 @@
+/*==============================================================
+ *==============================================================
+ * Project: RoboDyna
+ * Author:  Json Zhou
+ * Email:   zzhou292@wisc.edu
+ * File:    Broadphase.cu
+ * Brief:   Implements the GPU broadphase collision stage for tetrahedral
+ *          meshes. Builds AABBs for elements, performs sweep-and-prune along
+ *          a chosen axis, filters out mesh neighbors, and uses CUB-based
+ *          prefix sums to allocate and generate non-neighbor collision pairs
+ *          for the narrowphase.
+ *==============================================================
+ *==============================================================*/
+
 #include <thrust/device_ptr.h>
 #include <thrust/execution_policy.h>
 #include <thrust/sort.h>
@@ -398,21 +412,27 @@ void Broadphase::DetectCollisions() {
       numNeighborPairs);
   cudaDeviceSynchronize();
 
-  // Compute prefix sum
+  // Compute prefix sum (exclusive scan of numObjects elements)
+  // Output has numObjects elements; we read the last element + last count for
+  // total
   void* d_tempScan     = nullptr;
   size_t tempScanBytes = 0;
 
   cub::DeviceScan::ExclusiveSum(d_tempScan, tempScanBytes, d_collisionCounts,
-                                d_collisionOffsets, numObjects + 1);
+                                d_collisionOffsets, numObjects);
   cudaMalloc(&d_tempScan, tempScanBytes);
 
   cub::DeviceScan::ExclusiveSum(d_tempScan, tempScanBytes, d_collisionCounts,
-                                d_collisionOffsets, numObjects + 1);
+                                d_collisionOffsets, numObjects);
   cudaDeviceSynchronize();
 
-  // Get total number of collisions
-  cudaMemcpy(&numCollisions, &d_collisionOffsets[numObjects], sizeof(int),
+  // Compute total: offset[numObjects-1] + count[numObjects-1]
+  int lastOffset, lastCount;
+  cudaMemcpy(&lastOffset, &d_collisionOffsets[numObjects - 1], sizeof(int),
              cudaMemcpyDeviceToHost);
+  cudaMemcpy(&lastCount, &d_collisionCounts[numObjects - 1], sizeof(int),
+             cudaMemcpyDeviceToHost);
+  numCollisions = lastOffset + lastCount;
 
   std::cout << "Total non-neighbor collisions found: " << numCollisions
             << std::endl;

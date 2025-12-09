@@ -1,3 +1,17 @@
+/*==============================================================
+ *==============================================================
+ * Project: RoboDyna
+ * Author:  Json Zhou
+ * Email:   zzhou292@wisc.edu
+ * File:    Broadphase.cuh
+ * Brief:   Declares the Broadphase class, AABB and CollisionPair structures,
+ *          and host-side API for GPU-based broadphase collision detection.
+ *          Owns mesh data on host and device, neighbor-pair hashing, and
+ *          interfaces for AABB creation, sorting, neighbor map building, and
+ *          collision pair retrieval.
+ *==============================================================
+ *==============================================================*/
+
 #include <cuda_runtime.h>
 #include <cusparse.h>
 
@@ -5,6 +19,7 @@
 #include <iostream>
 #include <unordered_set>
 #include <vector>
+
 #include "../../lib_utils/cuda_utils.h"
 #include "../../lib_utils/quadrature_utils.h"
 
@@ -86,9 +101,9 @@ struct Broadphase {
   Broadphase* d_bp;
 
   // Sorting data for sweep and prune
-  double* d_sortKeys;     // Sort keys (e.g., min.x values)
+  double* d_sortKeys;    // Sort keys (e.g., min.x values)
   int* d_sortIndices;    // Original indices
-  double* d_sortedKeys;   // Sorted keys (output)
+  double* d_sortedKeys;  // Sorted keys (output)
   int* d_sortedIndices;  // Sorted indices (output)
   AABB* d_sortedAABBs;   // Sorted AABBs
   void* d_tempStorage;   // Temporary storage for CUB

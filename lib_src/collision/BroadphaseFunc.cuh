@@ -1,5 +1,18 @@
 #pragma once
 
+/*==============================================================
+ *==============================================================
+ * Project: RoboDyna
+ * Author:  Json Zhou
+ * Email:   zzhou292@wisc.edu
+ * File:    BroadphaseFunc.cuh
+ * Brief:   CUDA device and kernel functions used by the Broadphase module:
+ *          element AABB construction, extraction of sort keys, AABB
+ *          reordering, neighbor filtering by hashed pairs, and generation of
+ *          non-neighbor collision pairs on the GPU.
+ *==============================================================
+ *==============================================================*/
+
 #include "Broadphase.cuh"
 
 // Device / kernel functions for Broadphase

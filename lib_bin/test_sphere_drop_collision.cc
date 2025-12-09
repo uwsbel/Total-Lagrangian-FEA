@@ -1,6 +1,9 @@
 /**
  * Sphere Drop Collision Simulation
  *
+ * Author: Json Zhou
+ * Email:  zzhou292@wisc.edu
+ *
  * This simulation demonstrates a sphere dropped onto another fixed sphere
  * using the Newton solver combined with the collision detection system.
  *
@@ -35,15 +38,16 @@
 #include "../lib_utils/visualization_utils.h"
 
 // Material properties
-const double E    = 1e7;    // Young's modulus (softer for visible deformation)
-const double nu   = 0.3;    // Poisson's ratio
-const double rho0 = 1000.0; // Density (kg/m^3)
+const double E    = 1e7;     // Young's modulus (softer for visible deformation)
+const double nu   = 0.3;     // Poisson's ratio
+const double rho0 = 1000.0;  // Density (kg/m^3)
 
 // Simulation parameters
-const double gravity     = -9.81;  // Gravity acceleration (m/s^2)
-const double dt          = 5e-4;   // Time step (s) - smaller for stability
-const int num_steps      = 6000;   // Number of simulation steps
-const double sphere_gap  = 0.02;   // Initial gap between spheres (m) - start closer
+const double gravity = -9.81;  // Gravity acceleration (m/s^2)
+const double dt      = 5e-4;   // Time step (s) - smaller for stability
+const int num_steps  = 6000;   // Number of simulation steps
+const double sphere_gap =
+    0.02;  // Initial gap between spheres (m) - start closer
 
 using ANCFCPUUtils::VisualizationUtils;
 
@@ -61,18 +65,18 @@ int main() {
   ANCFCPUUtils::MeshManager mesh_manager;
 
   // Load bottom sphere (will be fixed)
-  int mesh_bottom = mesh_manager.LoadMesh("data/meshes/T10/sphere.1.node",
-                                          "data/meshes/T10/sphere.1.ele",
-                                          "sphere_bottom");
+  int mesh_bottom =
+      mesh_manager.LoadMesh("data/meshes/T10/sphere.1.node",
+                            "data/meshes/T10/sphere.1.ele", "sphere_bottom");
   if (mesh_bottom < 0) {
     std::cerr << "Failed to load bottom sphere mesh" << std::endl;
     return 1;
   }
 
   // Load top sphere (will fall)
-  int mesh_top = mesh_manager.LoadMesh("data/meshes/T10/sphere.1.node",
-                                       "data/meshes/T10/sphere.1.ele",
-                                       "sphere_top");
+  int mesh_top =
+      mesh_manager.LoadMesh("data/meshes/T10/sphere.1.node",
+                            "data/meshes/T10/sphere.1.ele", "sphere_top");
   if (mesh_top < 0) {
     std::cerr << "Failed to load top sphere mesh" << std::endl;
     return 1;
@@ -161,8 +165,8 @@ int main() {
     h_fixed_nodes(i) = fixed_node_indices[i];
   }
 
-  std::cout << "Fixed " << h_fixed_nodes.size() << " nodes (bottom half of bottom sphere)"
-            << std::endl;
+  std::cout << "Fixed " << h_fixed_nodes.size()
+            << " nodes (bottom half of bottom sphere)" << std::endl;
   std::cout << "Bottom sphere center z: " << center_z_bottom << std::endl;
 
   gpu_t10_data.SetNodalFixed(h_fixed_nodes);
@@ -176,8 +180,8 @@ int main() {
   const Eigen::VectorXd& tet5pt_weights = Quadrature::tet5pt_weights;
 
   gpu_t10_data.Setup(rho0, nu, E, 0.0, 0.0,  // Material + damping
-                     tet5pt_x, tet5pt_y, tet5pt_z, tet5pt_weights,
-                     h_x12, h_y12, h_z12, elements);
+                     tet5pt_x, tet5pt_y, tet5pt_z, tet5pt_weights, h_x12, h_y12,
+                     h_z12, elements);
 
   gpu_t10_data.CalcDnDuPre();
   gpu_t10_data.CalcMassMatrix();
@@ -266,10 +270,11 @@ int main() {
     narrowphase.Initialize(current_nodes, elements, pressure, elementMeshIds);
     narrowphase.SetCollisionPairs(collisionPairs);
     narrowphase.ComputeContactPatches();
-    narrowphase.RetrieveResults();
 
-    std::vector<ContactPatch> patches = narrowphase.GetValidPatches();
-    int num_patches = static_cast<int>(patches.size());
+    // Get patch count (without transferring all patch data to CPU)
+    // We still need RetrieveResults for visualization export
+    narrowphase.RetrieveResults();
+    int num_patches = narrowphase.numPatches;
 
     // ---------------------------------------------------------------------
     // 3. Compute external forces (contact + gravity)
@@ -277,17 +282,16 @@ int main() {
     Eigen::VectorXd h_f_ext(n_nodes * 3);
     h_f_ext.setZero();
 
-    // Add contact forces from collision patches
-    if (num_patches > 0) {
-      Eigen::VectorXd contact_forces =
-          ComputeExternalForcesFromContactPatches(current_nodes, elements, patches);
+    // Add contact forces from collision patches (GPU version)
+    Eigen::VectorXd contact_forces = narrowphase.ComputeExternalForcesGPU();
+    if (contact_forces.size() == h_f_ext.size()) {
       h_f_ext += contact_forces;
     }
 
     // Add gravity (only to top sphere nodes - bottom is fixed anyway)
     // F = m * g, distributed per node
     // For simplicity, assume uniform mass distribution
-    double total_mass = rho0 * (4.0 / 3.0 * M_PI * 0.15 * 0.15 * 0.15);
+    double total_mass    = rho0 * (4.0 / 3.0 * M_PI * 0.15 * 0.15 * 0.15);
     double mass_per_node = total_mass / instance_top.num_nodes;
     double gravity_force_per_node = mass_per_node * gravity;
 
@@ -336,6 +340,7 @@ int main() {
       std::ostringstream patch_filename;
       patch_filename << "output/sphere_drop/patches_" << std::setfill('0')
                      << std::setw(4) << step << ".vtp";
+      std::vector<ContactPatch> patches = narrowphase.GetValidPatches();
       ANCFCPUUtils::VisualizationUtils::ExportContactPatchesToVTP(
           patches, patch_filename.str());
     }
@@ -351,22 +356,18 @@ int main() {
     }
     com_z /= instance_top.num_nodes;
 
-    double contact_force_mag = 0.0;
-    if (num_patches > 0) {
-      Eigen::VectorXd cf =
-          ComputeExternalForcesFromContactPatches(current_nodes, elements, patches);
-      contact_force_mag = cf.norm();
-    }
+    double contact_force_mag = contact_forces.norm();
 
     if (step % 20 == 0) {
-      double gravity_force_total = std::abs(gravity_force_per_node * instance_top.num_nodes);
+      double gravity_force_total =
+          std::abs(gravity_force_per_node * instance_top.num_nodes);
       std::cout << "Step " << std::setw(4) << step << ": "
                 << "pairs=" << std::setw(5) << num_collision_pairs << ", "
                 << "patches=" << std::setw(4) << num_patches << ", "
                 << "top_z=" << std::fixed << std::setprecision(5) << com_z
                 << ", |f_g|=" << std::scientific << std::setprecision(2)
-                << gravity_force_total
-                << ", |f_c|=" << contact_force_mag << std::endl;
+                << gravity_force_total << ", |f_c|=" << contact_force_mag
+                << std::endl;
     }
   }
 

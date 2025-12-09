@@ -7,10 +7,8 @@
 #include <vector>
 
 #include "../../lib_utils/cuda_utils.h"
-#include "ElementBase.h"
-
-// Add this include at the top:
 #include "../../lib_utils/quadrature_utils.h"
+#include "ElementBase.h"
 
 // Definition of GPU_ANCF3443 and data access device functions
 #pragma once

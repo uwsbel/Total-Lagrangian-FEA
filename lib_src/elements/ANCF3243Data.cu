@@ -2,6 +2,19 @@
 
 #include <iomanip>
 
+/*==============================================================
+ *==============================================================
+ * Project: RoboDyna
+ * Author:  Json Zhou
+ * Email:   zzhou292@wisc.edu
+ * File:    ANCF3243Data.cu
+ * Brief:   Implements GPU-side data management and element-level kernels for
+ *          ANCF 3243 beam elements. Provides initialization, mass and
+ *          stiffness assembly, internal force evaluation, and constraint
+ *          handling routines used by the synchronized solvers.
+ *==============================================================
+ *==============================================================*/
+
 #include "ANCF3243Data.cuh"
 #include "ANCF3243DataFunc.cuh"
 namespace cg = cooperative_groups;

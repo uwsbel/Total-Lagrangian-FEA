@@ -1,3 +1,16 @@
+/**
+ * ANCF3243 Beam Nesterov Test
+ *
+ * Author: Json Zhou
+ * Email:  zzhou292@wisc.edu
+ *
+ * This driver constructs a clamped ANCF3243 beam and exercises the
+ * synchronized Nesterov solver. It computes mass, internal forces, and
+ * constraint data on the GPU, then runs multiple Nesterov steps to verify
+ * stability, constraint enforcement, and convergence behavior for the beam
+ * example.
+ */
+
 #include <cuda_runtime.h>
 
 #include <Eigen/Dense>

@@ -1,3 +1,15 @@
+/**
+ * ANCF3243 Mass Matrix Unit Tests
+ *
+ * Author: Json Zhou
+ * Email:  zzhou292@wisc.edu
+ *
+ * This test suite verifies GPU ANCF3243 element mass matrix assembly against
+ * CSV reference results for 2-beam and 3-beam configurations generated from
+ * the CPU utilities. It checks symmetry, positive definiteness, and
+ * entry-wise agreement within a small tolerance.
+ */
+
 #include <gtest/gtest.h>
 
 #include <Eigen/Dense>

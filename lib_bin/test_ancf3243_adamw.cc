@@ -1,3 +1,16 @@
+/**
+ * ANCF3243 Beam AdamW Test
+ *
+ * Author: Json Zhou
+ * Email:  zzhou292@wisc.edu
+ *
+ * This driver sets up a simple 1D ANCF3243 beam, assembles its mass matrix,
+ * internal forces, and constraint data on the GPU, and then advances the
+ * system using the synchronized AdamW solver. It is primarily used to
+ * validate element assembly, constraint handling, and the AdamW time
+ * integration loop in isolation from collision.
+ */
+
 #include <cuda_runtime.h>
 
 #include <Eigen/Dense>

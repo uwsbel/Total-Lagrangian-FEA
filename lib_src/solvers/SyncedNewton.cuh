@@ -1,4 +1,18 @@
 #pragma once
+/*==============================================================
+ *==============================================================
+ * Project: RoboDyna
+ * Author:  Json Zhou
+ * Email:   zzhou292@wisc.edu
+ * File:    SyncedNewton.cuh
+ * Brief:   Declares the SyncedNewtonSolver class for a fully synchronized
+ *          Newton method without line search. Manages GPU buffers for
+ *          velocities, residuals, sparse Hessian storage, and persistent
+ *          cuBLAS / cuDSS handles, and exposes device accessors used by the
+ *          Newton kernels and linear-solve routines.
+ *==============================================================
+ *==============================================================*/
+
 #include <cublas_v2.h>  // Add this line for cuBLAS
 
 #include "../../lib_utils/cuda_utils.h"

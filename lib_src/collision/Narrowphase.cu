@@ -1,3 +1,17 @@
+/*==============================================================
+ *==============================================================
+ * Project: RoboDyna
+ * Author:  Json Zhou
+ * Email:   zzhou292@wisc.edu
+ * File:    Narrowphase.cu
+ * Brief:   Host-side narrowphase collision pipeline. Manages GPU data for
+ *          tetrahedral meshes and pressures, launches CUDA kernels to compute
+ *          iso-pressure contact patches, retrieves patch data to the host,
+ *          and assembles nodal external forces from contact patches on the
+ *          GPU for use by the structural solver.
+ *==============================================================
+ *==============================================================*/
+
 #include <algorithm>
 #include <cmath>
 #include <iostream>
@@ -21,7 +35,9 @@ Narrowphase::Narrowphase()
       d_elementMeshIds(nullptr),
       d_collisionPairs(nullptr),
       numCollisionPairs(0),
-      d_np(nullptr) {}
+      d_np(nullptr),
+      d_f_ext(nullptr),
+      f_ext_size(0) {}
 
 Narrowphase::~Narrowphase() {
   Destroy();
@@ -115,6 +131,13 @@ void Narrowphase::ComputeContactPatches() {
   if (numCollisionPairs == 0) {
     std::cout << "Narrowphase: No collision pairs to compute" << std::endl;
     return;
+  }
+
+  // Check for any prior CUDA errors
+  cudaError_t prior_err = cudaGetLastError();
+  if (prior_err != cudaSuccess) {
+    std::cerr << "Prior CUDA error before ComputeContactPatches: "
+              << cudaGetErrorString(prior_err) << std::endl;
   }
 
   // Update device struct pointer
@@ -242,111 +265,59 @@ void Narrowphase::Destroy() {
     d_np = nullptr;
   }
 
+  if (d_f_ext) {
+    cudaFree(d_f_ext);
+    d_f_ext = nullptr;
+  }
+  f_ext_size = 0;
+
   h_contactPatches.clear();
   numPatches        = 0;
   numCollisionPairs = 0;
+  n_nodes           = 0;
+  n_elems           = 0;
 }
 
-namespace {
+Eigen::VectorXd Narrowphase::ComputeExternalForcesGPU() {
+  Eigen::VectorXd f_ext = Eigen::VectorXd::Zero(3 * n_nodes);
 
-Eigen::Vector4d ComputeBarycentricCoordinates(const Eigen::Vector3d& x,
-                                              const Eigen::Vector3d& v0,
-                                              const Eigen::Vector3d& v1,
-                                              const Eigen::Vector3d& v2,
-                                              const Eigen::Vector3d& v3) {
-  Eigen::Matrix3d M;
-  M.col(0)                  = v1 - v0;
-  M.col(1)                  = v2 - v0;
-  M.col(2)                  = v3 - v0;
-  Eigen::Vector3d rhs       = x - v0;
-  Eigen::Vector3d lambda123 = M.colPivHouseholderQr().solve(rhs);
-  Eigen::Vector4d lambda;
-  lambda[1] = lambda123[0];
-  lambda[2] = lambda123[1];
-  lambda[3] = lambda123[2];
-  lambda[0] = 1.0 - lambda[1] - lambda[2] - lambda[3];
-  return lambda;
-}
-
-}  // namespace
-
-Eigen::VectorXd ComputeExternalForcesFromContactPatches(
-    const Eigen::MatrixXd& nodes, const Eigen::MatrixXi& elements,
-    const std::vector<ContactPatch>& patches) {
-  const int n_nodes         = static_cast<int>(nodes.rows());
-  const int nodesPerElement = static_cast<int>(elements.cols());
-  Eigen::VectorXd f_ext     = Eigen::VectorXd::Zero(3 * n_nodes);
-
-  if (nodesPerElement < 4) {
+  if (numCollisionPairs == 0 || d_contactPatches == nullptr) {
     return f_ext;
   }
 
-  const double area_eps = 1e-18;
-
-  for (const auto& patch : patches) {
-    if (!patch.isValid) {
-      continue;
+  // Allocate or reallocate d_f_ext if needed
+  int required_size = 3 * n_nodes;
+  if (d_f_ext == nullptr || f_ext_size != required_size) {
+    if (d_f_ext) {
+      cudaFree(d_f_ext);
     }
-    if (!patch.validOrientation) {
-      continue;
-    }
-    if (patch.area <= area_eps) {
-      continue;
-    }
-
-    Eigen::Vector3d normal(patch.normal.x, patch.normal.y, patch.normal.z);
-    Eigen::Vector3d centroid(patch.centroid.x, patch.centroid.y,
-                             patch.centroid.z);
-    double p_eq = patch.p_equilibrium;
-    double A    = patch.area;
-
-    Eigen::Vector3d F_patch = p_eq * A * normal;
-
-    int tetA = patch.tetA_idx;
-    int tetB = patch.tetB_idx;
-    if (tetA < 0 || tetA >= elements.rows() || tetB < 0 ||
-        tetB >= elements.rows()) {
-      continue;
-    }
-
-    Eigen::Vector4i elemA;
-    Eigen::Vector4i elemB;
-    for (int i = 0; i < 4; ++i) {
-      elemA[i] = elements(tetA, i);
-      elemB[i] = elements(tetB, i);
-    }
-
-    Eigen::Vector3d vA0 = nodes.row(elemA[0]).transpose();
-    Eigen::Vector3d vA1 = nodes.row(elemA[1]).transpose();
-    Eigen::Vector3d vA2 = nodes.row(elemA[2]).transpose();
-    Eigen::Vector3d vA3 = nodes.row(elemA[3]).transpose();
-
-    Eigen::Vector3d vB0 = nodes.row(elemB[0]).transpose();
-    Eigen::Vector3d vB1 = nodes.row(elemB[1]).transpose();
-    Eigen::Vector3d vB2 = nodes.row(elemB[2]).transpose();
-    Eigen::Vector3d vB3 = nodes.row(elemB[3]).transpose();
-
-    Eigen::Vector4d N_A =
-        ComputeBarycentricCoordinates(centroid, vA0, vA1, vA2, vA3);
-    Eigen::Vector4d N_B =
-        ComputeBarycentricCoordinates(centroid, vB0, vB1, vB2, vB3);
-
-    // Contact force is repulsive: normal points from A to B
-    // tetA is pushed opposite to normal (away from B) -> -F_patch
-    // tetB is pushed along normal (away from A) -> +F_patch
-    for (int i = 0; i < 4; ++i) {
-      int nodeA = elemA[i];
-      int nodeB = elemB[i];
-      if (nodeA >= 0 && nodeA < n_nodes) {
-        Eigen::Vector3d fA = N_A[i] * (-F_patch);  // Push A away from B
-        f_ext.segment<3>(3 * nodeA) += fA;
-      }
-      if (nodeB >= 0 && nodeB < n_nodes) {
-        Eigen::Vector3d fB = N_B[i] * F_patch;  // Push B away from A
-        f_ext.segment<3>(3 * nodeB) += fB;
-      }
-    }
+    cudaMalloc(&d_f_ext, required_size * sizeof(double));
+    f_ext_size = required_size;
   }
+
+  // Zero the force buffer
+  cudaMemset(d_f_ext, 0, required_size * sizeof(double));
+
+  // Launch kernel - one thread per collision pair (patch)
+  int blockSize = 256;
+  int gridSize  = (numCollisionPairs + blockSize - 1) / blockSize;
+
+  computeExternalForcesKernel<<<gridSize, blockSize>>>(
+      d_contactPatches, numCollisionPairs, d_nodes, d_elements, n_nodes,
+      n_elems, d_f_ext);
+
+  cudaDeviceSynchronize();
+
+  // Check for errors
+  cudaError_t err = cudaGetLastError();
+  if (err != cudaSuccess) {
+    std::cerr << "ComputeExternalForcesGPU kernel error: "
+              << cudaGetErrorString(err) << std::endl;
+  }
+
+  // Copy result back to host
+  cudaMemcpy(f_ext.data(), d_f_ext, required_size * sizeof(double),
+             cudaMemcpyDeviceToHost);
 
   return f_ext;
 }

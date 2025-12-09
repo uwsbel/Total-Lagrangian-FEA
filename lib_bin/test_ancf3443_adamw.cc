@@ -1,3 +1,15 @@
+/**
+ * ANCF3443 Shell AdamW Test
+ *
+ * Author: Json Zhou
+ * Email:  zzhou292@wisc.edu
+ *
+ * This driver initializes a small ANCF3443 shell patch, assembles its mass
+ * and constraint data on the GPU, and then runs the synchronized AdamW
+ * solver. It is used to validate shell element geometry, constraint setup,
+ * and the behavior of AdamW time integration on shell beams.
+ */
+
 #include <cuda_runtime.h>
 
 #include <Eigen/Dense>
@@ -15,7 +27,7 @@ const double rho0 = 2700;  // Density
 
 int main() {
   // initialize GPU data structure
-  int n_beam = 2;  // this is working
+  int n_beam = 2;
   GPU_ANCF3443_Data gpu_3443_data(n_beam);
   gpu_3443_data.Initialize();
 
