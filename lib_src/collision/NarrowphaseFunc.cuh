@@ -686,7 +686,8 @@ __global__ void computeExternalForcesKernel(const ContactPatch* patches,
                                             const double* d_vel,
                                             const int* d_elements,
                                             int n_nodes, int n_elems,
-                                            double damping, double* d_f_ext) {
+                                            double damping, double friction,
+                                            double* d_f_ext) {
   int idx = blockIdx.x * blockDim.x + threadIdx.x;
   if (idx >= numPatches)
     return;
@@ -751,12 +752,13 @@ __global__ void computeExternalForcesKernel(const ContactPatch* patches,
   computeBarycentricCoordinates(centroid, vA[0], vA[1], vA[2], vA[3], N_A);
   computeBarycentricCoordinates(centroid, vB[0], vB[1], vB[2], vB[3], N_B);
 
-  // Optional Drake-style normal damping based on relative normal velocity at
-  // the patch centroid
-  if (d_vel != nullptr && damping > 0.0) {
-    double3 vA_centroid = make_double3(0.0, 0.0, 0.0);
-    double3 vB_centroid = make_double3(0.0, 0.0, 0.0);
+  double3 vA_centroid = make_double3(0.0, 0.0, 0.0);
+  double3 vB_centroid = make_double3(0.0, 0.0, 0.0);
+  double3 v_rel       = make_double3(0.0, 0.0, 0.0);
+  double  v_rel_n     = 0.0;
+  bool    have_rel_vel = false;
 
+  if (d_vel != nullptr && (damping > 0.0 || friction > 0.0)) {
     for (int i = 0; i < 4; i++) {
       int nodeA = elemA[i];
       int nodeB = elemB[i];
@@ -776,9 +778,14 @@ __global__ void computeExternalForcesKernel(const ContactPatch* patches,
       }
     }
 
-    double3 v_rel  = vB_centroid - vA_centroid;
-    double v_rel_n = dot(v_rel, normal);
+    v_rel       = vB_centroid - vA_centroid;
+    v_rel_n     = dot(v_rel, normal);
+    have_rel_vel = true;
+  }
 
+  // Optional Drake-style normal damping based on relative normal velocity at
+  // the patch centroid
+  if (have_rel_vel && damping > 0.0) {
     double factor = 1.0 - damping * v_rel_n;
     if (factor < 0.0) {
       factor = 0.0;
@@ -787,6 +794,25 @@ __global__ void computeExternalForcesKernel(const ContactPatch* patches,
   }
 
   double3 F_patch = (p_damped * A) * normal;
+
+  if (have_rel_vel && friction > 0.0) {
+    // Relative tangential velocity
+    double3 v_rel_t = v_rel - v_rel_n * normal;
+    double  v_rel_t_norm = length(v_rel_t);
+
+    if (v_rel_t_norm > 0.0) {
+      // Simple regularization: friction magnitude smoothly approaches mu * N
+      const double v_reg = 1e-3;  // regularization velocity scale
+      double       slip_factor = v_rel_t_norm / (v_rel_t_norm + v_reg);
+      double       N           = fabs(p_damped * A);
+      double       Ft_mag      = friction * N * slip_factor;
+
+      double3 t_hat = (1.0 / v_rel_t_norm) * v_rel_t;
+      double3 F_t   = (-Ft_mag) * t_hat;  // Opposes slip of B relative to A
+
+      F_patch = F_patch + F_t;
+    }
+  }
 
   // Distribute forces to nodes using atomicAdd
   // tetA is pushed opposite to normal (away from B) -> -F_patch

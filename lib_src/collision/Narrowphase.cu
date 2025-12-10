@@ -279,7 +279,8 @@ void Narrowphase::Destroy() {
 }
 
 Eigen::VectorXd Narrowphase::ComputeExternalForcesGPU(const double* d_vel,
-                                                      double damping) {
+                                                      double damping,
+                                                      double friction) {
   Eigen::VectorXd f_ext = Eigen::VectorXd::Zero(3 * n_nodes);
 
   if (numCollisionPairs == 0 || d_contactPatches == nullptr) {
@@ -305,7 +306,7 @@ Eigen::VectorXd Narrowphase::ComputeExternalForcesGPU(const double* d_vel,
 
   computeExternalForcesKernel<<<gridSize, blockSize>>>(
       d_contactPatches, numCollisionPairs, d_nodes, d_vel, d_elements, n_nodes,
-      n_elems, damping, d_f_ext);
+      n_elems, damping, friction, d_f_ext);
 
   cudaDeviceSynchronize();
 

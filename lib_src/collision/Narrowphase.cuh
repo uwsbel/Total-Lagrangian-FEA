@@ -202,7 +202,8 @@ struct Narrowphase {
    * ...]
    */
   Eigen::VectorXd ComputeExternalForcesGPU(const double* d_vel = nullptr,
-                                           double damping       = 0.0);
+                                           double damping       = 0.0,
+                                           double friction      = 0.0);
 
   /**
    * Get device pointer to external forces buffer.

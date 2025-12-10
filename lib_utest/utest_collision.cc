@@ -54,9 +54,9 @@ TEST_F(TestCollision, BroadphaseInitialization) {
   // Initialize broadphase with mesh data
   broadphase.Initialize(nodes, elements);
   broadphase.CreateAABB();
-  broadphase.BuildNeighborMap();  // NEW: Build neighbor connectivity
+  broadphase.BuildNeighborMap();  // Build neighbor connectivity
   broadphase.SortAABBs(0);
-  broadphase.DetectCollisions();  // Now filters neighbors!
+  broadphase.DetectCollisions();  // Detect collisions using neighbor connectivity
   broadphase.PrintCollisionPairs();
 }
 

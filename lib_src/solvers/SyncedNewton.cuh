@@ -13,7 +13,7 @@
  *==============================================================
  *==============================================================*/
 
-#include <cublas_v2.h>  // Add this line for cuBLAS
+#include <cublas_v2.h>  // cuBLAS header
 
 #include "../../lib_utils/cuda_utils.h"
 #include "../../lib_utils/quadrature_utils.h"
@@ -38,13 +38,13 @@ class SyncedNewtonSolver : public SolverBase {
       : n_coef_(data->get_n_coef()),
         n_beam_(data->get_n_beam()),
         n_constraints_(n_constraints),
-        sparse_hessian_initialized_(false),  // NEW
-        h_nnz_(0),                           // NEW
-        d_csr_row_offsets_(nullptr),         // NEW
-        d_csr_col_indices_(nullptr),         // NEW
-        d_csr_values_(nullptr),              // NEW
-        d_col_bitset_(nullptr),              // NEW
-        d_nnz_per_row_(nullptr) {            // NEW
+        sparse_hessian_initialized_(false),
+        h_nnz_(0),
+        d_csr_row_offsets_(nullptr),
+        d_csr_col_indices_(nullptr),
+        d_csr_values_(nullptr),
+        d_col_bitset_(nullptr),
+        d_nnz_per_row_(nullptr) {
     // Type-based casting to get the correct d_data from derived class
     if (data->type == TYPE_3243) {
       type_            = TYPE_3243;
@@ -129,7 +129,7 @@ class SyncedNewtonSolver : public SolverBase {
       }
     }
 
-    // NEW: Create persistent handles
+    // Create persistent linear algebra handles
     cublasCreate(&cublas_handle_);
     cublasSetPointerMode(cublas_handle_, CUBLAS_POINTER_MODE_DEVICE);
 
@@ -169,7 +169,7 @@ class SyncedNewtonSolver : public SolverBase {
     cudaFree(d_alpha_cg_);
     cudaFree(d_beta_cg_);
 
-    // NEW: Free sparse Hessian
+    // Free sparse Hessian structures
     if (d_csr_row_offsets_)
       cudaFree(d_csr_row_offsets_);
     if (d_csr_col_indices_)
@@ -181,7 +181,7 @@ class SyncedNewtonSolver : public SolverBase {
     if (d_nnz_per_row_)
       cudaFree(d_nnz_per_row_);
 
-    // NEW: Destroy persistent handles
+    // Destroy persistent linear algebra handles
     if (cublas_handle_)
       cublasDestroy(cublas_handle_);
     if (d_norm_temp_)
@@ -341,7 +341,7 @@ class SyncedNewtonSolver : public SolverBase {
   }
 
   double compute_l2_norm_cublas(double *d_vec, int n_dofs);
-  void AnalyzeHessianSparsity();  // ADD THIS LINE
+  void AnalyzeHessianSparsity();
 
  private:
   ElementType type_;
@@ -366,7 +366,7 @@ class SyncedNewtonSolver : public SolverBase {
 
   double *d_constraint_ptr_;
 
-  // NEW: Sparse Hessian members
+  // Sparse Hessian members
   bool sparse_hessian_initialized_;
   int h_nnz_;                   // Total number of non-zeros (host copy)
   int *d_csr_row_offsets_;      // Size: n_dofs + 1
@@ -375,7 +375,7 @@ class SyncedNewtonSolver : public SolverBase {
   unsigned int *d_col_bitset_;  // Temporary for sparsity analysis
   int *d_nnz_per_row_;          // Temporary workspace
 
-  // NEW: Persistent library handles (reused across iterations)
+  // Persistent library handles (reused across iterations)
   cublasHandle_t cublas_handle_;
   cudssHandle_t cudss_handle_;
   cudssConfig_t cudss_config_;
