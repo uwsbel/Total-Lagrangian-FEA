@@ -1,23 +1,10 @@
 /**
  * Sphere Drop Collision Simulation
+ * Author: Json Zhou (zzhou292@wisc.edu)
  *
- * Author: Json Zhou
- * Email:  zzhou292@wisc.edu
- *
- * This simulation demonstrates a sphere dropped onto another fixed sphere
- * using the Newton solver combined with the collision detection system.
- *
- * Setup:
- * - Two spheres with radius ~0.15
- * - Bottom sphere: fixed in place (all nodes constrained)
- * - Top sphere: initialized slightly above, subject to gravity
- *
- * Each time step:
- * 1. Run collision detection (broadphase + narrowphase)
- * 2. Compute contact forces (f_ext from contact patches)
- * 3. Add gravity to f_ext
- * 4. Run one Newton step
- * 5. Export VTK for visualization
+ * A falling sphere impacts a fixed sphere; contact is handled by
+ * broadphase+narrowphase, forces feed the Newton solver, and results are
+ * exported for visualization.
  */
 
 #include <cuda_runtime.h>
@@ -219,7 +206,7 @@ int main(int argc, char** argv) {
   std::cout << "Newton solver initialized" << std::endl;
 
   // =========================================================================
-  // Initialize collision detection
+  // Initialize collision detection (build-once topology)
   // =========================================================================
   Broadphase broadphase;
   Narrowphase narrowphase;
@@ -232,6 +219,14 @@ int main(int argc, char** argv) {
       elementMeshIds(instance.element_offset + e) = i;
     }
   }
+
+  // Initialize broadphase and narrowphase once with initial topology
+  broadphase.Initialize(initial_nodes, elements);
+  broadphase.CreateAABB();
+  broadphase.BuildNeighborMap();
+  broadphase.SortAABBs(0);
+
+  narrowphase.Initialize(initial_nodes, elements, pressure, elementMeshIds);
 
   std::cout << "Collision detection initialized" << std::endl;
 
@@ -262,13 +257,10 @@ int main(int argc, char** argv) {
     }
 
     // ---------------------------------------------------------------------
-    // 2. Run collision detection
+    // 2. Run collision detection (reuse topology, update positions only)
     // ---------------------------------------------------------------------
-    // Destroy previous GPU allocations before re-initializing
-    broadphase.Destroy();
-    broadphase.Initialize(current_nodes, elements);
+    broadphase.UpdateNodes(current_nodes);
     broadphase.CreateAABB();
-    broadphase.BuildNeighborMap();
     broadphase.SortAABBs(0);
     broadphase.DetectCollisions();
 
@@ -280,10 +272,8 @@ int main(int argc, char** argv) {
       collisionPairs.emplace_back(cp.idA, cp.idB);
     }
 
-    // Run narrowphase
-    // Destroy previous GPU allocations before re-initializing
-    narrowphase.Destroy();
-    narrowphase.Initialize(current_nodes, elements, pressure, elementMeshIds);
+    // Run narrowphase with updated positions and current collision pairs
+    narrowphase.UpdateNodes(current_nodes);
     narrowphase.SetCollisionPairs(collisionPairs);
     narrowphase.ComputeContactPatches();
 

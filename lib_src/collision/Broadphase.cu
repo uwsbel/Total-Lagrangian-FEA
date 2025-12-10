@@ -169,6 +169,26 @@ void Broadphase::Destroy() {
   n_elems          = 0;
 }
 
+// Update node positions on device without changing topology or neighbor data
+void Broadphase::UpdateNodes(const Eigen::MatrixXd& nodes) {
+  if (n_nodes == 0 || d_nodes == nullptr) {
+    std::cerr << "Broadphase::UpdateNodes called before Initialize" << std::endl;
+    return;
+  }
+
+  if (nodes.rows() != n_nodes || nodes.cols() != 3) {
+    std::cerr << "Broadphase::UpdateNodes: node matrix size mismatch" << std::endl;
+    return;
+  }
+
+  // Update host copy (optional but keeps diagnostics consistent)
+  h_nodes = nodes;
+
+  // Copy updated positions to device; connectivity and neighbor map are reused
+  cudaMemcpy(d_nodes, nodes.data(), n_nodes * 3 * sizeof(double),
+             cudaMemcpyHostToDevice);
+}
+
 // Create/update AABBs from mesh data
 void Broadphase::CreateAABB() {
   if (n_elems == 0 || d_nodes == nullptr || d_elements == nullptr) {

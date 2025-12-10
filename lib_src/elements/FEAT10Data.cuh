@@ -509,7 +509,47 @@ struct GPU_FEAT10_Data : public ElementBase {
                             cudaMemcpyHostToDevice));
   }
 
+  /**
+   * Update node positions on GPU (for prescribed motion of fixed nodes).
+   */
+  void UpdatePositions(const Eigen::VectorXd &h_x12, const Eigen::VectorXd &h_y12,
+                       const Eigen::VectorXd &h_z12) {
+    if (h_x12.size() != n_coef || h_y12.size() != n_coef || h_z12.size() != n_coef) {
+      std::cerr << "Position vector size mismatch." << std::endl;
+      return;
+    }
+    HANDLE_ERROR(cudaMemcpy(d_h_x12, h_x12.data(), n_coef * sizeof(double),
+                            cudaMemcpyHostToDevice));
+    HANDLE_ERROR(cudaMemcpy(d_h_y12, h_y12.data(), n_coef * sizeof(double),
+                            cudaMemcpyHostToDevice));
+    HANDLE_ERROR(cudaMemcpy(d_h_z12, h_z12.data(), n_coef * sizeof(double),
+                            cudaMemcpyHostToDevice));
+  }
+
+  void UpdateConstraintTargets(const Eigen::VectorXd &h_x12,
+                               const Eigen::VectorXd &h_y12,
+                               const Eigen::VectorXd &h_z12) {
+    if (h_x12.size() != n_coef || h_y12.size() != n_coef || h_z12.size() != n_coef) {
+      std::cerr << "Position vector size mismatch." << std::endl;
+      return;
+    }
+    HANDLE_ERROR(cudaMemcpy(d_h_x12_jac, h_x12.data(), n_coef * sizeof(double),
+                            cudaMemcpyHostToDevice));
+    HANDLE_ERROR(cudaMemcpy(d_h_y12_jac, h_y12.data(), n_coef * sizeof(double),
+                            cudaMemcpyHostToDevice));
+    HANDLE_ERROR(cudaMemcpy(d_h_z12_jac, h_z12.data(), n_coef * sizeof(double),
+                            cudaMemcpyHostToDevice));
+  }
+
   void SetNodalFixed(const Eigen::VectorXi &fixed_nodes);
+
+  /**
+   * Update fixed nodes for dynamic constraint changes (e.g., moving grippers).
+   * This reuses existing constraint buffers if the number of fixed nodes matches,
+   * otherwise reallocates. After calling this, you must call CalcConstraintData()
+   * and ConvertTOCSRConstraintJac() to update the constraint Jacobian.
+   */
+  void UpdateNodalFixed(const Eigen::VectorXi &fixed_nodes);
 
   // Free memory
   void Destroy() {

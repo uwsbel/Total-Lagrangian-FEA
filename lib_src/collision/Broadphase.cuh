@@ -1,16 +1,9 @@
-/*==============================================================
- *==============================================================
- * Project: RoboDyna
- * Author:  Json Zhou
- * Email:   zzhou292@wisc.edu
- * File:    Broadphase.cuh
- * Brief:   Declares the Broadphase class, AABB and CollisionPair structures,
- *          and host-side API for GPU-based broadphase collision detection.
- *          Owns mesh data on host and device, neighbor-pair hashing, and
- *          interfaces for AABB creation, sorting, neighbor map building, and
- *          collision pair retrieval.
- *==============================================================
- *==============================================================*/
+/* Broadphase.cuh
+ * Author: Json Zhou (zzhou292@wisc.edu)
+ *
+ * GPU broadphase collision detection: AABBs, sweep-and-prune, neighbor
+ * filtering, and host/device data for mesh overlap queries.
+ */
 
 #include <cuda_runtime.h>
 #include <cusparse.h>
@@ -125,6 +118,12 @@ struct Broadphase {
   // Initialize GPU resources with mesh data
   void Initialize(const Eigen::MatrixXd& nodes,
                   const Eigen::MatrixXi& elements);
+
+  // Update only nodal positions on the device while reusing existing
+  // topology, neighbor maps, and allocated buffers.
+  // - Expect same number of nodes and 3 columns.
+  // - Does NOT rebuild neighbor maps or reallocate device memory.
+  void UpdateNodes(const Eigen::MatrixXd& nodes);
 
   void RetrieveAABBandPrints();
 

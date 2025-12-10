@@ -1,16 +1,9 @@
-/*==============================================================
- *==============================================================
- * Project: RoboDyna
- * Author:  Json Zhou
- * Email:   zzhou292@wisc.edu
- * File:    Narrowphase.cuh
- * Brief:   Declares the Narrowphase class and supporting data structures for
- *          pressure-based contact detection between tetrahedra. Defines the
- *          ContactPatch representation, intermediate clipping polygons, GPU
- *          mesh and pressure storage, and host API for computing patches and
- *          external contact forces.
- *==============================================================
- *==============================================================*/
+/* Narrowphase.cuh
+ * Author: Json Zhou (zzhou292@wisc.edu)
+ *
+ * Pressure-based narrowphase: contact patch data structures, GPU storage, and
+ * host API for computing patches and contact forces between tetrahedra.
+ */
 
 #pragma once
 
@@ -153,6 +146,11 @@ struct Narrowphase {
   void Initialize(const Eigen::MatrixXd& nodes, const Eigen::MatrixXi& elements,
                   const Eigen::VectorXd& pressure,
                   const Eigen::VectorXi& elementMeshIds = Eigen::VectorXi());
+
+  // Update nodal positions on the device while reusing existing topology,
+  // pressure field, and element-mesh IDs. Expects the same n_nodes and 3
+  // columns as passed to Initialize.
+  void UpdateNodes(const Eigen::MatrixXd& nodes);
 
   /**
    * Set collision pairs from broadphase results.

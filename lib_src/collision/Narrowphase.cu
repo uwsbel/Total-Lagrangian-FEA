@@ -90,6 +90,21 @@ void Narrowphase::Initialize(const Eigen::MatrixXd& nodes,
             << n_elems << " elements" << std::endl;
 }
 
+void Narrowphase::UpdateNodes(const Eigen::MatrixXd& nodes) {
+  if (n_nodes == 0 || d_nodes == nullptr) {
+    std::cerr << "Narrowphase::UpdateNodes called before Initialize" << std::endl;
+    return;
+  }
+
+  if (nodes.rows() != n_nodes || nodes.cols() != 3) {
+    std::cerr << "Narrowphase::UpdateNodes: node matrix size mismatch" << std::endl;
+    return;
+  }
+
+  cudaMemcpy(d_nodes, nodes.data(), n_nodes * 3 * sizeof(double),
+             cudaMemcpyHostToDevice);
+}
+
 void Narrowphase::SetCollisionPairs(
     const std::vector<std::pair<int, int>>& pairs) {
   numCollisionPairs = pairs.size();
