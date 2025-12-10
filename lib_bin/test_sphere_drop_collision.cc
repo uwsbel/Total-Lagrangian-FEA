@@ -27,6 +27,7 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <cstdlib>
 
 #include "../lib_src/collision/Broadphase.cuh"
 #include "../lib_src/collision/Narrowphase.cuh"
@@ -38,9 +39,9 @@
 #include "../lib_utils/visualization_utils.h"
 
 // Material properties
-const double E    = 1e7;     // Young's modulus (softer for visible deformation)
+const double E    = 4e6;     // Young's modulus (softer for visible deformation)
 const double nu   = 0.3;     // Poisson's ratio
-const double rho0 = 1000.0;  // Density (kg/m^3)
+const double rho0 = 3500.0;  // Density (kg/m^3)
 
 // Simulation parameters
 const double gravity = -9.81;  // Gravity acceleration (m/s^2)
@@ -49,12 +50,21 @@ const int num_steps  = 6000;   // Number of simulation steps
 const double sphere_gap =
     0.02;  // Initial gap between spheres (m) - start closer
 
+// Contact damping (Drake-style normal damping coefficient)
+const double contact_damping_default = 0.2;
+
 using ANCFCPUUtils::VisualizationUtils;
 
-int main() {
+int main(int argc, char** argv) {
   std::cout << "========================================" << std::endl;
   std::cout << "Sphere Drop Collision Simulation" << std::endl;
   std::cout << "========================================" << std::endl;
+
+  double contact_damping = contact_damping_default;
+  if (argc > 1) {
+    contact_damping = std::atof(argv[1]);
+  }
+  std::cout << "Contact damping: " << contact_damping << std::endl;
 
   // Create output directory
   std::filesystem::create_directories("output/sphere_drop");
@@ -179,7 +189,7 @@ int main() {
   const Eigen::VectorXd& tet5pt_z       = Quadrature::tet5pt_z;
   const Eigen::VectorXd& tet5pt_weights = Quadrature::tet5pt_weights;
 
-  gpu_t10_data.Setup(rho0, nu, E, 0.0, 0.0,  // Material + damping
+  gpu_t10_data.Setup(rho0, nu, E, 1e4, 1e4,  // Material + damping
                      tet5pt_x, tet5pt_y, tet5pt_z, tet5pt_weights, h_x12, h_y12,
                      h_z12, elements);
 
@@ -283,7 +293,9 @@ int main() {
     h_f_ext.setZero();
 
     // Add contact forces from collision patches (GPU version)
-    Eigen::VectorXd contact_forces = narrowphase.ComputeExternalForcesGPU();
+    Eigen::VectorXd contact_forces =
+        narrowphase.ComputeExternalForcesGPU(
+            solver.GetVelocityGuessDevicePtr(), contact_damping);
     if (contact_forces.size() == h_f_ext.size()) {
       h_f_ext += contact_forces;
     }

@@ -192,10 +192,17 @@ struct Narrowphase {
    * Uses already-on-device patch data (d_contactPatches) without CPU transfer.
    * Forces are computed using atomicAdd and returned as Eigen vector.
    *
+   * @param d_vel   Optional device pointer to nodal velocities laid out as
+   *                [vx0, vy0, vz0, vx1, ...]. If nullptr, no velocity-dependent
+   *                damping is applied.
+   * @param damping Normal damping coefficient (>= 0). If zero, no damping is
+   *                applied even if d_vel is non-null.
+   *
    * @return External forces vector of size 3 * n_nodes [fx0, fy0, fz0, fx1,
    * ...]
    */
-  Eigen::VectorXd ComputeExternalForcesGPU();
+  Eigen::VectorXd ComputeExternalForcesGPU(const double* d_vel = nullptr,
+                                           double damping       = 0.0);
 
   /**
    * Get device pointer to external forces buffer.

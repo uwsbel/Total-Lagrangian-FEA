@@ -670,18 +670,23 @@ __device__ void computeBarycentricCoordinates(double3 x, double3 v0, double3 v1,
  * @param patches       Device array of contact patches (already computed)
  * @param numPatches    Number of patches
  * @param d_nodes       Device node coordinates (n_nodes * 3, column-major)
+ * @param d_vel         Device nodal velocities (3 * n_nodes, [vx0, vy0, vz0, ...])
  * @param d_elements    Device element connectivity (n_elems * nodesPerElement,
- * column-major)
+ *                      column-major)
  * @param n_nodes       Number of nodes
  * @param n_elems       Number of elements
+ * @param damping       Normal damping coefficient (>= 0). If zero or d_vel is
+ *                      null, damping contribution is skipped.
  * @param d_f_ext       Output: external forces (3 * n_nodes), zeroed before
- * kernel launch
+ *                      kernel launch
  */
 __global__ void computeExternalForcesKernel(const ContactPatch* patches,
                                             int numPatches,
                                             const double* d_nodes,
-                                            const int* d_elements, int n_nodes,
-                                            int n_elems, double* d_f_ext) {
+                                            const double* d_vel,
+                                            const int* d_elements,
+                                            int n_nodes, int n_elems,
+                                            double damping, double* d_f_ext) {
   int idx = blockIdx.x * blockDim.x + threadIdx.x;
   if (idx >= numPatches)
     return;
@@ -704,8 +709,8 @@ __global__ void computeExternalForcesKernel(const ContactPatch* patches,
   double p_eq      = patch.p_equilibrium;
   double A         = patch.area;
 
-  // Compute patch force
-  double3 F_patch = (p_eq * A) * normal;
+  // Compute elastic patch force
+  double p_damped = p_eq;
 
   int tetA = patch.tetA_idx;
   int tetB = patch.tetB_idx;
@@ -745,6 +750,43 @@ __global__ void computeExternalForcesKernel(const ContactPatch* patches,
   double N_A[4], N_B[4];
   computeBarycentricCoordinates(centroid, vA[0], vA[1], vA[2], vA[3], N_A);
   computeBarycentricCoordinates(centroid, vB[0], vB[1], vB[2], vB[3], N_B);
+
+  // Optional Drake-style normal damping based on relative normal velocity at
+  // the patch centroid
+  if (d_vel != nullptr && damping > 0.0) {
+    double3 vA_centroid = make_double3(0.0, 0.0, 0.0);
+    double3 vB_centroid = make_double3(0.0, 0.0, 0.0);
+
+    for (int i = 0; i < 4; i++) {
+      int nodeA = elemA[i];
+      int nodeB = elemB[i];
+
+      if (nodeA >= 0 && nodeA < n_nodes) {
+        double3 vA_i = make_double3(d_vel[3 * nodeA + 0],
+                                    d_vel[3 * nodeA + 1],
+                                    d_vel[3 * nodeA + 2]);
+        vA_centroid = vA_centroid + N_A[i] * vA_i;
+      }
+
+      if (nodeB >= 0 && nodeB < n_nodes) {
+        double3 vB_i = make_double3(d_vel[3 * nodeB + 0],
+                                    d_vel[3 * nodeB + 1],
+                                    d_vel[3 * nodeB + 2]);
+        vB_centroid = vB_centroid + N_B[i] * vB_i;
+      }
+    }
+
+    double3 v_rel  = vB_centroid - vA_centroid;
+    double v_rel_n = dot(v_rel, normal);
+
+    double factor = 1.0 - damping * v_rel_n;
+    if (factor < 0.0) {
+      factor = 0.0;
+    }
+    p_damped = p_eq * factor;
+  }
+
+  double3 F_patch = (p_damped * A) * normal;
 
   // Distribute forces to nodes using atomicAdd
   // tetA is pushed opposite to normal (away from B) -> -F_patch

@@ -329,6 +329,11 @@ class SyncedNewtonSolver : public SolverBase {
     return n_beam_;
   }
 
+  // Host accessor for device velocity guess pointer (layout: [vx0, vy0, vz0, ..])
+  double* GetVelocityGuessDevicePtr() const {
+    return d_v_guess_;
+  }
+
   void OneStepNewtonCuDSS();
 
   void Solve() override {
