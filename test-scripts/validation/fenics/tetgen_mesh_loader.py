@@ -79,12 +79,21 @@ def load_tetgen_mesh_from_files(node_file, ele_file):
     Returns:
         tuple: (mesh, x_nodes) - DOLFINx mesh and node coordinate array
     
+    Raises:
+        FileNotFoundError: If either the node file or element file does not exist
+    
     Examples:
         load_tetgen_mesh_from_files(
             "data/meshes/T10/bunny_ascii_26.1.node",
             "data/meshes/T10/bunny_ascii_26.1.ele"
         )
     """
+    # Validate that both mesh files exist before attempting to load
+    if not os.path.exists(node_file):
+        raise FileNotFoundError(f"Node file not found: {node_file}")
+    if not os.path.exists(ele_file):
+        raise FileNotFoundError(f"Element file not found: {ele_file}")
+    
     # Read nodes and detect indexing offset (0 or 1)
     x_nodes, index_offset = read_tetgen_node_file(node_file, return_offset=True)
     

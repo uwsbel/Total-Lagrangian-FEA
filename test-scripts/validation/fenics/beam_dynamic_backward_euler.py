@@ -6,7 +6,7 @@ import os
 import numpy as np
 import ufl
 
-from dolfinx import fem, mesh, plot, log, default_scalar_type
+from dolfinx import fem, default_scalar_type
 from dolfinx.fem.petsc import NonlinearProblem, assemble_residual
 from petsc4py import PETSc
 from tetgen_mesh_loader import load_tetgen_mesh_from_files
@@ -17,8 +17,8 @@ from tetgen_mesh_loader import load_tetgen_mesh_from_files
 # ============================================================================
 # Resolution selection: 0 (RES_0), 2 (RES_2), or 4 (RES_4)
 RES = 0
-# VTK output option: Set to True to save VTK files, False to skip
-SAVE_VTK = False
+# Debug flag: Set to True to enable detailed debug output
+DEBUG = False
 
 # Construct mesh file paths
 script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -29,75 +29,45 @@ node_file = os.path.join(mesh_dir, f"beam_3x2x1_res{RES}.1.node")
 ele_file = os.path.join(mesh_dir, f"beam_3x2x1_res{RES}.1.ele")
 
 # Load TetGen mesh
-domain, x_tetgen = load_tetgen_mesh_from_files(node_file, ele_file)
+domain, _ = load_tetgen_mesh_from_files(node_file, ele_file)
 V = fem.functionspace(domain, ("Lagrange", 2, (domain.geometry.dim, )))
 
-# Print function space information
-# print("\n" + "="*80)
-# print("FUNCTION SPACE INFORMATION")
-# print("="*80)
-# print(f"Function space: {V}")
-# print(f"Element family: Lagrange")
-# print(f"Element degree: 2 (quadratic)")
-# print(f"Value shape: {V.element.value_shape} (vector with {domain.geometry.dim} components)")
-# print(f"Mesh dimension: {domain.geometry.dim}D")
-# print("="*80 + "\n")
-
-# # List all DOF nodes in function space (includes mid-edge nodes for quadratic)
-# print("\n" + "="*80)
-# print("FUNCTION SPACE DOF NODES (Quadratic - includes mid-edge nodes)")
-# print("="*80)
-# dof_coords = V.tabulate_dof_coordinates()
-# print(f"DEBUG: tabulate_dof_coordinates() returned shape: {dof_coords.shape}")
-# print(f"DEBUG: Total entries: {len(dof_coords)}")
-
-# For a blocked vector function space, tabulate_dof_coordinates() returns 
-# one entry per spatial DOF location (not repeated for each component)
-# print(f"Total DOF nodes in function space: {len(dof_coords)}")
-# print(f"\nDOF Node listing:")
-# print(f"{'Index':<8} {'X':<12} {'Y':<12} {'Z':<12}")
-# print("-"*80)
-# for i, point in enumerate(dof_coords):
-#     print(f"{i:<8} {point[0]:<12.6f} {point[1]:<12.6f} {point[2]:<12.6f}")
-# print("="*80 + "\n")
+if DEBUG:
+    # Print function space information
+    print("\n" + "="*80)
+    print("FUNCTION SPACE INFORMATION")
+    print("="*80)
+    print(f"Function space: {V}")
+    print(f"Element family: Lagrange")
+    print(f"Element degree: 2 (quadratic)")
+    print(f"Value shape: {V.element.value_shape} (vector with {domain.geometry.dim} components)")
+    print(f"Mesh dimension: {domain.geometry.dim}D")
+    print("="*80 + "\n")
+    
+    # List all DOF nodes in function space (includes mid-edge nodes for quadratic)
+    print("\n" + "="*80)
+    print("FUNCTION SPACE DOF NODES (Quadratic - includes mid-edge nodes)")
+    print("="*80)
+    dof_coords_debug = V.tabulate_dof_coordinates()
+    print(f"DEBUG: tabulate_dof_coordinates() returned shape: {dof_coords_debug.shape}")
+    print(f"DEBUG: Total entries: {len(dof_coords_debug)}")
+    
+    # For a blocked vector function space, tabulate_dof_coordinates() returns 
+    # one entry per spatial DOF location (not repeated for each component)
+    print(f"Total DOF nodes in function space: {len(dof_coords_debug)}")
+    print(f"\nDOF Node listing:")
+    print(f"{'Index':<8} {'X':<12} {'Y':<12} {'Z':<12}")
+    print("-"*80)
+    for i, point in enumerate(dof_coords_debug):
+        print(f"{i:<8} {point[0]:<12.6f} {point[1]:<12.6f} {point[2]:<12.6f}")
+    print("="*80 + "\n")
 
 # Beam dimensions (for boundary conditions)
+# L = 3.0; W = 2.0; H = 1.0;
 L = 3.0   # Length (x)
 W = 2.0   # Width (y)
 H = 1.0   # Height (z)
-tol = 1e-6
-
-# Find DOF nodes at x = 0 and x = 3 (using function space DOFs)
-# dof_nodes_x0 = []
-# dof_nodes_x3 = []
-
-# for i, point in enumerate(dof_coords):
-#     if abs(point[0] - 0.0) < tol:
-#         dof_nodes_x0.append((i, point))
-#     elif abs(point[0] - L) < tol:
-#         dof_nodes_x3.append((i, point))
-
-# Print DOF nodes at x = 0
-# print("\n" + "="*80)
-# print("DOF NODES AT X = 0 (Fixed end)")
-# print("="*80)
-# print(f"Total DOF nodes at x=0: {len(dof_nodes_x0)}")
-# print(f"\n{'DOF Index':<12} {'X':<12} {'Y':<12} {'Z':<12}")
-# print("-"*80)
-# for idx, point in sorted(dof_nodes_x0):
-#     print(f"{idx:<12} {point[0]:<12.6f} {point[1]:<12.6f} {point[2]:<12.6f}")
-# print("="*80 + "\n")
-
-# Print DOF nodes at x = 3
-# print("\n" + "="*80)
-# print("DOF NODES AT X = 3 (Free end)")
-# print("="*80)
-# print(f"Total DOF nodes at x=3: {len(dof_nodes_x3)}")
-# print(f"\n{'DOF Index':<12} {'X':<12} {'Y':<12} {'Z':<12}")
-# print("-"*80)
-# for idx, point in sorted(dof_nodes_x3):
-#     print(f"{idx:<12} {point[0]:<12.6f} {point[1]:<12.6f} {point[2]:<12.6f}")
-# print("="*80 + "\n")
+tol = 1e-6  # Tolerance
 
 
 # Print total nodes and elements (all ranks print)
@@ -121,7 +91,7 @@ print("\nBOUNDARY CONDITIONS SETUP")
 
 # Define a function to identify nodes at x = 0
 def fixed_boundary(x):
-    return np.isclose(x[0], 0.0, atol=1e-6)
+    return np.isclose(x[0], 0.0, atol=tol)
 
 # Locate DOFs on the fixed boundary
 boundary_dofs = fem.locate_dofs_geometrical(V, fixed_boundary)
@@ -129,7 +99,6 @@ boundary_dofs = fem.locate_dofs_geometrical(V, fixed_boundary)
 # Verify: manually find all function space DOF nodes at x=0
 dof_coords = V.tabulate_dof_coordinates()
 manual_x0_dofs = []
-tol = 1e-6
 for i, coord in enumerate(dof_coords):
     if abs(coord[0] - 0.0) < tol:
         manual_x0_dofs.append(i)
@@ -146,13 +115,46 @@ print(f"  Boundary condition: u = {u_zero}")
 print(f"  Constrained scalar DOFs: {len(boundary_dofs) * block_size}")
 print(f"  Free scalar DOFs: {total_vector_dofs - len(boundary_dofs) * block_size}")
 
-# List the constrained DOF nodes
-# print(f"\n  DOF nodes constrained at x=0:")
-# print(f"  {'DOF Index':<12} {'X':<12} {'Y':<12} {'Z':<12}")
-# print("  " + "-"*76)
-# for dof_idx in sorted(boundary_dofs):
-#     coord = dof_coords[dof_idx]
-#     print(f"  {dof_idx:<12} {coord[0]:<12.6f} {coord[1]:<12.6f} {coord[2]:<12.6f}")
+if DEBUG:
+    # List the constrained DOF nodes
+    print(f"\n  DOF nodes constrained at x=0:")
+    print(f"  {'DOF Index':<12} {'X':<12} {'Y':<12} {'Z':<12}")
+    print("  " + "-"*76)
+    for dof_idx in sorted(boundary_dofs):
+        coord = dof_coords[dof_idx]
+        print(f"  {dof_idx:<12} {coord[0]:<12.6f} {coord[1]:<12.6f} {coord[2]:<12.6f}")
+    
+    # Find and print DOF nodes at x = 0 and x = 3 (using function space DOFs)
+    dof_nodes_x0 = []
+    dof_nodes_x3 = []
+    
+    for i, point in enumerate(dof_coords):
+        if abs(point[0] - 0.0) < tol:
+            dof_nodes_x0.append((i, point))
+        elif abs(point[0] - L) < tol:
+            dof_nodes_x3.append((i, point))
+    
+    # Print DOF nodes at x = 0
+    print("\n" + "="*80)
+    print("DOF NODES AT X = 0 (Fixed end)")
+    print("="*80)
+    print(f"Total DOF nodes at x=0: {len(dof_nodes_x0)}")
+    print(f"\n{'DOF Index':<12} {'X':<12} {'Y':<12} {'Z':<12}")
+    print("-"*80)
+    for idx, point in sorted(dof_nodes_x0):
+        print(f"{idx:<12} {point[0]:<12.6f} {point[1]:<12.6f} {point[2]:<12.6f}")
+    print("="*80 + "\n")
+    
+    # Print DOF nodes at x = 3
+    print("\n" + "="*80)
+    print("DOF NODES AT X = 3 (Free end)")
+    print("="*80)
+    print(f"Total DOF nodes at x=3: {len(dof_nodes_x3)}")
+    print(f"\n{'DOF Index':<12} {'X':<12} {'Y':<12} {'Z':<12}")
+    print("-"*80)
+    for idx, point in sorted(dof_nodes_x3):
+        print(f"{idx:<12} {point[0]:<12.6f} {point[1]:<12.6f} {point[2]:<12.6f}")
+    print("="*80 + "\n")
 
 
 # ============================================================================
@@ -185,16 +187,13 @@ f_temp.x.array[:] = 0.0
 
 # Apply the force directly to the vector indices
 # We must map the local 'force_dofs' to the global PETSc vector indices
-dofmap = V.dofmap
-bs = dofmap.index_map_bs  # Block size (should be 3)
-
 # Get local-to-global map if running in parallel (or serial)
 # For simple serial script, we can access the array directly via the Function wrapper
 # but treating it as a raw PETSc vector is safer for the solver.
 for node_idx in force_dofs:
     # Set Z-component (index 2 in the block) - negative for -z direction
     # The C++ code sets: h_f_ext(3 * node_idx + 2) = -force_per_node
-    f_temp.x.array[node_idx * bs + 2] = -force_per_node
+    f_temp.x.array[node_idx * block_size + 2] = -force_per_node
 
 # Move data to the PETSc vector
 f_ext_vector = f_temp.x.petsc_vec.copy()
@@ -214,7 +213,7 @@ print(f"  Distribution: Equal distribution across all nodes")
 print("\nTRACKED NODE SETUP")
 
 # Tracked node: Top corner at free end (3, 2, 1)
-tracked_node_position = np.array([3.0, 2.0, 1.0])
+tracked_node_position = np.array([L, W, H])
 tracked_node_dof = None
 tracked_node_coord = None
 
@@ -276,9 +275,9 @@ P = lambda_factor * F + mu * (FFtF - F)
 # ============================================================================
 # TIME INTEGRATION SETUP (Backward Euler method)
 # ============================================================================
-dt = 1e-3  # Time step (0.1 seconds)
+dt = 1e-3  # Time step
 n_steps = 500  # Number of time steps
-t_final = n_steps * dt  # Total simulation time: 5.0 seconds
+t_final = n_steps * dt 
 
 print("\nTIME INTEGRATION SETUP")
 print(f"Method: Backward Euler")
@@ -290,7 +289,7 @@ print(f"Total simulation time: {t_final} s")
 # ============================================================================
 # VARIATIONAL FORM (Backward Euler)
 # ============================================================================
-# Quadrature degree reduced to 3 (matching C++ more closely)
+# Quadrature degree reduced to 5 (matching C++ more closely)
 metadata = {"quadrature_degree": 5}
 dx = ufl.Measure("dx", domain=domain, metadata=metadata)
 

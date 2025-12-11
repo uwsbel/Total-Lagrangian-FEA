@@ -16,7 +16,7 @@ from tetgen_mesh_loader import load_tetgen_mesh_from_files
 # GEOMETRY AND MESH SETUP
 # ============================================================================
 # Resolution selection: 0 (RES_0), 2 (RES_2), or 4 (RES_4)
-RES = 2
+RES = 0
 print(f"Running with resolution: {RES}")
 
 # Construct mesh file paths
@@ -28,13 +28,12 @@ node_file = os.path.join(mesh_dir, f"beam_3x2x1_res{RES}.1.node")
 ele_file = os.path.join(mesh_dir, f"beam_3x2x1_res{RES}.1.ele")
 
 # Load TetGen mesh
-domain, x_tetgen = load_tetgen_mesh_from_files(node_file, ele_file)
+domain, _ = load_tetgen_mesh_from_files(node_file, ele_file)
 V = fem.functionspace(domain, ("Lagrange", 2, (domain.geometry.dim, )))
 
 # Beam dimensions (for boundary conditions)
+# L = 3.0; W = 2.0; H = 1.0;
 L = 3.0   # Length (x)
-W = 2.0   # Width (y)
-H = 1.0   # Height (z)
 tol = 1e-6
 
 # ============================================================================
