@@ -13,6 +13,7 @@
  *==============================================================*/
 
 #include "ANCF3443Data.cuh"
+#include "../materials/SVK.cuh"
 
 // forward-declare solver type (pointer-only used here)
 struct SyncedNewtonSolver;
@@ -397,14 +398,22 @@ __device__ __forceinline__ void compute_p(int elem_idx, int qp_idx,
             }
 
     // --- Compute P ---
-    double factor = d_data->lambda() * (0.5 * tr_FtF - 1.5);
+    double F_local[3][3];
     #pragma unroll
     for (int i = 0; i < 3; ++i)
-        #pragma unroll
-        for (int j = 0; j < 3; ++j)
-        {
-            d_data->P(elem_idx, qp_idx)(i, j) = factor * d_data->F(elem_idx, qp_idx)(i, j) + d_data->mu() * (FFF[i][j] - d_data->F(elem_idx, qp_idx)(i, j)) + P_vis[i][j];
-        }
+      #pragma unroll
+      for (int j = 0; j < 3; ++j)
+        F_local[i][j] = d_data->F(elem_idx, qp_idx)(i, j);
+
+    double P_el[3][3];
+    svk_compute_P_from_trFtF_and_FFtF(F_local, tr_FtF, FFF, d_data->lambda(),
+                                     d_data->mu(), P_el);
+
+    #pragma unroll
+    for (int i = 0; i < 3; ++i)
+      #pragma unroll
+      for (int j = 0; j < 3; ++j)
+        d_data->P(elem_idx, qp_idx)(i, j) = P_el[i][j] + P_vis[i][j];
 
   // clang-format on
 }
@@ -617,21 +626,15 @@ __device__ __forceinline__ void compute_hessian_assemble_csr<GPU_ANCF3443_Data>(
       double Fhj_dot_Fhi =
           Fh[j][0] * Fh[i][0] + Fh[j][1] * Fh[i][1] + Fh[j][2] * Fh[i][2];
 
+      double Kblock[3][3];
+      svk_compute_tangent_block(Fh[i], Fh[j], h_ij, trE, Fhj_dot_Fhi, FFT,
+                               lambda, mu, dV, Kblock);
+
       for (int d = 0; d < 3; d++) {
         for (int eidx = 0; eidx < 3; eidx++) {
-          double A_de    = lambda * Fh[i][d] * Fh[j][eidx];
-          double B_de    = lambda * trE * h_ij * (d == eidx ? 1.0 : 0.0);
-          double C1_de   = mu * Fhj_dot_Fhi * (d == eidx ? 1.0 : 0.0);
-          double D_de    = mu * Fh[j][d] * Fh[i][eidx];
-          double Etrm_de = mu * h_ij * FFT[d][eidx];
-          double Ftrm_de = -mu * h_ij * (d == eidx ? 1.0 : 0.0);
-
-          double K_ij_de =
-              (A_de + B_de + C1_de + D_de + Etrm_de + Ftrm_de) * dV;
-
           int row          = 3 * i + d;
           int col          = 3 * j + eidx;
-          K_elem[row][col] = K_ij_de;
+          K_elem[row][col] = Kblock[d][eidx];
         }
       }
     }
