@@ -1,3 +1,16 @@
+/**
+ * ANCF CPU Utility Unit Tests
+ *
+ * Author: Json Zhou
+ * Email:  zzhou292@wisc.edu
+ *
+ * This file contains unit tests for CPU-side helper routines, including the
+ * ANCF3243 coefficient offset calculation and the ANCF3443 shell beam
+ * coordinate/element generators. It checks that offsets follow the expected
+ * pattern and that generated node coordinates and connectivities match
+ * hand-derived reference values.
+ */
+
 #include <gtest/gtest.h>
 
 #include <Eigen/Dense>

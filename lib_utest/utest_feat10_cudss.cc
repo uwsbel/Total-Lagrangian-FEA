@@ -1,3 +1,17 @@
+/**
+ * FEAT10 Newton / cuDSS Integration Test
+ *
+ * Author: Json Zhou
+ * Email:  zzhou292@wisc.edu
+ *
+ * This unit test runs a cantilever FEAT10 beam at several mesh resolutions,
+ * assembling mass, constraints, and stresses on the GPU and advancing the
+ * system with the synchronized Newton solver (backed by cuDSS). It checks
+ * that the pipeline from mesh I/O through assembly, Hessian analysis, and a
+ * few Newton steps executes without error and produces reasonable motion at
+ * a tracked node.
+ */
+
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
 

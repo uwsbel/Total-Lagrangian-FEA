@@ -1,3 +1,16 @@
+/**
+ * Sparse Mass Matrix Assembly Unit Tests
+ *
+ * Author: Json Zhou
+ * Email:  zzhou292@wisc.edu
+ *
+ * This suite validates sparse mass and constraint matrix assembly for the
+ * FEAT10, ANCF3443, and ANCF3243 element data structures. It builds small
+ * beam/tet meshes, compares dense mass matrices to printed output, and then
+ * converts to CSR format to sanity-check the sparse layout and constraint
+ * Jacobian construction.
+ */
+
 #include <gtest/gtest.h>
 
 #include <Eigen/Dense>
@@ -148,7 +161,7 @@ TEST_F(TestSparseMass, FEA_T10_SparseMassMatrix) {
 
 TEST_F(TestSparseMass, ANCF_3443_SparseMassMatrix) {
   // initialize GPU data structure
-  int n_beam = 2;  // this is working
+  int n_beam = 2;
   GPU_ANCF3443_Data gpu_3443_data(n_beam);
   gpu_3443_data.Initialize();
 

@@ -1,3 +1,16 @@
+/**
+ * FEAT10 Beam Resolution Study (AdamW)
+ *
+ * Author: Json Zhou
+ * Email:  zzhou292@wisc.edu
+ *
+ * This driver runs a cantilever FEAT10 beam at multiple mesh resolutions
+ * (RES_0, RES_2, RES_4, RES_8, RES_16) using the synchronized AdamW solver.
+ * It applies distributed end loads, tracks the displacement of a selected
+ * node over time, and writes its motion to CSV for mesh-convergence
+ * analysis.
+ */
+
 #include <cuda_runtime.h>
 
 #include <Eigen/Dense>

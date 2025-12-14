@@ -1,3 +1,10 @@
+/* Broadphase.cuh
+ * Author: Json Zhou (zzhou292@wisc.edu)
+ *
+ * GPU broadphase collision detection: AABBs, sweep-and-prune, neighbor
+ * filtering, and host/device data for mesh overlap queries.
+ */
+
 #include <cuda_runtime.h>
 #include <cusparse.h>
 
@@ -5,6 +12,7 @@
 #include <iostream>
 #include <unordered_set>
 #include <vector>
+
 #include "../../lib_utils/cuda_utils.h"
 #include "../../lib_utils/quadrature_utils.h"
 
@@ -86,9 +94,9 @@ struct Broadphase {
   Broadphase* d_bp;
 
   // Sorting data for sweep and prune
-  double* d_sortKeys;     // Sort keys (e.g., min.x values)
+  double* d_sortKeys;    // Sort keys (e.g., min.x values)
   int* d_sortIndices;    // Original indices
-  double* d_sortedKeys;   // Sorted keys (output)
+  double* d_sortedKeys;  // Sorted keys (output)
   int* d_sortedIndices;  // Sorted indices (output)
   AABB* d_sortedAABBs;   // Sorted AABBs
   void* d_tempStorage;   // Temporary storage for CUB
@@ -110,6 +118,12 @@ struct Broadphase {
   // Initialize GPU resources with mesh data
   void Initialize(const Eigen::MatrixXd& nodes,
                   const Eigen::MatrixXi& elements);
+
+  // Update only nodal positions on the device while reusing existing
+  // topology, neighbor maps, and allocated buffers.
+  // - Expect same number of nodes and 3 columns.
+  // - Does NOT rebuild neighbor maps or reallocate device memory.
+  void UpdateNodes(const Eigen::MatrixXd& nodes);
 
   void RetrieveAABBandPrints();
 

@@ -1,4 +1,17 @@
 #pragma once
+/*==============================================================
+ *==============================================================
+ * Project: RoboDyna
+ * Author:  Json Zhou
+ * Email:   zzhou292@wisc.edu
+ * File:    SyncedNesterov.cuh
+ * Brief:   Declares the SyncedNesterovSolver, a fully synchronized, true
+ *          first-order Nesterov integrator. Owns GPU buffers for velocities,
+ *          dual variables, gradient norms, and time-stepping parameters, and
+ *          exposes device accessors used by the Nesterov update kernel.
+ *==============================================================
+ *==============================================================*/
+
 #include "../../lib_utils/cuda_utils.h"
 #include "../../lib_utils/quadrature_utils.h"
 #include "../elements/ANCF3243Data.cuh"

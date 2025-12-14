@@ -1,3 +1,16 @@
+/**
+ * FEAT10 Beam Resolution Study (Newton)
+ *
+ * Author: Json Zhou
+ * Email:  zzhou292@wisc.edu
+ *
+ * This driver mirrors the FEAT10 AdamW resolution study but advances the
+ * cantilever beam using the synchronized Newton solver. It varies mesh
+ * resolution, applies distributed end loads, performs Hessian analysis, and
+ * records the displacement history of a target node to CSV to compare
+ * Newton-based dynamics across resolutions.
+ */
+
 #include <cuda_runtime.h>
 
 #include <Eigen/Dense>

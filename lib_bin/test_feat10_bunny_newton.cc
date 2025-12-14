@@ -1,3 +1,16 @@
+/**
+ * FEAT10 Bunny Newton Test
+ *
+ * Author: Json Zhou
+ * Email:  zzhou292@wisc.edu
+ *
+ * This simulation loads a FEAT10 bunny mesh, clamps nodes near the base,
+ * applies strong downward loads on nodes near the ears, and advances the
+ * configuration with the synchronized Newton solver. It is used to stress
+ * test FEAT10 internal force assembly, constraint handling, Newton
+ * convergence, and VTK output under large deformations.
+ */
+
 #include <cuda_runtime.h>
 
 #include <Eigen/Dense>

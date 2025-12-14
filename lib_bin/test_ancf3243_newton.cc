@@ -1,7 +1,19 @@
+/**
+ * ANCF3243 Beam Newton Resolution Test
+ *
+ * Author: Json Zhou
+ * Email:  zzhou292@wisc.edu
+ *
+ * This simulation builds a 1D ANCF3243 beam and advances it with the
+ * synchronized Newton solver while recording tip displacement to CSV. It is
+ * intended for checking Newton convergence, Hessian assembly, and agreement
+ * with reference Python scripts for beam bending under gravity and loading.
+ */
+
 #include <cuda_runtime.h>
 
 #include <Eigen/Dense>
-#include <fstream>  // Add this at the top
+#include <fstream>
 #include <iomanip>
 #include <iostream>
 

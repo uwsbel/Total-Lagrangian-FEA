@@ -5,11 +5,22 @@
 #include <iostream>
 #include <vector>
 
-#include "ElementBase.h"
+/*==============================================================
+ *==============================================================
+ * Project: RoboDyna
+ * Author:  Json Zhou
+ * Email:   zzhou292@wisc.edu
+ * File:    ANCF3243Data.cuh
+ * Brief:   Declares the GPU_ANCF3243_Data structure and host/GPU interfaces
+ *          for ANCF 3243 beam elements. Encapsulates mesh connectivity,
+ *          quadrature configuration, CSR mass matrices, internal/external
+ *          force vectors, and constraint storage shared with solvers.
+ *==============================================================
+ *==============================================================*/
 
-// Add this include at the top:
 #include "../../lib_utils/cuda_utils.h"
 #include "../../lib_utils/quadrature_utils.h"
+#include "ElementBase.h"
 
 // Definition of GPU_ANCF3243 and data access device functions
 #pragma once

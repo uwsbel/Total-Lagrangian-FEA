@@ -1,4 +1,17 @@
 #pragma once
+/*==============================================================
+ *==============================================================
+ * Project: RoboDyna
+ * Author:  Json Zhou
+ * Email:   zzhou292@wisc.edu
+ * File:    FEAT10DataFunc.cuh
+ * Brief:   Defines CUDA device utilities and kernels for FEAT10 elements,
+ *          including shape function evaluation, quadrature integration,
+ *          internal force and stress computation, and element contribution
+ *          assembly into global mass and stiffness structures.
+ *==============================================================
+ *==============================================================*/
+
 #include <cuda_runtime.h>
 
 #include <cmath>
