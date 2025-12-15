@@ -214,10 +214,6 @@ int main() {
   std::cout << "mass_matrix (size: " << mass_matrix.rows() << " x "
             << mass_matrix.cols() << "):" << std::endl;
 
-  gpu_t10_data.ConvertToCSRMass();
-
-  std::cout << "done ConvertToCSRMass" << std::endl;
-
   gpu_t10_data.CalcConstraintData();
 
   std::cout << "done CalcConstraintData" << std::endl;

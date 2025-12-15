@@ -138,10 +138,6 @@ int main() {
     std::cout << std::endl;
   }
 
-  gpu_3243_data.ConvertToCSRMass();
-
-  std::cout << "done ConvertToCSRMass" << std::endl;
-
   gpu_3243_data.CalcConstraintData();
 
   std::cout << "done CalcConstraintData" << std::endl;

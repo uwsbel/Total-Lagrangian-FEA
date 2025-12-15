@@ -217,6 +217,7 @@ cuda_library(
         "lib_src/solvers/SyncedAdamWNocoop.cuh",
     ],
     copts = ["--std=c++17", "-O3", "--use_fast_math", "--extra-device-vectorization"],
+    linkopts = ["-lcublas"],
     deps = [
         ":ANCF3243Data",
         ":ANCF3443Data",
@@ -424,6 +425,7 @@ cc_binary(
         "-L/usr/local/cuda/lib64",
         "-lcusparse",
         "-lcudart",
+        "-lcublas",
     ],
     deps = [
         ":FEAT10Data",

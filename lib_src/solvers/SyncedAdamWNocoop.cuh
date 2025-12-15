@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cublas_v2.h>
 #include <iostream>
 
 #include "lib_src/solvers/SyncedAdamW.cuh"
@@ -16,22 +17,32 @@ class SyncedAdamWNocoopSolver : public SolverBase {
       type_            = TYPE_3243;
       auto *typed_data = static_cast<GPU_ANCF3243_Data *>(data);
       d_data_          = typed_data->d_data;
+      d_constraint_ptr_ =
+          typed_data->Get_Is_Constraint_Setup() ? typed_data->Get_Constraint_Ptr()
+                                                : nullptr;
       n_total_qp_      = Quadrature::N_TOTAL_QP_3_2_2;
       n_shape_         = Quadrature::N_SHAPE_3243;
     } else if (data->type == TYPE_3443) {
       type_            = TYPE_3443;
       auto *typed_data = static_cast<GPU_ANCF3443_Data *>(data);
       d_data_          = typed_data->d_data;
+      d_constraint_ptr_ =
+          typed_data->Get_Is_Constraint_Setup() ? typed_data->Get_Constraint_Ptr()
+                                                : nullptr;
       n_total_qp_      = Quadrature::N_TOTAL_QP_4_4_3;
       n_shape_         = Quadrature::N_SHAPE_3443;
     } else if (data->type == TYPE_T10) {
       type_            = TYPE_T10;
       auto *typed_data = static_cast<GPU_FEAT10_Data *>(data);
       d_data_          = typed_data->d_data;
+      d_constraint_ptr_ =
+          typed_data->Get_Is_Constraint_Setup() ? typed_data->Get_Constraint_Ptr()
+                                                : nullptr;
       n_total_qp_      = Quadrature::N_QP_T10_5;
       n_shape_         = Quadrature::N_NODE_T10_10;
     } else {
       d_data_ = nullptr;
+      d_constraint_ptr_ = nullptr;
       std::cerr << "Unknown element type!" << std::endl;
     }
 
@@ -69,6 +80,10 @@ class SyncedAdamWNocoopSolver : public SolverBase {
 
     cudaMalloc(&d_m_, n_coef_ * 3 * sizeof(double));
     cudaMalloc(&d_v_adam_, n_coef_ * 3 * sizeof(double));
+
+    cublasCreate(&cublas_handle_);
+    cublasSetPointerMode(cublas_handle_, CUBLAS_POINTER_MODE_DEVICE);
+    cudaMalloc(&d_norm_temp_cublas_, sizeof(double));
   }
 
   ~SyncedAdamWNocoopSolver() {
@@ -106,6 +121,10 @@ class SyncedAdamWNocoopSolver : public SolverBase {
 
     cudaFree(d_m_);
     cudaFree(d_v_adam_);
+
+    if (cublas_handle_)
+      cublasDestroy(cublas_handle_);
+    cudaFree(d_norm_temp_cublas_);
   }
 
   void SetParameters(void *params) override {
@@ -275,11 +294,15 @@ class SyncedAdamWNocoopSolver : public SolverBase {
   }
 
  private:
+  double compute_l2_norm_cublas(double *d_vec, int n_dofs);
+
   ElementType type_;
   ElementBase *d_data_;
   SyncedAdamWNocoopSolver *d_adamw_solver_;
   int n_total_qp_, n_shape_;
   int n_coef_, n_beam_, n_constraints_;
+
+  double *d_constraint_ptr_;
 
   double *d_x12_prev, *d_y12_prev, *d_z12_prev;
 
@@ -297,4 +320,7 @@ class SyncedAdamWNocoopSolver : public SolverBase {
   int *d_max_inner_, *d_max_outer_;
 
   double *d_m_, *d_v_adam_;
+
+  cublasHandle_t cublas_handle_;
+  double *d_norm_temp_cublas_;
 };

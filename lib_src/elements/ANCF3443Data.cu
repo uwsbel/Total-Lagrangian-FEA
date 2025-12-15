@@ -1,6 +1,13 @@
 #include <cooperative_groups.h>
 
 #include <iomanip>
+#include <vector>
+
+#include <thrust/device_ptr.h>
+#include <thrust/execution_policy.h>
+#include <thrust/scan.h>
+#include <thrust/sort.h>
+#include <thrust/unique.h>
 
 /*==============================================================
  *==============================================================
@@ -18,6 +25,71 @@
 #include "ANCF3443Data.cuh"
 #include "ANCF3443DataFunc.cuh"
 namespace cg = cooperative_groups;
+
+__device__ __forceinline__ int binary_search_column_csr_mass_3443(
+    const int *cols, int n_cols, int target) {
+  int left = 0;
+  int right = n_cols - 1;
+  while (left <= right) {
+    int mid = left + ((right - left) >> 1);
+    int v = cols[mid];
+    if (v == target) return mid;
+    if (v < target)
+      left = mid + 1;
+    else
+      right = mid - 1;
+  }
+  return -1;
+}
+
+__global__ void build_mass_keys_3443_kernel(GPU_ANCF3443_Data *d_data,
+                                           unsigned long long *d_keys) {
+  const int total = d_data->gpu_n_beam() * Quadrature::N_SHAPE_3443 *
+                    Quadrature::N_SHAPE_3443;
+  int tid = blockIdx.x * blockDim.x + threadIdx.x;
+  if (tid >= total) {
+    return;
+  }
+
+  const int elem = tid / (Quadrature::N_SHAPE_3443 * Quadrature::N_SHAPE_3443);
+  const int item_local =
+      tid % (Quadrature::N_SHAPE_3443 * Quadrature::N_SHAPE_3443);
+  const int i_local = item_local / Quadrature::N_SHAPE_3443;
+  const int j_local = item_local % Quadrature::N_SHAPE_3443;
+
+  const int i_global =
+      d_data->element_connectivity()(elem, i_local / 4) * 4 + (i_local % 4);
+  const int j_global =
+      d_data->element_connectivity()(elem, j_local / 4) * 4 + (j_local % 4);
+
+  const unsigned long long key =
+      (static_cast<unsigned long long>(static_cast<unsigned int>(i_global))
+       << 32) |
+      static_cast<unsigned long long>(static_cast<unsigned int>(j_global));
+  d_keys[tid] = key;
+}
+
+__global__ void decode_mass_keys_3443_kernel(const unsigned long long *d_keys,
+                                            int nnz, int *d_csr_columns,
+                                            int *d_row_counts) {
+  int tid = blockIdx.x * blockDim.x + threadIdx.x;
+  if (tid >= nnz) {
+    return;
+  }
+
+  const unsigned long long key = d_keys[tid];
+  const int row = static_cast<int>(key >> 32);
+  const int col = static_cast<int>(key & 0xffffffffULL);
+  d_csr_columns[tid] = col;
+  atomicAdd(d_row_counts + row, 1);
+}
+
+__global__ void set_last_offset_3443_kernel(int *d_offsets, int n_rows,
+                                            int nnz) {
+  if (threadIdx.x == 0 && blockIdx.x == 0) {
+    d_offsets[n_rows] = nnz;
+  }
+}
 
 __global__ void ds_du_pre_kernel(double L, double W, double H,
                                  GPU_ANCF3443_Data *d_data) {
@@ -163,8 +235,16 @@ __global__ void mass_matrix_qp_kernel(GPU_ANCF3443_Data *d_data) {
     int j_global =
         d_data->element_connectivity()(elem, j_local / 4) * 4 + (j_local % 4);
 
-    atomicAdd(d_data->node_values(i_global, j_global),
-              d_data->rho0() * s[i_local] * s[j_local] * weight * detJ);
+    const double mass_contrib =
+        d_data->rho0() * s[i_local] * s[j_local] * weight * detJ;
+    const int row_start = d_data->csr_offsets()[i_global];
+    const int row_end   = d_data->csr_offsets()[i_global + 1];
+    const int n_cols    = row_end - row_start;
+    const int local_idx = binary_search_column_csr_mass_3443(
+        d_data->csr_columns() + row_start, n_cols, j_global);
+    if (local_idx >= 0) {
+      atomicAdd(d_data->csr_values() + row_start + local_idx, mass_contrib);
+    }
   }
 }
 
@@ -231,6 +311,17 @@ void GPU_ANCF3443_Data::PrintDsDuPre() {
 }
 
 void GPU_ANCF3443_Data::CalcMassMatrix() {
+  if (!is_csr_setup) {
+    ConvertToCSRMass();
+  }
+
+  int h_nnz = 0;
+  HANDLE_ERROR(cudaMemcpy(&h_nnz, d_nnz, sizeof(int), cudaMemcpyDeviceToHost));
+  if (h_nnz > 0) {
+    HANDLE_ERROR(cudaMemset(d_csr_values, 0,
+                            static_cast<size_t>(h_nnz) * sizeof(double)));
+  }
+
   // Mass terms computation
   const int N_OUT =
       n_beam * Quadrature::N_SHAPE_3443 * Quadrature::N_SHAPE_3443;
@@ -245,124 +336,71 @@ void GPU_ANCF3443_Data::CalcMassMatrix() {
   cudaDeviceSynchronize();
 }
 
-void GPU_ANCF3443_Data::ConvertToCSRMass() {
-  int num_rows = n_coef;
-  int num_cols = n_coef;
-  int ld       = num_cols;
+void GPU_ANCF3443_Data::BuildMassCSRPattern() {
+  if (is_csr_setup) {
+    return;
+  }
 
-  int *d_csr_offsets_temp;
-  int *d_csr_columns_temp;
-  double *d_csr_values_temp;
-  int *d_nnz_temp;
+  const int total_keys =
+      n_beam * Quadrature::N_SHAPE_3443 * Quadrature::N_SHAPE_3443;
+  unsigned long long *d_keys = nullptr;
+  HANDLE_ERROR(cudaMalloc(&d_keys,
+                          static_cast<size_t>(total_keys) * sizeof(unsigned long long)));
 
-  // Device memory management
-  double *d_dense = d_node_values;
-  HANDLE_ERROR(
-      cudaMalloc((void **)&d_csr_offsets_temp, (num_rows + 1) * sizeof(int)));
+  {
+    constexpr int threads = 256;
+    const int blocks = (total_keys + threads - 1) / threads;
+    build_mass_keys_3443_kernel<<<blocks, threads>>>(d_data, d_keys);
+    HANDLE_ERROR(cudaDeviceSynchronize());
+  }
 
-  cusparseHandle_t handle = NULL;
-  cusparseSpMatDescr_t matB;
-  cusparseDnMatDescr_t matA;
-  void *dBuffer     = NULL;
-  size_t bufferSize = 0;
-  CHECK_CUSPARSE(cusparseCreate(&handle));
+  thrust::device_ptr<unsigned long long> keys_begin(d_keys);
+  thrust::device_ptr<unsigned long long> keys_end = keys_begin + total_keys;
+  thrust::sort(thrust::device, keys_begin, keys_end);
+  thrust::device_ptr<unsigned long long> keys_unique_end =
+      thrust::unique(thrust::device, keys_begin, keys_end);
 
-  // Create dense matrix A
-  CHECK_CUSPARSE(cusparseCreateDnMat(&matA, num_rows, num_cols, ld, d_dense,
-                                     CUDA_R_64F, CUSPARSE_ORDER_ROW));
-  // Create sparse matrix B in CSR format
-  CHECK_CUSPARSE(cusparseCreateCsr(&matB, num_rows, num_cols, 0,
-                                   d_csr_offsets_temp, NULL, NULL,
-                                   CUSPARSE_INDEX_32I, CUSPARSE_INDEX_32I,
-                                   CUSPARSE_INDEX_BASE_ZERO, CUDA_R_64F));
+  const int nnz = static_cast<int>(keys_unique_end - keys_begin);
 
-  // // allocate an external buffer if needed
-  CHECK_CUSPARSE(cusparseDenseToSparse_bufferSize(
-      handle, matA, matB, CUSPARSE_DENSETOSPARSE_ALG_DEFAULT, &bufferSize));
-  HANDLE_ERROR(cudaMalloc(&dBuffer, bufferSize));
-
-  // execute Sparse to Dense conversion
-  CHECK_CUSPARSE(cusparseDenseToSparse_analysis(
-      handle, matA, matB, CUSPARSE_DENSETOSPARSE_ALG_DEFAULT, dBuffer));
-  // get number of non-zero elements
-  int64_t num_rows_tmp, num_cols_tmp, nnz;
-  CHECK_CUSPARSE(
-      cusparseSpMatGetSize(matB, &num_rows_tmp, &num_cols_tmp, &nnz));
-
-  // copy over nnz
-  HANDLE_ERROR(cudaMalloc((void **)&d_nnz_temp, sizeof(int)));
-  HANDLE_ERROR(
-      cudaMemcpy(d_nnz_temp, &nnz, sizeof(int), cudaMemcpyHostToDevice));
-
-  int *h_csr_offsets   = new int[num_rows + 1];
-  int *h_csr_columns   = new int[nnz];
-  double *h_csr_values = new double[nnz];
-
-  // allocate CSR column indices and values
-  HANDLE_ERROR(cudaMalloc((void **)&d_csr_columns_temp, nnz * sizeof(int)));
-  HANDLE_ERROR(cudaMalloc((void **)&d_csr_values_temp, nnz * sizeof(double)));
-  // reset offsets, column indices, and values pointers
-  CHECK_CUSPARSE(cusparseCsrSetPointers(matB, d_csr_offsets_temp,
-                                        d_csr_columns_temp, d_csr_values_temp));
-  CHECK_CUSPARSE(cusparseDenseToSparse_convert(
-      handle, matA, matB, CUSPARSE_DENSETOSPARSE_ALG_DEFAULT, dBuffer));
-
-  HANDLE_ERROR(cudaMemcpy(h_csr_offsets, d_csr_offsets_temp,
-                          (num_rows + 1) * sizeof(int),
-                          cudaMemcpyDeviceToHost));
-  HANDLE_ERROR(cudaMemcpy(h_csr_columns, d_csr_columns_temp, nnz * sizeof(int),
-                          cudaMemcpyDeviceToHost));
-  HANDLE_ERROR(cudaMemcpy(h_csr_values, d_csr_values_temp, nnz * sizeof(double),
-                          cudaMemcpyDeviceToHost));
-
-  // copy all temp arrays to class members
-  HANDLE_ERROR(cudaMalloc((void **)&d_csr_columns, nnz * sizeof(int)));
-  HANDLE_ERROR(cudaMalloc((void **)&d_csr_values, nnz * sizeof(double)));
-  HANDLE_ERROR(
-      cudaMalloc((void **)&d_csr_offsets, (num_rows + 1) * sizeof(int)));
+  HANDLE_ERROR(cudaMalloc((void **)&d_csr_offsets,
+                          static_cast<size_t>(n_coef + 1) * sizeof(int)));
+  HANDLE_ERROR(cudaMalloc((void **)&d_csr_columns,
+                          static_cast<size_t>(nnz) * sizeof(int)));
+  HANDLE_ERROR(cudaMalloc((void **)&d_csr_values,
+                          static_cast<size_t>(nnz) * sizeof(double)));
   HANDLE_ERROR(cudaMalloc((void **)&d_nnz, sizeof(int)));
 
-  HANDLE_ERROR(cudaMemcpy(d_csr_offsets, d_csr_offsets_temp,
-                          (num_rows + 1) * sizeof(int),
-                          cudaMemcpyDeviceToDevice));
-  HANDLE_ERROR(cudaMemcpy(d_csr_columns, d_csr_columns_temp, nnz * sizeof(int),
-                          cudaMemcpyDeviceToDevice));
-  HANDLE_ERROR(cudaMemcpy(d_csr_values, d_csr_values_temp, nnz * sizeof(double),
-                          cudaMemcpyDeviceToDevice));
-  HANDLE_ERROR(
-      cudaMemcpy(d_nnz, d_nnz_temp, sizeof(int), cudaMemcpyDeviceToDevice));
+  int *d_row_counts = nullptr;
+  HANDLE_ERROR(cudaMalloc(&d_row_counts, static_cast<size_t>(n_coef) * sizeof(int)));
+  HANDLE_ERROR(cudaMemset(d_row_counts, 0, static_cast<size_t>(n_coef) * sizeof(int)));
 
-  // destroy matrix/vector descriptors
-  CHECK_CUSPARSE(cusparseDestroyDnMat(matA));
-  CHECK_CUSPARSE(cusparseDestroySpMat(matB));
-  CHECK_CUSPARSE(cusparseDestroy(handle));
-  HANDLE_ERROR(cudaFree(dBuffer));
+  {
+    constexpr int threads = 256;
+    const int blocks = (nnz + threads - 1) / threads;
+    decode_mass_keys_3443_kernel<<<blocks, threads>>>(d_keys, nnz, d_csr_columns,
+                                                      d_row_counts);
+    HANDLE_ERROR(cudaDeviceSynchronize());
+  }
 
-  delete[] h_csr_offsets;
-  delete[] h_csr_columns;
-  delete[] h_csr_values;
+  thrust::device_ptr<int> row_counts_begin(d_row_counts);
+  thrust::device_ptr<int> offsets_begin(d_csr_offsets);
+  thrust::exclusive_scan(thrust::device, row_counts_begin,
+                         row_counts_begin + n_coef, offsets_begin);
 
-  // Free temporary allocations
-  HANDLE_ERROR(cudaFree(d_csr_offsets_temp));
-  HANDLE_ERROR(cudaFree(d_csr_columns_temp));
-  HANDLE_ERROR(cudaFree(d_csr_values_temp));
-  HANDLE_ERROR(cudaFree(d_nnz_temp));
+  {
+    set_last_offset_3443_kernel<<<1, 1>>>(d_csr_offsets, n_coef, nnz);
+    HANDLE_ERROR(cudaDeviceSynchronize());
+  }
 
-  // Flash GPU data back to cpu, update pointer then flash back
-  GPU_ANCF3443_Data *h_data_flash =
-      (GPU_ANCF3443_Data *)malloc(sizeof(GPU_ANCF3443_Data));
-  HANDLE_ERROR(cudaMemcpy(h_data_flash, d_data, sizeof(GPU_ANCF3443_Data),
-                          cudaMemcpyDeviceToHost));
-  h_data_flash->d_csr_offsets = d_csr_offsets;
-  h_data_flash->d_csr_columns = d_csr_columns;
-  h_data_flash->d_csr_values  = d_csr_values;
-  h_data_flash->d_nnz         = d_nnz;
-  HANDLE_ERROR(cudaMemcpy(d_data, h_data_flash, sizeof(GPU_ANCF3443_Data),
-                          cudaMemcpyHostToDevice));
+  HANDLE_ERROR(cudaMemcpy(d_nnz, &nnz, sizeof(int), cudaMemcpyHostToDevice));
+  HANDLE_ERROR(cudaMemset(d_csr_values, 0, static_cast<size_t>(nnz) * sizeof(double)));
 
-  free(h_data_flash);
+  HANDLE_ERROR(cudaFree(d_row_counts));
+  HANDLE_ERROR(cudaFree(d_keys));
 
   is_csr_setup = true;
+  HANDLE_ERROR(cudaMemcpy(d_data, this, sizeof(GPU_ANCF3443_Data),
+                          cudaMemcpyHostToDevice));
 }
 
 // This function converts the TRANSPOSE of the constraint Jacobian matrix to CSR
@@ -521,14 +559,38 @@ void GPU_ANCF3443_Data::ConvertTOCSRConstraintJac() {
 }
 
 void GPU_ANCF3443_Data::RetrieveMassMatrixToCPU(Eigen::MatrixXd &mass_matrix) {
-  // Allocate host memory for all quadrature points
-  const int total_size = n_coef * n_coef;
-
   mass_matrix.resize(n_coef, n_coef);
+  mass_matrix.setZero();
 
-  // Copy from device to host
-  HANDLE_ERROR(cudaMemcpy(mass_matrix.data(), d_node_values,
-                          total_size * sizeof(double), cudaMemcpyDeviceToHost));
+  if (!is_csr_setup) {
+    return;
+  }
+
+  int h_nnz = 0;
+  HANDLE_ERROR(cudaMemcpy(&h_nnz, d_nnz, sizeof(int), cudaMemcpyDeviceToHost));
+
+  std::vector<int> h_offsets(static_cast<size_t>(n_coef) + 1);
+  std::vector<int> h_columns(static_cast<size_t>(h_nnz));
+  std::vector<double> h_values(static_cast<size_t>(h_nnz));
+
+  HANDLE_ERROR(cudaMemcpy(h_offsets.data(), d_csr_offsets,
+                          static_cast<size_t>(n_coef + 1) * sizeof(int),
+                          cudaMemcpyDeviceToHost));
+  HANDLE_ERROR(cudaMemcpy(h_columns.data(), d_csr_columns,
+                          static_cast<size_t>(h_nnz) * sizeof(int),
+                          cudaMemcpyDeviceToHost));
+  HANDLE_ERROR(cudaMemcpy(h_values.data(), d_csr_values,
+                          static_cast<size_t>(h_nnz) * sizeof(double),
+                          cudaMemcpyDeviceToHost));
+
+  for (int i = 0; i < n_coef; ++i) {
+    const int start = h_offsets[static_cast<size_t>(i)];
+    const int end   = h_offsets[static_cast<size_t>(i) + 1];
+    for (int p = start; p < end; ++p) {
+      const int j = h_columns[static_cast<size_t>(p)];
+      mass_matrix(i, j) = h_values[static_cast<size_t>(p)];
+    }
+  }
 }
 
 void GPU_ANCF3443_Data::RetrieveInternalForceToCPU(

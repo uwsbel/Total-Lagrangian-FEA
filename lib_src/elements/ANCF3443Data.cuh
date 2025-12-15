@@ -340,14 +340,6 @@ struct GPU_ANCF3443_Data : public ElementBase {
 
   //===========================================
 
-  __device__ Eigen::Map<Eigen::MatrixXd> node_values() {
-    return Eigen::Map<Eigen::MatrixXd>(d_node_values, n_coef, n_coef);
-  }
-
-  __device__ double *node_values(int i, int j) {
-    return d_node_values + j + i * n_coef;
-  }
-
   __device__ int *csr_offsets() {
     return d_csr_offsets;
   }
@@ -447,7 +439,7 @@ struct GPU_ANCF3443_Data : public ElementBase {
 
     HANDLE_ERROR(cudaMalloc(&d_element_connectivity, n_beam * 4 * sizeof(int)));
 
-    HANDLE_ERROR(cudaMalloc(&d_node_values, n_coef * n_coef * sizeof(double)));
+    d_node_values = nullptr;
 
     HANDLE_ERROR(cudaMalloc(
         &d_F, n_beam * Quadrature::N_TOTAL_QP_4_4_3 * 3 * 3 * sizeof(double)));
@@ -557,9 +549,6 @@ struct GPU_ANCF3443_Data : public ElementBase {
 
     HANDLE_ERROR(cudaMemcpy(d_element_connectivity, element_connectivity.data(),
                             n_beam * 4 * sizeof(int), cudaMemcpyHostToDevice));
-
-    HANDLE_ERROR(
-        cudaMemset(d_node_values, 0, n_coef * n_coef * sizeof(double)));
 
     cudaMemset(d_f_int, 0, n_coef * 3 * sizeof(double));
 
@@ -776,7 +765,6 @@ struct GPU_ANCF3443_Data : public ElementBase {
     HANDLE_ERROR(cudaFree(d_z12));
 
     HANDLE_ERROR(cudaFree(d_element_connectivity));
-    HANDLE_ERROR(cudaFree(d_node_values));
 
     if (is_csr_setup) {
       HANDLE_ERROR(cudaFree(d_csr_offsets));
@@ -828,9 +816,21 @@ struct GPU_ANCF3443_Data : public ElementBase {
 
   void CalcMassMatrix();
 
-  void ConvertToCSRMass();
+  void BuildMassCSRPattern();
+
+  void ConvertToCSRMass() {
+    BuildMassCSRPattern();
+  }
+
+  void AssembleMassMatrixCSR() {
+    CalcMassMatrix();
+  }
 
   void ConvertTOCSRConstraintJac();
+
+  void BuildConstraintJacobianTransposeCSR() {
+    ConvertTOCSRConstraintJac();
+  }
 
   void CalcP();
 

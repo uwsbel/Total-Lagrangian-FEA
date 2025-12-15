@@ -15,9 +15,11 @@
 
 #include <Eigen/Dense>
 #include <cmath>
+#include <cstdlib>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <string>
 #include <vector>
 
 #include "../../lib_utils/quadrature_utils.h"
@@ -40,9 +42,9 @@ int main() {
   int plot_target_node;
   int n_nodes, n_elems;
 
-  MESH_RESOLUTION resolution = RES_4;
+  MESH_RESOLUTION resolution = RES_16;
 
-  MATERIAL_MODEL material = MAT_SVK;
+  MATERIAL_MODEL material = MAT_MOONEY_RIVLIN;
 
   if (resolution == RES_0) {
     n_nodes = ANCFCPUUtils::FEAT10_read_nodes(
@@ -210,15 +212,11 @@ int main() {
 
   std::cout << "done CalcMassMatrix" << std::endl;
 
-  Eigen::MatrixXd mass_matrix;
-  gpu_t10_data.RetrieveMassMatrixToCPU(mass_matrix);
+  // Eigen::MatrixXd mass_matrix;
+  // gpu_t10_data.RetrieveMassMatrixToCPU(mass_matrix);
 
-  std::cout << "mass_matrix (size: " << mass_matrix.rows() << " x "
-            << mass_matrix.cols() << "):" << std::endl;
-
-  gpu_t10_data.ConvertToCSRMass();
-
-  std::cout << "done ConvertToCSRMass" << std::endl;
+  // std::cout << "mass_matrix (size: " << mass_matrix.rows() << " x "
+  //           << mass_matrix.cols() << "):" << std::endl;
 
   gpu_t10_data.CalcConstraintData();
 
@@ -227,12 +225,6 @@ int main() {
   gpu_t10_data.ConvertTOCSRConstraintJac();
 
   std::cout << "done ConvertTOCSRConstraintJac" << std::endl;
-
-  // // Use Eigen's IOFormat for cleaner output
-  Eigen::IOFormat CleanFmt(4, 0, ", ", "\n", "[", "]");
-  std::cout << mass_matrix.format(CleanFmt) << std::endl;
-
-  std::cout << "\ndone retrieving mass_matrix" << std::endl;
 
   // calculate p
   gpu_t10_data.CalcP();
@@ -266,7 +258,7 @@ int main() {
   std::cout << "done retrieving internal force vector" << std::endl;
 
   SyncedAdamWNocoopParams params = {2e-4, 0.9,  0.999, 1e-8, 1e-4, 0.995, 1e-1,
-                                    1e-6, 1e14, 5,     500,  1e-3, 20};
+                                    1e-6, 1e14, 5,     800,  1e-3, 20};
   SyncedAdamWNocoopSolver solver(&gpu_t10_data,
                                  gpu_t10_data.get_n_constraint());
   solver.Setup();
@@ -274,6 +266,18 @@ int main() {
 
   // Vector to store x position of node 353 at each step
   std::vector<double> node_x_history;
+
+  std::string csv_dir = ".";
+  if (const char* d = std::getenv("TEST_UNDECLARED_OUTPUTS_DIR")) {
+    csv_dir = d;
+  } else if (const char* d = std::getenv("BUILD_WORKSPACE_DIRECTORY")) {
+    csv_dir = d;
+  }
+
+  const std::string csv_path = csv_dir + "/node_x_history_nocoop.csv";
+  std::ofstream csv_file(csv_path);
+  csv_file << std::fixed << std::setprecision(17);
+  csv_file << "step,x_position\n";
 
   for (int i = 0; i < 50; i++) {
     solver.Solve();
@@ -286,19 +290,15 @@ int main() {
       node_x_history.push_back(x12_current(plot_target_node));
       std::cout << "Step " << i << ": node " << plot_target_node
                 << " x = " << x12_current(plot_target_node) << std::endl;
+
+      csv_file << i << "," << x12_current(plot_target_node) << "\n";
+      csv_file.flush();
     }
   }
 
-  // Write to CSV file
-  std::ofstream csv_file("node_x_history.csv");
-  csv_file << std::fixed << std::setprecision(17);
-  csv_file << "step,x_position\n";
-  for (size_t i = 0; i < node_x_history.size(); i++) {
-    csv_file << i << "," << node_x_history[i] << "\n";
-  }
   csv_file.close();
-  std::cout << "Wrote node " << plot_target_node
-            << " x-position history to node_x_history.csv" << std::endl;
+  std::cout << "Wrote node " << plot_target_node << " x-position history to "
+            << csv_path << std::endl;
 
   // // Set highest precision for cout
   std::cout << std::fixed << std::setprecision(17);

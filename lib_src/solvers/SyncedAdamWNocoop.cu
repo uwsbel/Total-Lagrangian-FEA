@@ -1,4 +1,6 @@
+#include <algorithm>
 #include <cmath>
+#include <iomanip>
 #include <iostream>
 
 #include "SyncedAdamWNocoop.cuh"
@@ -9,6 +11,16 @@
 #include "../elements/ANCF3443DataFunc.cuh"
 #include "../elements/FEAT10Data.cuh"
 #include "../elements/FEAT10DataFunc.cuh"
+
+double SyncedAdamWNocoopSolver::compute_l2_norm_cublas(double *d_vec,
+                                                       int n_dofs) {
+  cublasDnrm2(cublas_handle_, n_dofs, d_vec, 1, d_norm_temp_cublas_);
+
+  double h_norm = 0.0;
+  HANDLE_ERROR(cudaMemcpy(&h_norm, d_norm_temp_cublas_, sizeof(double),
+                          cudaMemcpyDeviceToHost));
+  return h_norm;
+}
 
 template <typename ElementType>
 __device__ double solver_grad_L_nocoop(int tid, ElementType *data,
@@ -113,7 +125,8 @@ __global__ void adamw_zero_m_v_kernel(SyncedAdamWNocoopSolver *d_solver) {
 
 __global__ void adamw_update_velocity_kernel(SyncedAdamWNocoopSolver *d_solver,
                                             double lr_current,
-                                            double t_current) {
+                                            double inv_1mb1t,
+                                            double inv_1mb2t) {
   int tid = blockIdx.x * blockDim.x + threadIdx.x;
   int n   = d_solver->get_n_coef() * 3;
   if (tid >= n) {
@@ -134,8 +147,8 @@ __global__ void adamw_update_velocity_kernel(SyncedAdamWNocoopSolver *d_solver,
   m_t = beta1 * m_t + (1.0 - beta1) * g_tid;
   v_t = beta2 * v_t + (1.0 - beta2) * g_tid * g_tid;
 
-  double m_hat = m_t / (1.0 - pow(beta1, t_current));
-  double v_hat = v_t / (1.0 - pow(beta2, t_current));
+  double m_hat = m_t * inv_1mb1t;
+  double v_hat = v_t * inv_1mb2t;
 
   double y = v_guess_tid -
              lr_current *
@@ -213,39 +226,6 @@ __global__ void adamw_compute_gradient_kernel(ElementType *d_data,
   }
 }
 
-__global__ void adamw_check_inner_convergence_kernel(
-    SyncedAdamWNocoopSolver *d_solver, int outer_iter, int inner_iter) {
-  if (threadIdx.x != 0 || blockIdx.x != 0) {
-    return;
-  }
-
-  printf("outer iter: %d, inner iter: %d\n", outer_iter, inner_iter);
-
-  double norm_g = 0.0;
-  for (int i = 0; i < 3 * d_solver->get_n_coef(); i++) {
-    double gi = d_solver->g()(i);
-    norm_g += gi * gi;
-  }
-  norm_g = sqrt(norm_g);
-  *d_solver->norm_g() = norm_g;
-
-  double norm_v_curr = 0.0;
-  for (int i = 0; i < 3 * d_solver->get_n_coef(); i++) {
-    double vi = d_solver->v_guess()(i);
-    norm_v_curr += vi * vi;
-  }
-  norm_v_curr = sqrt(norm_v_curr);
-
-  printf("norm_g: %.17f, norm_v_curr: %.17f\n", *d_solver->norm_g(),
-         norm_v_curr);
-
-  if (*d_solver->norm_g() <= d_solver->solver_inner_tol() * (1.0 + norm_v_curr)) {
-    printf("Converged: gnorm=%.17f <= tol*(1+||v||)=%.17f\n", *d_solver->norm_g(),
-           d_solver->solver_inner_tol() * (1.0 + norm_v_curr));
-    *d_solver->inner_flag() = 1;
-  }
-}
-
 __global__ void adamw_update_v_prev_kernel(SyncedAdamWNocoopSolver *d_solver) {
   int tid = blockIdx.x * blockDim.x + threadIdx.x;
   int n   = d_solver->get_n_coef() * 3;
@@ -270,28 +250,6 @@ __global__ void adamw_dual_update_kernel(ElementType *d_data,
   }
 }
 
-template <typename ElementType>
-__global__ void adamw_check_outer_convergence_kernel(
-    ElementType *d_data, SyncedAdamWNocoopSolver *d_solver) {
-  if (threadIdx.x != 0 || blockIdx.x != 0) {
-    return;
-  }
-
-  double norm_constraint = 0.0;
-  for (int i = 0; i < d_solver->gpu_n_constraints(); i++) {
-    double c = d_data->constraint()[i];
-    norm_constraint += c * c;
-  }
-  norm_constraint = sqrt(norm_constraint);
-
-  printf("norm_constraint: %.17f\n", norm_constraint);
-
-  if (norm_constraint < d_solver->solver_outer_tol()) {
-    printf("Converged constraint: %.17f\n", norm_constraint);
-    *d_solver->outer_flag() = 1;
-  }
-}
-
 void SyncedAdamWNocoopSolver::OneStepAdamWNocoop() {
   constexpr int threadsPerBlock = 256;
 
@@ -301,9 +259,9 @@ void SyncedAdamWNocoopSolver::OneStepAdamWNocoop() {
   const int blocks_coef = (n_coef + threadsPerBlock - 1) / threadsPerBlock;
   const int blocks_dof  = (n_dof + threadsPerBlock - 1) / threadsPerBlock;
 
-  const int blocks_p =
+  int blocks_p =
       (n_beam_ * n_total_qp_ + threadsPerBlock - 1) / threadsPerBlock;
-  const int blocks_if =
+  int blocks_if =
       (n_beam_ * n_shape_ + threadsPerBlock - 1) / threadsPerBlock;
   const int blocks_constraints =
       ((n_constraints_ > 0 ? n_constraints_ : 1) + threadsPerBlock - 1) /
@@ -313,11 +271,27 @@ void SyncedAdamWNocoopSolver::OneStepAdamWNocoop() {
        1) /
       threadsPerBlock;
 
+  cudaDeviceProp props;
+  HANDLE_ERROR(cudaGetDeviceProperties(&props, 0));
+  const int max_grid_stride_blocks = 32 * props.multiProcessorCount;
+  blocks_p = std::max(1, std::min(blocks_p, max_grid_stride_blocks));
+  blocks_if = std::max(1, std::min(blocks_if, max_grid_stride_blocks));
+
   double lr0 = 0.0, lr_decay = 1.0;
+  double inner_tol = 0.0, outer_tol = 0.0;
+  double beta1_h = 0.0, beta2_h = 0.0;
   int max_outer = 0, max_inner = 0, conv_check_interval = 1;
 
   HANDLE_ERROR(cudaMemcpy(&lr0, d_lr_, sizeof(double), cudaMemcpyDeviceToHost));
   HANDLE_ERROR(cudaMemcpy(&lr_decay, d_lr_decay_, sizeof(double),
+                          cudaMemcpyDeviceToHost));
+  HANDLE_ERROR(
+      cudaMemcpy(&beta1_h, d_beta1_, sizeof(double), cudaMemcpyDeviceToHost));
+  HANDLE_ERROR(
+      cudaMemcpy(&beta2_h, d_beta2_, sizeof(double), cudaMemcpyDeviceToHost));
+  HANDLE_ERROR(cudaMemcpy(&inner_tol, d_inner_tol_, sizeof(double),
+                          cudaMemcpyDeviceToHost));
+  HANDLE_ERROR(cudaMemcpy(&outer_tol, d_outer_tol_, sizeof(double),
                           cudaMemcpyDeviceToHost));
   HANDLE_ERROR(cudaMemcpy(&max_outer, d_max_outer_, sizeof(int),
                           cudaMemcpyDeviceToHost));
@@ -347,15 +321,14 @@ void SyncedAdamWNocoopSolver::OneStepAdamWNocoop() {
 
     int outer_flag_h = 0;
     for (int outer_iter = 0; outer_iter < effective_max_outer; outer_iter++) {
-      HANDLE_ERROR(cudaMemcpy(&outer_flag_h, d_outer_flag_, sizeof(int),
-                              cudaMemcpyDeviceToHost));
       if (outer_flag_h != 0) {
         break;
       }
 
       adamw_reset_inner_flag_kernel<<<1, 1>>>(d_adamw_solver_);
-      adamw_zero_g_kernel<<<blocks_dof, threadsPerBlock>>>(d_adamw_solver_);
-      adamw_zero_m_v_kernel<<<blocks_dof, threadsPerBlock>>>(d_adamw_solver_);
+      HANDLE_ERROR(cudaMemsetAsync(d_g_, 0, n_dof * sizeof(double)));
+      HANDLE_ERROR(cudaMemsetAsync(d_m_, 0, n_dof * sizeof(double)));
+      HANDLE_ERROR(cudaMemsetAsync(d_v_adam_, 0, n_dof * sizeof(double)));
 
       int inner_flag_h = 0;
       for (int inner_iter = 0; inner_iter < max_inner; inner_iter++) {
@@ -365,9 +338,11 @@ void SyncedAdamWNocoopSolver::OneStepAdamWNocoop() {
 
         double lr_current = lr0 * pow(lr_decay, inner_iter + 1);
         double t_current  = static_cast<double>(inner_iter + 2);
+        double inv_1mb1t  = 1.0 / (1.0 - pow(beta1_h, t_current));
+        double inv_1mb2t  = 1.0 / (1.0 - pow(beta2_h, t_current));
 
         adamw_update_velocity_kernel<<<blocks_dof, threadsPerBlock>>>(
-            d_adamw_solver_, lr_current, t_current);
+            d_adamw_solver_, lr_current, inv_1mb1t, inv_1mb2t);
 
         adamw_update_positions_from_prev_kernel<<<blocks_coef, threadsPerBlock>>>(
             typed_data, d_adamw_solver_);
@@ -390,10 +365,24 @@ void SyncedAdamWNocoopSolver::OneStepAdamWNocoop() {
             typed_data, d_adamw_solver_);
 
         if (inner_iter % conv_check_interval == 0) {
-          adamw_check_inner_convergence_kernel<<<1, 1>>>(d_adamw_solver_,
-                                                         outer_iter, inner_iter);
-          HANDLE_ERROR(cudaMemcpy(&inner_flag_h, d_inner_flag_, sizeof(int),
-                                  cudaMemcpyDeviceToHost));
+          double norm_g = compute_l2_norm_cublas(d_g_, n_dof);
+          double norm_v_curr = compute_l2_norm_cublas(d_v_guess_, n_dof);
+
+          std::cout << "outer iter: " << outer_iter
+                    << ", inner iter: " << inner_iter << std::endl;
+          std::cout << "norm_g: " << std::fixed << std::setprecision(17)
+                    << norm_g << ", norm_v_curr: " << norm_v_curr
+                    << std::endl;
+
+          if (norm_g <= inner_tol * (1.0 + norm_v_curr)) {
+            std::cout << "Converged: gnorm=" << std::fixed
+                      << std::setprecision(17) << norm_g
+                      << " <= tol*(1+||v||)=" << inner_tol * (1.0 + norm_v_curr)
+                      << std::endl;
+            inner_flag_h = 1;
+            HANDLE_ERROR(cudaMemcpy(d_inner_flag_, &inner_flag_h, sizeof(int),
+                                    cudaMemcpyHostToDevice));
+          }
         }
       }
 
@@ -409,8 +398,26 @@ void SyncedAdamWNocoopSolver::OneStepAdamWNocoop() {
         adamw_dual_update_kernel<<<blocks_constraints, threadsPerBlock>>>(
             typed_data, d_adamw_solver_);
 
-        adamw_check_outer_convergence_kernel<<<1, 1>>>(typed_data,
-                                                       d_adamw_solver_);
+        if (d_constraint_ptr_ == nullptr) {
+          std::cerr << "SyncedAdamWNocoop: constraint pointer is null but "
+                       "n_constraints_ > 0. Constraint setup is required for "
+                       "outer convergence check."
+                    << std::endl;
+          std::abort();
+        }
+
+        double norm_constraint =
+            compute_l2_norm_cublas(d_constraint_ptr_, n_constraints_);
+        std::cout << "norm_constraint: " << std::fixed << std::setprecision(17)
+                  << norm_constraint << std::endl;
+
+        if (norm_constraint < outer_tol) {
+          std::cout << "Converged constraint: " << std::fixed
+                    << std::setprecision(17) << norm_constraint << std::endl;
+          outer_flag_h = 1;
+          HANDLE_ERROR(cudaMemcpy(d_outer_flag_, &outer_flag_h, sizeof(int),
+                                  cudaMemcpyHostToDevice));
+        }
       }
     }
 

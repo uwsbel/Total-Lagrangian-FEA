@@ -26,14 +26,16 @@
 #include "../lib_utils/visualization_utils.h"
 
 // Material properties
-const double E_val = 1e6;     // Young's modulus (Pa) - softer for larger visible deformation
-const double nu    = 0.4;     // Poisson's ratio
-const double rho0  = 1000.0;  // Density (kg/m^3)
+const double E_val =
+    1e6;  // Young's modulus (Pa) - softer for larger visible deformation
+const double nu   = 0.4;     // Poisson's ratio
+const double rho0 = 1000.0;  // Density (kg/m^3)
 
 // Simulation parameters
-const double dt        = 5e-4;      // Time step (s)
-const int num_steps    = 3000;      // Number of simulation steps (3x longer duration)
-const double grip_speed = 0.00002;  // Gripper closing speed per step (m, slower again)
+const double dt     = 5e-4;  // Time step (s)
+const int num_steps = 3000;  // Number of simulation steps (3x longer duration)
+const double grip_speed =
+    0.00002;  // Gripper closing speed per step (m, slower again)
 
 // Contact parameters (softer for stability)
 const double contact_damping  = 0.0;  // no Drake-style damping amplification
@@ -44,29 +46,33 @@ using ANCFCPUUtils::VisualizationUtils;
 // Helper: create rotation matrix around Y-axis
 Eigen::Matrix4d rotationY(double angle_rad) {
   Eigen::Matrix4d R = Eigen::Matrix4d::Identity();
-  double c = std::cos(angle_rad);
-  double s = std::sin(angle_rad);
-  R(0, 0) = c;  R(0, 2) = s;
-  R(2, 0) = -s; R(2, 2) = c;
+  double c          = std::cos(angle_rad);
+  double s          = std::sin(angle_rad);
+  R(0, 0)           = c;
+  R(0, 2)           = s;
+  R(2, 0)           = -s;
+  R(2, 2)           = c;
   return R;
 }
 
 // Helper: create rotation matrix around X-axis
 Eigen::Matrix4d rotationX(double angle_rad) {
   Eigen::Matrix4d R = Eigen::Matrix4d::Identity();
-  double c = std::cos(angle_rad);
-  double s = std::sin(angle_rad);
-  R(1, 1) = c;  R(1, 2) = -s;
-  R(2, 1) = s;  R(2, 2) = c;
+  double c          = std::cos(angle_rad);
+  double s          = std::sin(angle_rad);
+  R(1, 1)           = c;
+  R(1, 2)           = -s;
+  R(2, 1)           = s;
+  R(2, 2)           = c;
   return R;
 }
 
 // Helper: create translation matrix
 Eigen::Matrix4d translation(double dx, double dy, double dz) {
   Eigen::Matrix4d T = Eigen::Matrix4d::Identity();
-  T(0, 3) = dx;
-  T(1, 3) = dy;
-  T(2, 3) = dz;
+  T(0, 3)           = dx;
+  T(1, 3)           = dy;
+  T(2, 3)           = dz;
   return T;
 }
 
@@ -88,8 +94,7 @@ int main(int argc, char** argv) {
 
   // Load bubble gripper 1 (left side, will move right)
   int mesh_gripper1 = mesh_manager.LoadMesh(
-      mesh_path + "bubble.1.node",
-      mesh_path + "bubble.1.ele", "gripper_left");
+      mesh_path + "bubble.1.node", mesh_path + "bubble.1.ele", "gripper_left");
   if (mesh_gripper1 < 0) {
     std::cerr << "Failed to load left gripper mesh" << std::endl;
     return 1;
@@ -105,9 +110,9 @@ int main(int argc, char** argv) {
   }
 
   // Load scaled bunny (center)
-  int mesh_bunny = mesh_manager.LoadMesh(
-      mesh_path + "bunny_26_scaled_0p01.1.node",
-      mesh_path + "bunny_26_scaled_0p01.1.ele", "bunny");
+  int mesh_bunny =
+      mesh_manager.LoadMesh(mesh_path + "bunny_26_scaled_0p01.1.node",
+                            mesh_path + "bunny_26_scaled_0p01.1.ele", "bunny");
   if (mesh_bunny < 0) {
     std::cerr << "Failed to load bunny mesh" << std::endl;
     return 1;
@@ -146,10 +151,10 @@ int main(int argc, char** argv) {
   // Compute bunny bounding box and center
   // =========================================================================
   const Eigen::MatrixXd& nodes_before = mesh_manager.GetAllNodes();
-  
+
   double bunny_min_x = 1e10, bunny_max_x = -1e10;
   double bunny_min_y = 1e10, bunny_max_y = -1e10;
-  double bunny_min_z = 1e10;
+  double bunny_min_z    = 1e10;
   double bunny_center_x = 0, bunny_center_y = 0, bunny_center_z = 0;
   for (int i = 0; i < inst_bunny.num_nodes; ++i) {
     int idx = inst_bunny.node_offset + i;
@@ -166,9 +171,10 @@ int main(int argc, char** argv) {
   bunny_center_y /= inst_bunny.num_nodes;
   bunny_center_z /= inst_bunny.num_nodes;
 
-  std::cout << "Bunny center: (" << bunny_center_x << ", " << bunny_center_y 
+  std::cout << "Bunny center: (" << bunny_center_x << ", " << bunny_center_y
             << ", " << bunny_center_z << ")" << std::endl;
-  std::cout << "Bunny x range: [" << bunny_min_x << ", " << bunny_max_x << "]" << std::endl;
+  std::cout << "Bunny x range: [" << bunny_min_x << ", " << bunny_max_x << "]"
+            << std::endl;
 
   // =========================================================================
   // Transform grippers: rotate and position
@@ -177,27 +183,30 @@ int main(int argc, char** argv) {
   // Here we rotate around X so that the domes face along ±y and position
   // one gripper below the bunny (dome facing +y) and one above (dome facing
   // -y), so the spherical faces look at each other along the y axis.
-  
-  double gap = 0.005;          // Gap between gripper dome and bunny (closer)
-  double dome_depth = 0.037;   // Approximate dome depth
-  double extra_bottom_offset = 0.005;  // Move bottom gripper slightly further in -y
-  double extra_top_offset    = 0.015;  // Move top gripper further toward -y
-  double x_shift             = 0.02;  // Shift both grippers toward -x
-  
+
+  double gap        = 0.005;  // Gap between gripper dome and bunny (closer)
+  double dome_depth = 0.037;  // Approximate dome depth
+  double extra_bottom_offset =
+      0.005;  // Move bottom gripper slightly further in -y
+  double extra_top_offset = 0.015;  // Move top gripper further toward -y
+  double x_shift          = 0.02;   // Shift both grippers toward -x
+
   // Bottom gripper: rotate +90° around X (dome faces +y)
   // Center so dome tip is at bunny_min_y - gap, then shift slightly further -y
-  Eigen::Matrix4d T1 = translation(bunny_center_x - x_shift,
-                                   bunny_min_y - gap - dome_depth - extra_bottom_offset,
-                                   bunny_center_z) *
-                       rotationX(M_PI / 2.0);
+  Eigen::Matrix4d T1 =
+      translation(bunny_center_x - x_shift,
+                  bunny_min_y - gap - dome_depth - extra_bottom_offset,
+                  bunny_center_z) *
+      rotationX(M_PI / 2.0);
   mesh_manager.TransformMesh(mesh_gripper1, T1);
-  
+
   // Top gripper: rotate +90° around X (dome faces -y for mirrored geometry)
   // Center so dome tip is at bunny_max_y + gap, then shift slightly toward -y
-  Eigen::Matrix4d T2 = translation(bunny_center_x - x_shift,
-                                   bunny_max_y + gap + dome_depth - extra_top_offset,
-                                   bunny_center_z) *
-                       rotationX(M_PI / 2.0);
+  Eigen::Matrix4d T2 =
+      translation(bunny_center_x - x_shift,
+                  bunny_max_y + gap + dome_depth - extra_top_offset,
+                  bunny_center_z) *
+      rotationX(M_PI / 2.0);
   mesh_manager.TransformMesh(mesh_gripper2, T2);
 
   std::cout << "Transformed grippers (rotated and positioned)" << std::endl;
@@ -216,26 +225,29 @@ int main(int argc, char** argv) {
   double g1_min_x = 1e10, g1_max_x = -1e10;
   double g2_min_x = 1e10, g2_max_x = -1e10;
   for (int i = 0; i < inst_gripper1.num_nodes; ++i) {
-    int idx = inst_gripper1.node_offset + i;
+    int idx  = inst_gripper1.node_offset + i;
     g1_min_x = std::min(g1_min_x, initial_nodes(idx, 0));
     g1_max_x = std::max(g1_max_x, initial_nodes(idx, 0));
   }
   for (int i = 0; i < inst_gripper2.num_nodes; ++i) {
-    int idx = inst_gripper2.node_offset + i;
+    int idx  = inst_gripper2.node_offset + i;
     g2_min_x = std::min(g2_min_x, initial_nodes(idx, 0));
     g2_max_x = std::max(g2_max_x, initial_nodes(idx, 0));
   }
-  std::cout << "Gripper 1 x range after transform: [" << g1_min_x << ", " << g1_max_x << "]" << std::endl;
-  std::cout << "Gripper 2 x range after transform: [" << g2_min_x << ", " << g2_max_x << "]" << std::endl;
+  std::cout << "Gripper 1 x range after transform: [" << g1_min_x << ", "
+            << g1_max_x << "]" << std::endl;
+  std::cout << "Gripper 2 x range after transform: [" << g2_min_x << ", "
+            << g2_max_x << "]" << std::endl;
 
   // Get unified pressure field
   const Eigen::VectorXd& pressure_raw = mesh_manager.GetAllScalarFields();
   std::cout << "Pressure field size: " << pressure_raw.size() << std::endl;
 
   Eigen::VectorXd pressure = pressure_raw;
-  double p_min = pressure.minCoeff();
-  double p_max = pressure.maxCoeff();
-  std::cout << "Pressure range: [" << p_min << ", " << p_max << "]" << std::endl;
+  double p_min             = pressure.minCoeff();
+  double p_max             = pressure.maxCoeff();
+  std::cout << "Pressure range: [" << p_min << ", " << p_max << "]"
+            << std::endl;
 
   // =========================================================================
   // Initialize GPU element data
@@ -256,12 +268,12 @@ int main(int argc, char** argv) {
   // =========================================================================
   std::vector<int> fixed_node_indices;
   std::vector<int> bunny_bottom_indices;
-  
+
   // Fix all nodes of gripper 1
   for (int i = 0; i < inst_gripper1.num_nodes; ++i) {
     fixed_node_indices.push_back(inst_gripper1.node_offset + i);
   }
-  
+
   // Fix all nodes of gripper 2
   for (int i = 0; i < inst_gripper2.num_nodes; ++i) {
     fixed_node_indices.push_back(inst_gripper2.node_offset + i);
@@ -270,7 +282,7 @@ int main(int argc, char** argv) {
   // Fix bunny base: all nodes with z <= -0.04 (world coordinates)
   const double bunny_z_fix_threshold = -0.055;
   for (int i = 0; i < inst_bunny.num_nodes; ++i) {
-    int idx = inst_bunny.node_offset + i;
+    int idx  = inst_bunny.node_offset + i;
     double z = initial_nodes(idx, 2);
     if (z <= bunny_z_fix_threshold) {
       fixed_node_indices.push_back(idx);
@@ -283,7 +295,8 @@ int main(int argc, char** argv) {
     h_fixed_nodes(i) = fixed_node_indices[i];
   }
 
-  std::cout << "Fixed " << h_fixed_nodes.size() << " gripper nodes (all gripper nodes)" << std::endl;
+  std::cout << "Fixed " << h_fixed_nodes.size()
+            << " gripper nodes (all gripper nodes)" << std::endl;
 
   gpu_t10_data.SetNodalFixed(h_fixed_nodes);
 
@@ -296,7 +309,7 @@ int main(int argc, char** argv) {
   const Eigen::VectorXd& tet5pt_weights = Quadrature::tet5pt_weights;
 
   // Use soft material for visible deformation
-  double eta_damp = 1e3;     // Viscous damping
+  double eta_damp    = 1e3;  // Viscous damping
   double lambda_damp = 1e3;  // Volume damping
   gpu_t10_data.Setup(tet5pt_x, tet5pt_y, tet5pt_z, tet5pt_weights, h_x12, h_y12,
                      h_z12, elements);
@@ -308,7 +321,6 @@ int main(int argc, char** argv) {
 
   gpu_t10_data.CalcDnDuPre();
   gpu_t10_data.CalcMassMatrix();
-  gpu_t10_data.ConvertToCSRMass();
   gpu_t10_data.CalcConstraintData();
   gpu_t10_data.ConvertTOCSRConstraintJac();
 
@@ -428,7 +440,8 @@ int main(int argc, char** argv) {
     // ---------------------------------------------------------------------
     // 4. Update gripper positions (prescribed motion)
     //    - Close until step 1700
-    //    - Hold for 200 steps, then reopen back to original positions by final step
+    //    - Hold for 200 steps, then reopen back to original positions by final
+    //    step
     // ---------------------------------------------------------------------
     double move_amount;
     const int close_steps = 1700;
@@ -442,23 +455,25 @@ int main(int argc, char** argv) {
     } else {
       // Opening phase: move back to original positions by the final step
       int step_end = num_steps - 1;
-      double t = static_cast<double>(step - close_steps - hold_steps) /
+      double t     = static_cast<double>(step - close_steps - hold_steps) /
                  static_cast<double>(step_end - close_steps - hold_steps);
       move_amount = (1.0 - t) * grip_speed * close_steps;
     }
 
     for (int i = 0; i < inst_gripper1.num_nodes; ++i) {
       int idx = inst_gripper1.node_offset + i;
-      y12_current(idx) = gripper1_init_y(i) + move_amount;  // Move +y (from below)
+      y12_current(idx) =
+          gripper1_init_y(i) + move_amount;  // Move +y (from below)
     }
     for (int i = 0; i < inst_gripper2.num_nodes; ++i) {
       int idx = inst_gripper2.node_offset + i;
-      y12_current(idx) = gripper2_init_y(i) - move_amount;  // Move -y (from above)
+      y12_current(idx) =
+          gripper2_init_y(i) - move_amount;  // Move -y (from above)
     }
 
     // Clamp bunny bottom layer nodes to their initial positions
     for (int k = 0; k < static_cast<int>(bunny_bottom_indices.size()); ++k) {
-      int idx = bunny_bottom_indices[k];
+      int idx          = bunny_bottom_indices[k];
       x12_current(idx) = initial_nodes(idx, 0);
       y12_current(idx) = initial_nodes(idx, 1);
       z12_current(idx) = initial_nodes(idx, 2);
@@ -509,23 +524,24 @@ int main(int argc, char** argv) {
       patch_filename << "output/bubble_gripper/patches_" << std::setfill('0')
                      << std::setw(4) << step << ".vtp";
       std::vector<ContactPatch> patches = narrowphase.GetValidPatches();
-      VisualizationUtils::ExportContactPatchesToVTP(patches, patch_filename.str());
+      VisualizationUtils::ExportContactPatchesToVTP(patches,
+                                                    patch_filename.str());
     }
 
     // ---------------------------------------------------------------------
     // 8. Print progress
     // ---------------------------------------------------------------------
-    double max_disp = displacement.cwiseAbs().maxCoeff();
+    double max_disp          = displacement.cwiseAbs().maxCoeff();
     double contact_force_mag = contact_forces.norm();
 
     if (step % 20 == 0) {
       std::cout << "Step " << std::setw(4) << step << ": "
                 << "pairs=" << std::setw(5) << num_collision_pairs << ", "
                 << "patches=" << std::setw(4) << num_patches << ", "
-                << "grip_move=" << std::fixed << std::setprecision(4) << move_amount
-                << ", max_disp=" << std::scientific << std::setprecision(2) << max_disp
-                << ", |f_c|=" << contact_force_mag
-                << std::endl;
+                << "grip_move=" << std::fixed << std::setprecision(4)
+                << move_amount << ", max_disp=" << std::scientific
+                << std::setprecision(2) << max_disp
+                << ", |f_c|=" << contact_force_mag << std::endl;
     }
   }
 
