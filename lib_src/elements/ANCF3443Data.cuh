@@ -620,9 +620,12 @@ struct GPU_ANCF3443_Data : public ElementBase {
     is_setup = true;
   }
 
+  /**
+   * Set reference density (used for mass/inertial terms).
+   */
   void SetDensity(double rho0) {
     if (!is_setup) {
-      std::cerr << "GPU_ANCF3443_Data must be set up before setting material."
+      std::cerr << "GPU_ANCF3443_Data must be set up before setting density."
                 << std::endl;
       return;
     }
@@ -630,9 +633,14 @@ struct GPU_ANCF3443_Data : public ElementBase {
         cudaMemcpy(d_rho0, &rho0, sizeof(double), cudaMemcpyHostToDevice));
   }
 
+  /**
+   * Set Kelvin-Voigt damping parameters.
+   * eta_damp: shear-like damping coefficient
+   * lambda_damp: volumetric-like damping coefficient
+   */
   void SetDamping(double eta_damp, double lambda_damp) {
     if (!is_setup) {
-      std::cerr << "GPU_ANCF3443_Data must be set up before setting material."
+      std::cerr << "GPU_ANCF3443_Data must be set up before setting damping."
                 << std::endl;
       return;
     }
@@ -642,6 +650,9 @@ struct GPU_ANCF3443_Data : public ElementBase {
                             cudaMemcpyHostToDevice));
   }
 
+  /**
+   * Select Saint Venant-Kirchhoff (SVK) material model using current E/nu.
+   */
   void SetSVK() {
     if (!is_setup) {
       std::cerr << "GPU_ANCF3443_Data must be set up before setting material."
@@ -682,6 +693,11 @@ struct GPU_ANCF3443_Data : public ElementBase {
     SetSVK();
   }
 
+  /**
+   * Set compressible Mooney-Rivlin parameters.
+   * mu10, mu01: isochoric Mooney-Rivlin coefficients
+   * kappa: volumetric penalty (bulk-modulus-like) coefficient
+   */
   void SetMooneyRivlin(double mu10, double mu01, double kappa) {
     if (!is_setup) {
       std::cerr << "GPU_ANCF3443_Data must be set up before setting material."

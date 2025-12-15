@@ -11,7 +11,12 @@ __device__ __forceinline__ double mr_det3x3(const double A[3][3]) {
 
 __device__ __forceinline__ void mr_invT3x3(const double A[3][3], double detA,
                                           double invT_out[3][3]) {
-  double inv_det = 1.0 / detA;
+  const double eps = 1e-12;
+  double safe_det  = detA;
+  if (fabs(safe_det) < eps) {
+    safe_det = (safe_det >= 0.0) ? eps : -eps;
+  }
+  double inv_det = 1.0 / safe_det;
 
   invT_out[0][0] = (A[1][1] * A[2][2] - A[1][2] * A[2][1]) * inv_det;
   invT_out[0][1] = (A[1][2] * A[2][0] - A[1][0] * A[2][2]) * inv_det;
