@@ -109,13 +109,13 @@ TEST_F(TestSparseMass, FEA_T10_SparseMassMatrix) {
   // ====================================
 
   // Call Setup with all required parameters
-  gpu_t10_data.Setup(rho0, nu, E, 0.0, 0.0,  // Material properties + damping
-                     tet5pt_x_host,          // Quadrature points
-                     tet5pt_y_host,          // Quadrature points
-                     tet5pt_z_host,          // Quadrature points
-                     tet5pt_weights_host,    // Quadrature weights
-                     h_x12, h_y12, h_z12,    // Node coordinates
-                     elements);              // Element connectivity
+  gpu_t10_data.Setup(tet5pt_x_host, tet5pt_y_host, tet5pt_z_host,
+                     tet5pt_weights_host, h_x12, h_y12, h_z12, elements);
+
+  gpu_t10_data.SetDensity(rho0);
+  gpu_t10_data.SetDamping(0.0, 0.0);
+
+  gpu_t10_data.SetSVK(E, nu);
 
   gpu_t10_data.CalcDnDuPre();
 
@@ -234,14 +234,19 @@ TEST_F(TestSparseMass, ANCF_3443_SparseMassMatrix) {
   h_f_ext(3 * gpu_3443_data.get_n_coef() - 22) = 500.0;
   gpu_3443_data.SetExternalForce(h_f_ext);
 
-  gpu_3443_data.Setup(L, W, H, rho0, nu, E, 0.0, 0.0, h_B_inv,
-                      Quadrature::gauss_xi_m_7, Quadrature::gauss_eta_m_7,
-                      Quadrature::gauss_zeta_m_3, Quadrature::gauss_xi_4,
-                      Quadrature::gauss_eta_4, Quadrature::gauss_zeta_3,
-                      Quadrature::weight_xi_m_7, Quadrature::weight_eta_m_7,
-                      Quadrature::weight_zeta_m_3, Quadrature::weight_xi_4,
-                      Quadrature::weight_eta_4, Quadrature::weight_zeta_3,
-                      h_x12, h_y12, h_z12, element_connectivity);
+  gpu_3443_data.Setup(
+      L, W, H, h_B_inv, Quadrature::gauss_xi_m_7, Quadrature::gauss_eta_m_7,
+      Quadrature::gauss_zeta_m_3, Quadrature::gauss_xi_4,
+      Quadrature::gauss_eta_4, Quadrature::gauss_zeta_3,
+      Quadrature::weight_xi_m_7, Quadrature::weight_eta_m_7,
+      Quadrature::weight_zeta_m_3, Quadrature::weight_xi_4,
+      Quadrature::weight_eta_4, Quadrature::weight_zeta_3, h_x12, h_y12, h_z12,
+      element_connectivity);
+
+  gpu_3443_data.SetDensity(rho0);
+  gpu_3443_data.SetDamping(0.0, 0.0);
+
+  gpu_3443_data.SetSVK(E, nu);
 
   gpu_3443_data.CalcDsDuPre();
   gpu_3443_data.PrintDsDuPre();
@@ -354,12 +359,17 @@ TEST_F(TestSparseMass, ANCF_3243_SparseMassMatrix) {
   gpu_3243_data.SetExternalForce(h_f_ext);
 
   // set up the system
-  gpu_3243_data.Setup(L, W, H, rho0, nu, E, 0.0, 0.0, h_B_inv,
-                      Quadrature::gauss_xi_m_6, Quadrature::gauss_xi_3,
-                      Quadrature::gauss_eta_2, Quadrature::gauss_zeta_2,
-                      Quadrature::weight_xi_m_6, Quadrature::weight_xi_3,
-                      Quadrature::weight_eta_2, Quadrature::weight_zeta_2,
-                      h_x12, h_y12, h_z12, h_element_connectivity);
+  gpu_3243_data.Setup(L, W, H, h_B_inv, Quadrature::gauss_xi_m_6,
+                      Quadrature::gauss_xi_3, Quadrature::gauss_eta_2,
+                      Quadrature::gauss_zeta_2, Quadrature::weight_xi_m_6,
+                      Quadrature::weight_xi_3, Quadrature::weight_eta_2,
+                      Quadrature::weight_zeta_2, h_x12, h_y12, h_z12,
+                      h_element_connectivity);
+
+  gpu_3243_data.SetDensity(rho0);
+  gpu_3243_data.SetDamping(0.0, 0.0);
+
+  gpu_3243_data.SetSVK(E, nu);
 
   // ======================================================================
 

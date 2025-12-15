@@ -14,6 +14,7 @@
 
 #include "ANCF3243Data.cuh"
 #include "../materials/SVK.cuh"
+#include "../materials/MooneyRivlin.cuh"
 
 // forward-declare solver type (pointer-only used here)
 struct SyncedNewtonSolver;
@@ -238,8 +239,13 @@ __device__ __forceinline__ void compute_p(int elem_idx, int qp_idx,
         F_local[i][j] = d_data->F(elem_idx, qp_idx)(i, j);
 
     double P_el[3][3];
-    svk_compute_P_from_trFtF_and_FFtF(F_local, tr_FtF, FFF, d_data->lambda(),
-                                     d_data->mu(), P_el);
+    if (d_data->material_model() == MATERIAL_MODEL_MOONEY_RIVLIN) {
+      mr_compute_P(F_local, d_data->mu10(), d_data->mu01(), d_data->kappa(),
+                   P_el);
+    } else {
+      svk_compute_P_from_trFtF_and_FFtF(F_local, tr_FtF, FFF, d_data->lambda(),
+                                       d_data->mu(), P_el);
+    }
 
     #pragma unroll
     for (int i = 0; i < 3; ++i)

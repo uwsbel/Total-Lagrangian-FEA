@@ -18,6 +18,7 @@
 
 #include "FEAT10Data.cuh"
 #include "../materials/SVK.cuh"
+#include "../materials/MooneyRivlin.cuh"
 
 // forward-declare solver type used by templated device functions
 struct SyncedNewtonSolver;
@@ -250,12 +251,15 @@ __device__ __forceinline__ void compute_p(int elem_idx, int qp_idx,
     }
   }
 
-  // Get material parameters
-  double lambda = d_data->lambda();
-  double mu     = d_data->mu();
-
   double P_el[3][3];
-  svk_compute_P_from_trFtF_and_FFtF(F, trFtF, FFtF, lambda, mu, P_el);
+  if (d_data->material_model() == MATERIAL_MODEL_MOONEY_RIVLIN) {
+    mr_compute_P(F, d_data->mu10(), d_data->mu01(), d_data->kappa(), P_el);
+  } else {
+    // Get material parameters
+    double lambda = d_data->lambda();
+    double mu     = d_data->mu();
+    svk_compute_P_from_trFtF_and_FFtF(F, trFtF, FFtF, lambda, mu, P_el);
+  }
 
   #pragma unroll
   for (int i = 0; i < 3; i++) {

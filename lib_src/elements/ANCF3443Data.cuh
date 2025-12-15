@@ -21,6 +21,7 @@
 #include "../../lib_utils/cuda_utils.h"
 #include "../../lib_utils/quadrature_utils.h"
 #include "ElementBase.h"
+#include "../materials/MaterialModel.cuh"
 
 // Definition of GPU_ANCF3443 and data access device functions
 #pragma once
@@ -313,6 +314,22 @@ struct GPU_ANCF3443_Data : public ElementBase {
     return *d_mu;
   }
 
+  __device__ int material_model() const {
+    return *d_material_model;
+  }
+
+  __device__ double mu10() const {
+    return *d_mu10;
+  }
+
+  __device__ double mu01() const {
+    return *d_mu01;
+  }
+
+  __device__ double kappa() const {
+    return *d_kappa;
+  }
+
   __device__ double eta_damp() const {
     return *d_eta_damp;
   }
@@ -460,12 +477,15 @@ struct GPU_ANCF3443_Data : public ElementBase {
     HANDLE_ERROR(cudaMalloc(&d_E, sizeof(double)));
     HANDLE_ERROR(cudaMalloc(&d_lambda, sizeof(double)));
     HANDLE_ERROR(cudaMalloc(&d_mu, sizeof(double)));
+    HANDLE_ERROR(cudaMalloc(&d_material_model, sizeof(int)));
+    HANDLE_ERROR(cudaMalloc(&d_mu10, sizeof(double)));
+    HANDLE_ERROR(cudaMalloc(&d_mu01, sizeof(double)));
+    HANDLE_ERROR(cudaMalloc(&d_kappa, sizeof(double)));
   }
 
   void Setup(
-      double length, double width, double height, double rho0, double nu,
-      double E, double eta_damp, double lambda_damp,
-      const Eigen::MatrixXd &h_B_inv, const Eigen::VectorXd &gauss_xi_m,
+      double length, double width, double height, const Eigen::MatrixXd &h_B_inv,
+      const Eigen::VectorXd &gauss_xi_m,
       const Eigen::VectorXd &gauss_eta_m, const Eigen::VectorXd &gauss_zeta_m,
       const Eigen::VectorXd &gauss_xi, const Eigen::VectorXd &gauss_eta,
       const Eigen::VectorXd &gauss_zeta, const Eigen::VectorXd &weight_xi_m,
@@ -553,12 +573,6 @@ struct GPU_ANCF3443_Data : public ElementBase {
     cudaMemset(d_P_vis, 0,
                n_beam * Quadrature::N_TOTAL_QP_4_4_3 * 3 * 3 * sizeof(double));
 
-    // copy damping scalars to device (single double each)
-    HANDLE_ERROR(cudaMemcpy(d_eta_damp, &eta_damp, sizeof(double),
-                            cudaMemcpyHostToDevice));
-    HANDLE_ERROR(cudaMemcpy(d_lambda_damp, &lambda_damp, sizeof(double),
-                            cudaMemcpyHostToDevice));
-
     HANDLE_ERROR(
         cudaMemcpy(d_H, &height, sizeof(double), cudaMemcpyHostToDevice));
     HANDLE_ERROR(
@@ -566,21 +580,124 @@ struct GPU_ANCF3443_Data : public ElementBase {
     HANDLE_ERROR(
         cudaMemcpy(d_L, &length, sizeof(double), cudaMemcpyHostToDevice));
 
+    double rho0        = 0.0;
+    double nu          = 0.0;
+    double E           = 0.0;
+    double mu = E / (2 * (1 + nu));  // Shear modulus μ
+    double lambda =
+        (E * nu) / ((1 + nu) * (1 - 2 * nu));  // Lamé’s first parameter λ
+    double eta_damp    = 0.0;
+    double lambda_damp = 0.0;
+    int material_model = MATERIAL_MODEL_SVK;
+    double mu10        = 0.0;
+    double mu01        = 0.0;
+    double kappa       = 0.0;
+
     HANDLE_ERROR(
         cudaMemcpy(d_rho0, &rho0, sizeof(double), cudaMemcpyHostToDevice));
     HANDLE_ERROR(cudaMemcpy(d_nu, &nu, sizeof(double), cudaMemcpyHostToDevice));
     HANDLE_ERROR(cudaMemcpy(d_E, &E, sizeof(double), cudaMemcpyHostToDevice));
-    double mu = E / (2 * (1 + nu));  // Shear modulus μ
-    double lambda =
-        (E * nu) / ((1 + nu) * (1 - 2 * nu));  // Lamé’s first parameter λ
     HANDLE_ERROR(cudaMemcpy(d_mu, &mu, sizeof(double), cudaMemcpyHostToDevice));
     HANDLE_ERROR(
         cudaMemcpy(d_lambda, &lambda, sizeof(double), cudaMemcpyHostToDevice));
+    // copy damping scalars to device (single double each)
+    HANDLE_ERROR(cudaMemcpy(d_eta_damp, &eta_damp, sizeof(double),
+                            cudaMemcpyHostToDevice));
+    HANDLE_ERROR(cudaMemcpy(d_lambda_damp, &lambda_damp, sizeof(double),
+                            cudaMemcpyHostToDevice));
+    HANDLE_ERROR(cudaMemcpy(d_material_model, &material_model, sizeof(int),
+                            cudaMemcpyHostToDevice));
+    HANDLE_ERROR(
+        cudaMemcpy(d_mu10, &mu10, sizeof(double), cudaMemcpyHostToDevice));
+    HANDLE_ERROR(
+        cudaMemcpy(d_mu01, &mu01, sizeof(double), cudaMemcpyHostToDevice));
+    HANDLE_ERROR(
+        cudaMemcpy(d_kappa, &kappa, sizeof(double), cudaMemcpyHostToDevice));
 
     HANDLE_ERROR(cudaMemcpy(d_data, this, sizeof(GPU_ANCF3443_Data),
                             cudaMemcpyHostToDevice));
 
     is_setup = true;
+  }
+
+  void SetDensity(double rho0) {
+    if (!is_setup) {
+      std::cerr << "GPU_ANCF3443_Data must be set up before setting material."
+                << std::endl;
+      return;
+    }
+    HANDLE_ERROR(
+        cudaMemcpy(d_rho0, &rho0, sizeof(double), cudaMemcpyHostToDevice));
+  }
+
+  void SetDamping(double eta_damp, double lambda_damp) {
+    if (!is_setup) {
+      std::cerr << "GPU_ANCF3443_Data must be set up before setting material."
+                << std::endl;
+      return;
+    }
+    HANDLE_ERROR(cudaMemcpy(d_eta_damp, &eta_damp, sizeof(double),
+                            cudaMemcpyHostToDevice));
+    HANDLE_ERROR(cudaMemcpy(d_lambda_damp, &lambda_damp, sizeof(double),
+                            cudaMemcpyHostToDevice));
+  }
+
+  void SetSVK() {
+    if (!is_setup) {
+      std::cerr << "GPU_ANCF3443_Data must be set up before setting material."
+                << std::endl;
+      return;
+    }
+
+    int material_model = MATERIAL_MODEL_SVK;
+    double mu10        = 0.0;
+    double mu01        = 0.0;
+    double kappa       = 0.0;
+    HANDLE_ERROR(cudaMemcpy(d_material_model, &material_model, sizeof(int),
+                            cudaMemcpyHostToDevice));
+    HANDLE_ERROR(
+        cudaMemcpy(d_mu10, &mu10, sizeof(double), cudaMemcpyHostToDevice));
+    HANDLE_ERROR(
+        cudaMemcpy(d_mu01, &mu01, sizeof(double), cudaMemcpyHostToDevice));
+    HANDLE_ERROR(
+        cudaMemcpy(d_kappa, &kappa, sizeof(double), cudaMemcpyHostToDevice));
+  }
+
+  void SetSVK(double E, double nu) {
+    if (!is_setup) {
+      std::cerr << "GPU_ANCF3443_Data must be set up before setting material."
+                << std::endl;
+      return;
+    }
+
+    HANDLE_ERROR(cudaMemcpy(d_nu, &nu, sizeof(double), cudaMemcpyHostToDevice));
+    HANDLE_ERROR(cudaMemcpy(d_E, &E, sizeof(double), cudaMemcpyHostToDevice));
+
+    double mu = E / (2 * (1 + nu));
+    double lambda = (E * nu) / ((1 + nu) * (1 - 2 * nu));
+    HANDLE_ERROR(cudaMemcpy(d_mu, &mu, sizeof(double), cudaMemcpyHostToDevice));
+    HANDLE_ERROR(
+        cudaMemcpy(d_lambda, &lambda, sizeof(double), cudaMemcpyHostToDevice));
+
+    SetSVK();
+  }
+
+  void SetMooneyRivlin(double mu10, double mu01, double kappa) {
+    if (!is_setup) {
+      std::cerr << "GPU_ANCF3443_Data must be set up before setting material."
+                << std::endl;
+      return;
+    }
+
+    int material_model = MATERIAL_MODEL_MOONEY_RIVLIN;
+    HANDLE_ERROR(cudaMemcpy(d_material_model, &material_model, sizeof(int),
+                            cudaMemcpyHostToDevice));
+    HANDLE_ERROR(
+        cudaMemcpy(d_mu10, &mu10, sizeof(double), cudaMemcpyHostToDevice));
+    HANDLE_ERROR(
+        cudaMemcpy(d_mu01, &mu01, sizeof(double), cudaMemcpyHostToDevice));
+    HANDLE_ERROR(
+        cudaMemcpy(d_kappa, &kappa, sizeof(double), cudaMemcpyHostToDevice));
   }
 
   void SetExternalForce(const Eigen::VectorXd &f_ext) {
@@ -677,6 +794,10 @@ struct GPU_ANCF3443_Data : public ElementBase {
     HANDLE_ERROR(cudaFree(d_E));
     HANDLE_ERROR(cudaFree(d_lambda));
     HANDLE_ERROR(cudaFree(d_mu));
+    HANDLE_ERROR(cudaFree(d_material_model));
+    HANDLE_ERROR(cudaFree(d_mu10));
+    HANDLE_ERROR(cudaFree(d_mu01));
+    HANDLE_ERROR(cudaFree(d_kappa));
 
     HANDLE_ERROR(cudaFree(d_data));
 
@@ -760,6 +881,8 @@ struct GPU_ANCF3443_Data : public ElementBase {
   double *d_H, *d_W, *d_L;
 
   double *d_rho0, *d_nu, *d_E, *d_lambda, *d_mu;
+  int *d_material_model;
+  double *d_mu10, *d_mu01, *d_kappa;
 
   double *d_constraint, *d_constraint_jac;
   int *d_fixed_nodes;
