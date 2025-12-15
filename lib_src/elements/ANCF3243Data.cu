@@ -2,6 +2,19 @@
 
 #include <iomanip>
 
+/*==============================================================
+ *==============================================================
+ * Project: RoboDyna
+ * Author:  Json Zhou
+ * Email:   zzhou292@wisc.edu
+ * File:    ANCF3243Data.cu
+ * Brief:   Implements GPU-side data management and element-level kernels for
+ *          ANCF 3243 beam elements. Provides initialization, mass and
+ *          stiffness assembly, internal force evaluation, and constraint
+ *          handling routines used by the synchronized solvers.
+ *==============================================================
+ *==============================================================*/
+
 #include "ANCF3243Data.cuh"
 #include "ANCF3243DataFunc.cuh"
 namespace cg = cooperative_groups;
@@ -59,7 +72,7 @@ __global__ void mass_matrix_qp_kernel(GPU_ANCF3243_Data *d_data) {
   int j_local = item_local % Quadrature::N_SHAPE_3243;  // 0–7 (col)
 
   // ===============================================================
-  // --- New: local→global DOF mapping using element_connectivity ---
+  // Local→global DOF mapping using element_connectivity
   // Each element has 2 nodes × 4 DOFs = 8 shape functions
   // local index 0–3 → node 0, dof 0–3
   // local index 4–7 → node 1, dof 0–3

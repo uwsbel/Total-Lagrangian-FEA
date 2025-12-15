@@ -1,7 +1,3 @@
-// Corrected Include Order
-
-// STEP 1: Standard C++ and CUDA headers go FIRST.
-// Example:
 #include <cuda_runtime.h>
 #include <cusparse.h>
 
@@ -9,11 +5,22 @@
 #include <iostream>
 #include <vector>
 
-#include "ElementBase.h"
+/*==============================================================
+ *==============================================================
+ * Project: RoboDyna
+ * Author:  Json Zhou
+ * Email:   zzhou292@wisc.edu
+ * File:    ANCF3443Data.cuh
+ * Brief:   Declares the GPU_ANCF3443_Data structure and associated host/GPU
+ *          interfaces for ANCF 3443 shell elements. Stores connectivity,
+ *          quadrature meta-data, CSR mass matrices, and element-level force
+ *          and constraint data used by the solvers.
+ *==============================================================
+ *==============================================================*/
 
-// Add this include at the top:
 #include "../../lib_utils/cuda_utils.h"
 #include "../../lib_utils/quadrature_utils.h"
+#include "ElementBase.h"
 
 // Definition of GPU_ANCF3443 and data access device functions
 #pragma once

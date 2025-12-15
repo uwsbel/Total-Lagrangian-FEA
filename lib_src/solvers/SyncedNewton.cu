@@ -1,3 +1,17 @@
+/*==============================================================
+ *==============================================================
+ * Project: RoboDyna
+ * Author:  Json Zhou
+ * Email:   zzhou292@wisc.edu
+ * File:    SyncedNewton.cu
+ * Brief:   Implements the GPU-synchronized Newton solver (SyncedNewton).
+ *          Contains element-traits specializations, sparsity analysis and
+ *          assembly kernels for the global Hessian, and the CuDSS-backed
+ *          Newton iteration loop that couples FEAT10 and ANCF element data
+ *          with constraint handling and GPU-resident linear algebra.
+ *==============================================================
+ *==============================================================*/
+
 #include <cooperative_groups.h>
 #include <cublas_v2.h>
 #include <thrust/device_ptr.h>
@@ -314,12 +328,6 @@ __global__ void extract_columns_from_bitset(unsigned int *d_col_bitset,
         }
       }
     }
-  }
-
-  // DEBUG: Print for first few rows
-  if (row < 3) {
-    int row_start = d_csr_row_offsets[row];
-    int row_end   = d_csr_row_offsets[row + 1];
   }
 }
 

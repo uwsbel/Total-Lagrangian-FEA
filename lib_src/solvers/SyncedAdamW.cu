@@ -1,3 +1,17 @@
+/*==============================================================
+ *==============================================================
+ * Project: RoboDyna
+ * Author:  Json Zhou
+ * Email:   zzhou292@wisc.edu
+ * File:    SyncedAdamW.cu
+ * Brief:   Implements the GPU-synchronized AdamW optimizer used to advance
+ *          generalized velocities and positions in RoboDyna. Defines the
+ *          cooperative kernel that evaluates element residuals, constraint
+ *          contributions, and performs fully-synchronized AdamW updates for
+ *          ANCF3243, ANCF3443, and FEAT10 element data.
+ *==============================================================
+ *==============================================================*/
+
 #include <cooperative_groups.h>
 
 #include "../elements/ANCF3243Data.cuh"
@@ -373,11 +387,12 @@ void SyncedAdamWSolver::OneStepAdamW() {
   int maxCoopBlocks = maxBlocksPerSm * props.multiProcessorCount;
 
   if (blocksNeeded > maxCoopBlocks) {
-    std::cerr << "SyncedAdamW: problem size too large for cooperative launch on "
-              << props.name << ". Requested blocks: " << blocksNeeded
-              << ", max cooperative blocks: " << maxCoopBlocks
-              << ", n_coef: " << n_coef_
-              << ", n_constraints: " << n_constraints_ << std::endl;
+    std::cerr
+        << "SyncedAdamW: problem size too large for cooperative launch on "
+        << props.name << ". Requested blocks: " << blocksNeeded
+        << ", max cooperative blocks: " << maxCoopBlocks
+        << ", n_coef: " << n_coef_ << ", n_constraints: " << n_constraints_
+        << std::endl;
     std::abort();
   }
 

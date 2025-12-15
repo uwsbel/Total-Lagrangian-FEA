@@ -1,4 +1,17 @@
 #pragma once
+/*==============================================================
+ *==============================================================
+ * Project: RoboDyna
+ * Author:  Json Zhou
+ * Email:   zzhou292@wisc.edu
+ * File:    ANCF3243DataFunc.cuh
+ * Brief:   Provides CUDA device functions and kernels used by ANCF 3243 beam
+ *          elements, including shape function evaluation, quadrature loops,
+ *          internal force and stress computation, and element-level assembly
+ *          helpers.
+ *==============================================================
+ *==============================================================*/
+
 #include "ANCF3243Data.cuh"
 
 // forward-declare solver type (pointer-only used here)

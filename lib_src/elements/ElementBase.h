@@ -1,3 +1,17 @@
+/*==============================================================
+ *==============================================================
+ * Project: RoboDyna
+ * Author:  Json Zhou
+ * Email:   zzhou292@wisc.edu
+ * File:    ElementBase.h
+ * Brief:   Declares the ElementBase class and common interfaces shared by
+ *          concrete GPU element data types (ANCF3243, ANCF3443, FEAT10).
+ *          Provides virtual accessors for coefficients, beams/elements,
+ *          mass/force/constraint storage, and type tagging used by the
+ *          synchronized solvers and collision modules.
+ *==============================================================
+ *==============================================================*/
+
 #pragma once
 
 #include <Eigen/Dense>

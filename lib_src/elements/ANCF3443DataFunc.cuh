@@ -1,4 +1,17 @@
 #pragma once
+/*==============================================================
+ *==============================================================
+ * Project: RoboDyna
+ * Author:  Json Zhou
+ * Email:   zzhou292@wisc.edu
+ * File:    ANCF3443DataFunc.cuh
+ * Brief:   Contains CUDA device functions and kernels for ANCF 3443 shell
+ *          elements, including shape function evaluation, quadrature loops,
+ *          stress computation, and element stiffness/internal force assembly
+ *          into global structures.
+ *==============================================================
+ *==============================================================*/
+
 #include "ANCF3443Data.cuh"
 
 // forward-declare solver type (pointer-only used here)

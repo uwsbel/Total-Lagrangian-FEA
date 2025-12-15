@@ -1,3 +1,15 @@
+/**
+ * ANCF3443 Shell Newton Test
+ *
+ * Author: Json Zhou
+ * Email:  zzhou292@wisc.edu
+ *
+ * This simulation exercises the synchronized Newton solver on ANCF3443 shell
+ * elements. It builds a small shell beam configuration, assembles mass and
+ * constraint data, analyzes Hessian sparsity, and runs multiple Newton steps
+ * to inspect displacement and convergence behavior.
+ */
+
 #include <cuda_runtime.h>
 
 #include <Eigen/Dense>
@@ -15,7 +27,7 @@ const double rho0 = 2700;  // Density
 
 int main() {
   // initialize GPU data structure
-  int n_beam = 2;  // this is working
+  int n_beam = 2;
   GPU_ANCF3443_Data gpu_3443_data(n_beam);
   gpu_3443_data.Initialize();
 

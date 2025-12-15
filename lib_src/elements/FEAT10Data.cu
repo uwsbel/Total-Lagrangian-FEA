@@ -4,6 +4,19 @@
 #include <iomanip>
 #include <iostream>
 
+/*==============================================================
+ *==============================================================
+ * Project: RoboDyna
+ * Author:  Json Zhou
+ * Email:   zzhou292@wisc.edu
+ * File:    FEAT10Data.cu
+ * Brief:   Implements GPU-side data management and element kernels for
+ *          10-node tetrahedral FEAT10 elements. Handles allocation,
+ *          initialization, mass and stiffness assembly, internal/external
+ *          force evaluation, and optional constraint coupling.
+ *==============================================================
+ *==============================================================*/
+
 #include "FEAT10Data.cuh"
 #include "FEAT10DataFunc.cuh"
 
@@ -663,6 +676,62 @@ void GPU_FEAT10_Data::SetNodalFixed(const Eigen::VectorXi &fixed_nodes) {
                           cudaMemcpyHostToDevice));
 
   is_constraints_setup = true;
+}
+
+void GPU_FEAT10_Data::UpdateNodalFixed(const Eigen::VectorXi &fixed_nodes) {
+  int new_n_constraint = fixed_nodes.size() * 3;
+
+  // If constraints not set up yet, just call SetNodalFixed
+  if (!is_constraints_setup) {
+    SetNodalFixed(fixed_nodes);
+    return;
+  }
+
+  // If number of constraints changed, reallocate
+  if (new_n_constraint != n_constraint) {
+    // Free old buffers
+    HANDLE_ERROR(cudaFree(d_constraint));
+    HANDLE_ERROR(cudaFree(d_constraint_jac));
+    HANDLE_ERROR(cudaFree(d_fixed_nodes));
+
+    // Free old CSR buffers if they exist
+    if (is_cj_csr_setup) {
+      HANDLE_ERROR(cudaFree(d_cj_csr_offsets));
+      HANDLE_ERROR(cudaFree(d_cj_csr_columns));
+      HANDLE_ERROR(cudaFree(d_cj_csr_values));
+      HANDLE_ERROR(cudaFree(d_cj_nnz));
+      is_cj_csr_setup = false;
+    }
+
+    n_constraint = new_n_constraint;
+
+    // Allocate new buffers
+    HANDLE_ERROR(cudaMalloc(&d_constraint, n_constraint * sizeof(double)));
+    HANDLE_ERROR(cudaMalloc(&d_constraint_jac,
+                            n_constraint * (n_coef * 3) * sizeof(double)));
+    HANDLE_ERROR(cudaMalloc(&d_fixed_nodes, fixed_nodes.size() * sizeof(int)));
+  }
+
+  // Clear and update constraint data
+  HANDLE_ERROR(cudaMemset(d_constraint, 0, n_constraint * sizeof(double)));
+  HANDLE_ERROR(cudaMemset(d_constraint_jac, 0,
+                          n_constraint * (n_coef * 3) * sizeof(double)));
+  HANDLE_ERROR(cudaMemcpy(d_fixed_nodes, fixed_nodes.data(),
+                          fixed_nodes.size() * sizeof(int),
+                          cudaMemcpyHostToDevice));
+
+  // Update the device copy of this struct
+  GPU_FEAT10_Data *h_data_flash =
+      (GPU_FEAT10_Data *)malloc(sizeof(GPU_FEAT10_Data));
+  HANDLE_ERROR(cudaMemcpy(h_data_flash, d_data, sizeof(GPU_FEAT10_Data),
+                          cudaMemcpyDeviceToHost));
+  h_data_flash->n_constraint     = n_constraint;
+  h_data_flash->d_constraint     = d_constraint;
+  h_data_flash->d_constraint_jac = d_constraint_jac;
+  h_data_flash->d_fixed_nodes    = d_fixed_nodes;
+  HANDLE_ERROR(cudaMemcpy(d_data, h_data_flash, sizeof(GPU_FEAT10_Data),
+                          cudaMemcpyHostToDevice));
+  free(h_data_flash);
 }
 
 void GPU_FEAT10_Data::RetrieveConnectivityToCPU(Eigen::MatrixXi &connectivity) {

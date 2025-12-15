@@ -123,17 +123,51 @@ bool readZipEntries(std::istream& is, std::vector<ZipEntry>& entries) {
 
     std::string filename(filename_len, '\0');
     is.read(&filename[0], filename_len);
-    is.seekg(extra_len, std::ios::cur);  // skip extra field
+
+    // Handle ZIP64 extended information (extra field ID 0x0001)
+    uint64_t actual_compressed_size   = compressed_size;
+    uint64_t actual_uncompressed_size = uncompressed_size;
+    
+    if (extra_len > 0) {
+      size_t extra_start = is.tellg();
+      size_t extra_end   = extra_start + extra_len;
+      
+      while (static_cast<size_t>(is.tellg()) + 4 <= extra_end) {
+        uint16_t header_id  = readUint16LE(is);
+        uint16_t data_size  = readUint16LE(is);
+        
+        if (header_id == 0x0001) {  // ZIP64 extended information
+          // Read ZIP64 sizes if they were set to 0xFFFFFFFF
+          if (uncompressed_size == 0xFFFFFFFF && data_size >= 8) {
+            actual_uncompressed_size = readUint32LE(is);
+            actual_uncompressed_size |= (static_cast<uint64_t>(readUint32LE(is)) << 32);
+            data_size -= 8;
+          }
+          if (compressed_size == 0xFFFFFFFF && data_size >= 8) {
+            actual_compressed_size = readUint32LE(is);
+            actual_compressed_size |= (static_cast<uint64_t>(readUint32LE(is)) << 32);
+            data_size -= 8;
+          }
+          // Skip remaining ZIP64 data (relative header offset, disk start)
+          is.seekg(data_size, std::ios::cur);
+        } else {
+          // Skip other extra field entries
+          is.seekg(data_size, std::ios::cur);
+        }
+      }
+      // Ensure we're at the end of extra field
+      is.seekg(extra_end);
+    }
 
     ZipEntry entry;
     entry.filename           = filename;
-    entry.compressed_size    = compressed_size;
-    entry.uncompressed_size  = uncompressed_size;
+    entry.compressed_size    = static_cast<uint32_t>(actual_compressed_size);
+    entry.uncompressed_size  = static_cast<uint32_t>(actual_uncompressed_size);
     entry.compression_method = compression;
     entry.data_offset        = is.tellg();
 
     entries.push_back(entry);
-    is.seekg(compressed_size, std::ios::cur);
+    is.seekg(actual_compressed_size, std::ios::cur);
   }
 
   return !entries.empty();
@@ -217,6 +251,11 @@ bool MeshManager::LoadScalarFieldFromNpz(int mesh_id,
   if (!field_entry) {
     std::cerr << "MeshManager: Field '" << field_key << "' not found in "
               << npz_file << std::endl;
+    std::cerr << "  Available fields (" << entries.size() << "): ";
+    for (const auto& e : entries) {
+      std::cerr << "'" << e.filename << "' ";
+    }
+    std::cerr << std::endl;
     return false;
   }
 
@@ -257,36 +296,77 @@ bool MeshManager::LoadScalarFieldFromNpz(int mesh_id,
   size_t n_values      = shape[0];
   const auto& instance = mesh_instances_[mesh_id];
 
-  // Check size compatibility
-  // The NPZ might contain data for linearized mesh (fewer nodes than T10)
-  if (n_values > static_cast<size_t>(instance.num_nodes)) {
-    std::cerr << "MeshManager: Scalar field has " << n_values
-              << " values but mesh has " << instance.num_nodes << " nodes"
-              << std::endl;
-    return false;
-  }
-
-  // Read scalar values
-  Eigen::VectorXd field(instance.num_nodes);
-  field.setZero();  // Initialize to zero
-
+  // Read scalar values from field
   const double* src =
       reinterpret_cast<const double*>(npy_data.data() + data_offset);
 
-  // If we need to handle original_vertex_ids mapping, we should load that too
-  // For now, assume direct mapping for first n_values nodes
-  // TODO: Add proper vertex ID remapping if needed
-  for (size_t i = 0;
-       i < n_values && i < static_cast<size_t>(instance.num_nodes); ++i) {
-    field(i) = src[i];
+  // Try to load original_vertex_ids for mapping
+  std::string ids_name     = "original_vertex_ids.npy";
+  const ZipEntry* ids_entry = nullptr;
+  for (const auto& e : entries) {
+    if (e.filename == ids_name) {
+      ids_entry = &e;
+      break;
+    }
+  }
+
+  Eigen::VectorXd field(instance.num_nodes);
+  field.setZero();  // Initialize to zero
+
+  if (ids_entry && ids_entry->compression_method == 0 &&
+      n_values < static_cast<size_t>(instance.num_nodes)) {
+    // Use original_vertex_ids mapping for T10 meshes
+    file.seekg(ids_entry->data_offset);
+    std::vector<char> ids_data(ids_entry->uncompressed_size);
+    file.read(ids_data.data(), ids_entry->uncompressed_size);
+
+    size_t ids_offset;
+    std::vector<size_t> ids_shape;
+    bool ids_is_double;
+    if (parseNpyHeader(ids_data, ids_offset, ids_shape, ids_is_double)) {
+      // original_vertex_ids is typically int64
+      const int64_t* ids_ptr =
+          reinterpret_cast<const int64_t*>(ids_data.data() + ids_offset);
+      size_t n_ids = ids_shape.empty() ? 0 : ids_shape[0];
+
+      // Map values using original_vertex_ids
+      for (size_t i = 0; i < n_values && i < n_ids; ++i) {
+        int64_t target_idx = ids_ptr[i];
+        if (target_idx >= 0 && target_idx < instance.num_nodes) {
+          field(target_idx) = src[i];
+        }
+      }
+      std::cout << "MeshManager: Loaded scalar field '" << field_key
+                << "' with vertex ID mapping (" << n_values << " -> "
+                << instance.num_nodes << " nodes)" << std::endl;
+    } else {
+      // Fallback to direct mapping
+      for (size_t i = 0;
+           i < n_values && i < static_cast<size_t>(instance.num_nodes); ++i) {
+        field(i) = src[i];
+      }
+      std::cout << "MeshManager: Loaded scalar field '" << field_key
+                << "' (direct mapping, " << n_values << " values)" << std::endl;
+    }
+  } else {
+    // Direct mapping (sizes match or no mapping available)
+    if (n_values > static_cast<size_t>(instance.num_nodes)) {
+      std::cerr << "MeshManager: Scalar field has " << n_values
+                << " values but mesh has " << instance.num_nodes << " nodes"
+                << std::endl;
+      return false;
+    }
+    for (size_t i = 0;
+         i < n_values && i < static_cast<size_t>(instance.num_nodes); ++i) {
+      field(i) = src[i];
+    }
+    std::cout << "MeshManager: Loaded scalar field '" << field_key << "' from "
+              << npz_file << " (" << n_values << " values)" << std::endl;
   }
 
   scalar_field_buffers_[mesh_id] = field;
   has_scalar_fields_             = true;
   RebuildScalarFieldArray();
-
-  std::cout << "MeshManager: Loaded scalar field '" << field_key << "' from "
-            << npz_file << " (" << n_values << " values)" << std::endl;
 
   return true;
 }

@@ -1,4 +1,18 @@
 #pragma once
+/*==============================================================
+ *==============================================================
+ * Project: RoboDyna
+ * Author:  Json Zhou
+ * Email:   zzhou292@wisc.edu
+ * File:    SyncedAdamW.cuh
+ * Brief:   Declares the SyncedAdamWSolver class and its GPU-facing state for
+ *          a fully synchronized first-order AdamW method. Manages device
+ *          buffers for velocities, dual variables, convergence flags, and
+ *          time-stepping parameters, and provides device accessors used by the
+ *          AdamW kernel implementations.
+ *==============================================================
+ *==============================================================*/
+
 #include "../../lib_utils/cuda_utils.h"
 #include "../../lib_utils/quadrature_utils.h"
 #include "../elements/ANCF3243Data.cuh"
