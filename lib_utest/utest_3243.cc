@@ -61,12 +61,17 @@ TEST(Test3243, MassMatrix2Beams) {
   Eigen::MatrixXi h_element_connectivity;
   grid_gen.get_element_connectivity(h_element_connectivity);
 
-  gpu_3243_data.Setup(L, W, H, rho0, nu, E, 0.0, 0.0, h_B_inv,
-                      Quadrature::gauss_xi_m_6, Quadrature::gauss_xi_3,
-                      Quadrature::gauss_eta_2, Quadrature::gauss_zeta_2,
-                      Quadrature::weight_xi_m_6, Quadrature::weight_xi_3,
-                      Quadrature::weight_eta_2, Quadrature::weight_zeta_2,
-                      h_x12, h_y12, h_z12, h_element_connectivity);
+  gpu_3243_data.Setup(L, W, H, h_B_inv, Quadrature::gauss_xi_m_6,
+                      Quadrature::gauss_xi_3, Quadrature::gauss_eta_2,
+                      Quadrature::gauss_zeta_2, Quadrature::weight_xi_m_6,
+                      Quadrature::weight_xi_3, Quadrature::weight_eta_2,
+                      Quadrature::weight_zeta_2, h_x12, h_y12, h_z12,
+                      h_element_connectivity);
+
+  gpu_3243_data.SetDensity(rho0);
+  gpu_3243_data.SetDamping(0.0, 0.0);
+
+  gpu_3243_data.SetSVK(E, nu);
 
   gpu_3243_data.CalcDsDuPre();
   gpu_3243_data.CalcMassMatrix();
@@ -132,12 +137,17 @@ TEST(Test3243, MassMatrix3Beams) {
   Eigen::MatrixXi h_element_connectivity;
   grid_gen.get_element_connectivity(h_element_connectivity);
 
-  gpu_3243_data.Setup(L, W, H, rho0, nu, E, 0.0, 0.0, h_B_inv,
-                      Quadrature::gauss_xi_m_6, Quadrature::gauss_xi_3,
-                      Quadrature::gauss_eta_2, Quadrature::gauss_zeta_2,
-                      Quadrature::weight_xi_m_6, Quadrature::weight_xi_3,
-                      Quadrature::weight_eta_2, Quadrature::weight_zeta_2,
-                      h_x12, h_y12, h_z12, h_element_connectivity);
+  gpu_3243_data.Setup(L, W, H, h_B_inv, Quadrature::gauss_xi_m_6,
+                      Quadrature::gauss_xi_3, Quadrature::gauss_eta_2,
+                      Quadrature::gauss_zeta_2, Quadrature::weight_xi_m_6,
+                      Quadrature::weight_xi_3, Quadrature::weight_eta_2,
+                      Quadrature::weight_zeta_2, h_x12, h_y12, h_z12,
+                      h_element_connectivity);
+
+  gpu_3243_data.SetDensity(rho0);
+  gpu_3243_data.SetDamping(0.0, 0.0);
+
+  gpu_3243_data.SetSVK(E, nu);
 
   gpu_3243_data.CalcDsDuPre();
   gpu_3243_data.CalcMassMatrix();

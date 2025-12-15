@@ -13,6 +13,8 @@
  *==============================================================*/
 
 #include "ANCF3243Data.cuh"
+#include "../materials/SVK.cuh"
+#include "../materials/MooneyRivlin.cuh"
 
 // forward-declare solver type (pointer-only used here)
 struct SyncedNewtonSolver;
@@ -229,14 +231,27 @@ __device__ __forceinline__ void compute_p(int elem_idx, int qp_idx,
             }
 
     // --- Compute P ---
-    double factor = d_data->lambda() * (0.5 * tr_FtF - 1.5);
+    double F_local[3][3];
     #pragma unroll
     for (int i = 0; i < 3; ++i)
-        #pragma unroll
-        for (int j = 0; j < 3; ++j)
-        {
-            d_data->P(elem_idx, qp_idx)(i, j) = factor * d_data->F(elem_idx, qp_idx)(i, j) + d_data->mu() * (FFF[i][j] - d_data->F(elem_idx, qp_idx)(i, j));
-        }
+      #pragma unroll
+      for (int j = 0; j < 3; ++j)
+        F_local[i][j] = d_data->F(elem_idx, qp_idx)(i, j);
+
+    double P_el[3][3];
+    if (d_data->material_model() == MATERIAL_MODEL_MOONEY_RIVLIN) {
+      mr_compute_P(F_local, d_data->mu10(), d_data->mu01(), d_data->kappa(),
+                   P_el);
+    } else {
+      svk_compute_P_from_trFtF_and_FFtF(F_local, tr_FtF, FFF, d_data->lambda(),
+                                       d_data->mu(), P_el);
+    }
+
+    #pragma unroll
+    for (int i = 0; i < 3; ++i)
+      #pragma unroll
+      for (int j = 0; j < 3; ++j)
+        d_data->P(elem_idx, qp_idx)(i, j) = P_el[i][j];
     // Compute Fdot = sum_i v_i ⊗ ∇s_i
     double Fdot[3][3] = {{0.0}};
     #pragma unroll
@@ -510,6 +525,13 @@ __device__ __forceinline__ void compute_hessian_assemble_csr<GPU_ANCF3243_Data>(
       d_data->weight_zeta()(qp_idx % Quadrature::N_QP_2);
   double dV = scale * geom;
 
+  const bool use_mr = (d_data->material_model() == MATERIAL_MODEL_MOONEY_RIVLIN);
+  double A_mr[3][3][3][3];
+  if (use_mr) {
+    mr_compute_tangent_tensor(F, d_data->mu10(), d_data->mu01(), d_data->kappa(),
+                              A_mr);
+  }
+
   // Local K_elem 24x24
   double K_elem[24][24];
 #pragma unroll
@@ -526,23 +548,35 @@ __device__ __forceinline__ void compute_hessian_assemble_csr<GPU_ANCF3243_Data>(
       double Fhj_dot_Fhi =
           Fh[j][0] * Fh[i][0] + Fh[j][1] * Fh[i][1] + Fh[j][2] * Fh[i][2];
 
+      double Kblock[3][3];
+      if (use_mr) {
+#pragma unroll
+        for (int d = 0; d < 3; d++) {
+#pragma unroll
+          for (int e = 0; e < 3; e++) {
+            double sum = 0.0;
+#pragma unroll
+            for (int J = 0; J < 3; J++) {
+#pragma unroll
+              for (int L = 0; L < 3; L++) {
+                sum += A_mr[d][J][e][L] * grad_s[i][J] * grad_s[j][L];
+              }
+            }
+            Kblock[d][e] = sum * dV;
+          }
+        }
+      } else {
+        svk_compute_tangent_block(Fh[i], Fh[j], h_ij, trE, Fhj_dot_Fhi, FFT,
+                                 lambda, mu, dV, Kblock);
+      }
+
 #pragma unroll
       for (int d = 0; d < 3; d++) {
 #pragma unroll
         for (int e = 0; e < 3; e++) {
-          double A_de    = lambda * Fh[i][d] * Fh[j][e];
-          double B_de    = lambda * trE * h_ij * (d == e ? 1.0 : 0.0);
-          double C1_de   = mu * Fhj_dot_Fhi * (d == e ? 1.0 : 0.0);
-          double D_de    = mu * Fh[j][d] * Fh[i][e];
-          double Etrm_de = mu * h_ij * FFT[d][e];
-          double Ftrm_de = -mu * h_ij * (d == e ? 1.0 : 0.0);
-
-          double K_ij_de =
-              (A_de + B_de + C1_de + D_de + Etrm_de + Ftrm_de) * dV;
-
           int row          = 3 * i + d;
           int col          = 3 * j + e;
-          K_elem[row][col] = K_ij_de;
+          K_elem[row][col] = Kblock[d][e];
         }
       }
     }

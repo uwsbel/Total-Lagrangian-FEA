@@ -182,9 +182,13 @@ int main(int argc, char** argv) {
   const Eigen::VectorXd& tet5pt_z       = Quadrature::tet5pt_z;
   const Eigen::VectorXd& tet5pt_weights = Quadrature::tet5pt_weights;
 
-  gpu_t10_data.Setup(rho0, nu, E, 1e4, 1e4,  // Material + damping
-                     tet5pt_x, tet5pt_y, tet5pt_z, tet5pt_weights, h_x12, h_y12,
+  gpu_t10_data.Setup(tet5pt_x, tet5pt_y, tet5pt_z, tet5pt_weights, h_x12, h_y12,
                      h_z12, elements);
+
+  gpu_t10_data.SetDensity(rho0);
+  gpu_t10_data.SetDamping(1e4, 1e4);
+
+  gpu_t10_data.SetSVK(E, nu);
 
   gpu_t10_data.CalcDnDuPre();
   gpu_t10_data.CalcMassMatrix();

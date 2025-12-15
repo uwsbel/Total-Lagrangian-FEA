@@ -298,9 +298,13 @@ int main(int argc, char** argv) {
   // Use soft material for visible deformation
   double eta_damp = 1e3;     // Viscous damping
   double lambda_damp = 1e3;  // Volume damping
-  gpu_t10_data.Setup(rho0, nu, E_val, eta_damp, lambda_damp,
-                     tet5pt_x, tet5pt_y, tet5pt_z, tet5pt_weights, h_x12, h_y12,
+  gpu_t10_data.Setup(tet5pt_x, tet5pt_y, tet5pt_z, tet5pt_weights, h_x12, h_y12,
                      h_z12, elements);
+
+  gpu_t10_data.SetDensity(rho0);
+  gpu_t10_data.SetDamping(eta_damp, lambda_damp);
+
+  gpu_t10_data.SetSVK(E_val, nu);
 
   gpu_t10_data.CalcDnDuPre();
   gpu_t10_data.CalcMassMatrix();
