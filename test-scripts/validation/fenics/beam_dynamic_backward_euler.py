@@ -22,7 +22,8 @@ DEBUG = False
 
 # Construct mesh file paths
 script_dir = os.path.dirname(os.path.abspath(__file__))
-project_root = os.path.normpath(os.path.join(script_dir, os.pardir, os.pardir))
+# Project root is two levels up from test-scripts/, so go up three from here.
+project_root = os.path.normpath(os.path.join(script_dir, os.pardir, os.pardir, os.pardir))
 mesh_dir = os.path.join(project_root, "data", "meshes", "T10", "resolution")
 
 node_file = os.path.join(mesh_dir, f"beam_3x2x1_res{RES}.1.node")
@@ -173,12 +174,12 @@ for i, coord in enumerate(dof_coords):
     if abs(coord[0] - L) < tol:
         force_dofs.append(i)
 
-# Calculate Force Per Node (Matching C++ Logic)
-total_force = 250000.0
+# Calculate Force Per Node (Matching C++ Logic: +5000 N in +x)
+total_force = 5000.0
 num_force_nodes = len(force_dofs)
 force_per_node = total_force / num_force_nodes if num_force_nodes > 0 else 0.0
 
-print(f"Applying Lumped Force: {force_per_node} N per node on {num_force_nodes} nodes.")
+print(f"Applying Lumped Force (+x): {force_per_node} N per node on {num_force_nodes} nodes.")
 
 # Create a global PETSc vector for the external force
 # We use the same index map as the function space
@@ -191,16 +192,16 @@ f_temp.x.array[:] = 0.0
 # For simple serial script, we can access the array directly via the Function wrapper
 # but treating it as a raw PETSc vector is safer for the solver.
 for node_idx in force_dofs:
-    # Set Z-component (index 2 in the block) - negative for -z direction
-    # The C++ code sets: h_f_ext(3 * node_idx + 2) = -force_per_node
-    f_temp.x.array[node_idx * block_size + 2] = -force_per_node
+    # Set X-component (index 0 in the block) to match C++ (+x direction)
+    # The C++ code sets: h_f_ext(3 * node_idx + 0) = force_per_node
+    f_temp.x.array[node_idx * block_size + 0] = force_per_node
 
 # Move data to the PETSc vector
 f_ext_vector = f_temp.x.petsc_vec.copy()
 f_ext_vector.ghostUpdate(addv=PETSc.InsertMode.INSERT, mode=PETSc.ScatterMode.FORWARD)
 
 print(f"Load applied at x=3:")
-print(f"  Total force: {total_force} N (-z direction)")
+print(f"  Total force: {total_force} N (+x direction)")
 print(f"  Number of nodes at x=3: {num_force_nodes}")
 print(f"  Force per node: {force_per_node:.6f} N")
 print(f"  Total force applied: {force_per_node * num_force_nodes:.1f} N")
@@ -208,11 +209,11 @@ print(f"  Distribution: Equal distribution across all nodes")
 
 
 # ============================================================================
-# TRACKED NODE - Top corner at free end
+# TRACKED NODE - Match C++ TetGen node index for RES_0
 # ============================================================================
 print("\nTRACKED NODE SETUP")
 
-# Tracked node: Top corner at free end (3, 2, 1)
+# Match current C++ run (which tracks the top corner at (3, 2, 1))
 tracked_node_position = np.array([L, W, H])
 tracked_node_dof = None
 tracked_node_coord = None
@@ -241,12 +242,20 @@ else:
 # ============================================================================
 # MATERIAL MODEL AND KINEMATICS
 # ============================================================================
-# Material properties (matching C++ exactly)
-E = default_scalar_type(7.0e8)  # Young's modulus: 7×10⁸ Pa
-nu = default_scalar_type(0.33)  # Poisson's ratio: 0.33
-mu = fem.Constant(domain, E / (2 * (1 + nu)))  # Shear modulus
-lmbda = fem.Constant(domain, E * nu / ((1 + nu) * (1 - 2 * nu)))  # Lamé's first parameter
+# Select material model: "SVK" or "MOONEY_RIVLIN"
+MATERIAL_MODEL = "MOONEY_RIVLIN"
+
+# Base material properties (matching C++ exactly)
+E_val = 7.0e8     # Young's modulus: 7×10⁸ Pa
+nu_val = 0.33     # Poisson's ratio: 0.33
 rho = fem.Constant(domain, 2700.0)  # Density: 2700 kg/m³
+
+E = default_scalar_type(E_val)
+nu = default_scalar_type(nu_val)
+
+# SVK parameters
+mu_svk = fem.Constant(domain, E / (2 * (1 + nu)))  # Shear modulus
+lmbda_svk = fem.Constant(domain, E * nu / ((1 + nu) * (1 - 2 * nu)))  # Lamé's first parameter
 
 # Function space setup for dynamics
 v = ufl.TestFunction(V)
@@ -260,23 +269,63 @@ B = fem.Constant(domain, default_scalar_type((0, 0, 0)))
 # Kinematics
 d = len(u)  # Spatial dimension
 I = ufl.Identity(d)  # Identity tensor
-F = I + ufl.grad(u)  # Deformation gradient
+
+# Wrap F in ufl.variable so we can differentiate psi w.r.t. F
+F = ufl.variable(I + ufl.grad(u))  # Deformation gradient
 C = F.T * F  # Right Cauchy-Green tensor
 trFtF = ufl.tr(C)  # Trace of C = F^T * F
 FFt = F * F.T  # F * F^T
 FFtF = FFt * F  # F * F^T * F
 
-# Material model (St. Venant-Kirchhoff):
-# P = λ*(0.5*tr(F^T*F) - 1.5)*F + μ*(F*F^T*F - F)
-lambda_factor = lmbda * (0.5 * trFtF - 1.5)
-P = lambda_factor * F + mu * (FFtF - F)
+# Material model selection
+if MATERIAL_MODEL == "SVK":
+    # St. Venant-Kirchhoff:
+    # P = λ*(0.5*tr(F^T*F) - 1.5)*F + μ*(F*F^T*F - F)
+    lambda_factor = lmbda_svk * (0.5 * trFtF - 1.5)
+    P = lambda_factor * F + mu_svk * (FFtF - F)
+    print("\nMATERIAL MODEL: St. Venant-Kirchhoff (SVK)")
+else:
+    # Compressible Mooney-Rivlin (isochoric invariants + volumetric penalty)
+    # Match C++ logic: mu10 = 0.30*mu, mu01 = 0.20*mu, kappa = 1.5*K
+    mu_val = E_val / (2.0 * (1.0 + nu_val))
+    K_val = E_val / (3.0 * (1.0 - 2.0 * nu_val))
+
+    c1_val = 0.30 * mu_val
+    c2_val = 0.20 * mu_val
+    kappa_val = 1.5 * K_val
+
+    C1 = fem.Constant(domain, default_scalar_type(c1_val))
+    C2 = fem.Constant(domain, default_scalar_type(c2_val))
+    kappa = fem.Constant(domain, default_scalar_type(kappa_val))
+
+    print("\nMATERIAL MODEL: Mooney-Rivlin")
+    print(f"  C1 (mu10): {c1_val:.4e}")
+    print(f"  C2 (mu01): {c2_val:.4e}")
+    print(f"  Kappa:     {kappa_val:.4e}")
+
+    # Invariants and isochoric invariants (built from variable F)
+    I1 = ufl.tr(C)
+    C2_tens = C * C
+    trC2 = ufl.tr(C2_tens)
+    I2 = 0.5 * (I1**2 - trC2)
+
+    J = ufl.det(F)
+    I1_bar = J**(-2.0 / 3.0) * I1
+    I2_bar = J**(-4.0 / 3.0) * I2
+
+    # Strain energy density
+    psi = C1 * (I1_bar - 3.0) + C2 * (I2_bar - 3.0) + 0.5 * kappa * (J - 1.0) ** 2
+
+    # First Piola-Kirchhoff stress via automatic differentiation
+    P = ufl.diff(psi, F)
+
 
 
 # ============================================================================
 # TIME INTEGRATION SETUP (Backward Euler method)
 # ============================================================================
 dt = 1e-3  # Time step
-n_steps = 500  # Number of time steps
+n_steps = 50  # Number of time steps
 t_final = n_steps * dt 
 
 print("\nTIME INTEGRATION SETUP")
@@ -418,8 +467,13 @@ print("\nDYNAMIC ANALYSIS COMPLETE")
 if tracked_node_dof is not None:
     output_dir = os.path.join(script_dir, "output")
     os.makedirs(output_dir, exist_ok=True)
-    
-    csv_path = os.path.join(output_dir, f"node_x_history_fenics_res{RES}.csv")
+
+    # Material suffix for file naming
+    mat_suffix = "svk" if MATERIAL_MODEL == "SVK" else "mr"
+
+    csv_path = os.path.join(
+        output_dir, f"node_xyz_history_fenics_res{RES}_{mat_suffix}.csv"
+    )
     with open(csv_path, 'w') as f:
         f.write("step,x_position,y_position,z_position\n")
         for i, (x_val, y_val, z_val) in enumerate(node_xyz_history):
