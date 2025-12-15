@@ -29,6 +29,8 @@ const double rho0 = 2700;  // Density
 
 enum MESH_RESOLUTION { RES_0, RES_2, RES_4, RES_8, RES_16 };
 
+enum MATERIAL_MODEL { MAT_SVK, MAT_MOONEY_RIVLIN };
+
 int main() {
   // Read mesh data
   Eigen::MatrixXd nodes;
@@ -37,6 +39,8 @@ int main() {
   int n_nodes, n_elems;
 
   MESH_RESOLUTION resolution = RES_0;
+
+  MATERIAL_MODEL material = MAT_MOONEY_RIVLIN;
 
   if (resolution == RES_0) {
     n_nodes = ANCFCPUUtils::FEAT10_read_nodes(
@@ -158,7 +162,18 @@ int main() {
   gpu_t10_data.SetDensity(rho0);
   gpu_t10_data.SetDamping(0.0, 0.0);
 
-  gpu_t10_data.SetSVK(E, nu);
+  if (material == MAT_SVK) {
+    gpu_t10_data.SetSVK(E, nu);
+    std::cout << "Material: SVK" << std::endl;
+  } else {
+    const double mu    = E / (2.0 * (1.0 + nu));
+    const double K     = E / (3.0 * (1.0 - 2.0 * nu));
+    const double kappa = 1.5 * K;
+    const double mu10  = 0.30 * mu;
+    const double mu01  = 0.20 * mu;
+    gpu_t10_data.SetMooneyRivlin(mu10, mu01, kappa);
+    std::cout << "Material: Mooney-Rivlin" << std::endl;
+  }
 
   // =========================================================================
 

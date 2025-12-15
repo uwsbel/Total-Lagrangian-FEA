@@ -612,6 +612,13 @@ __device__ __forceinline__ void compute_hessian_assemble_csr<GPU_ANCF3443_Data>(
       d_data->weight_zeta()(qp_idx % Quadrature::N_QP_3);
   double dV = scale * geom;
 
+  const bool use_mr = (d_data->material_model() == MATERIAL_MODEL_MOONEY_RIVLIN);
+  double A_mr[3][3][3][3];
+  if (use_mr) {
+    mr_compute_tangent_tensor(F, d_data->mu10(), d_data->mu01(), d_data->kappa(),
+                              A_mr);
+  }
+
   // Local K_elem (48 x 48)
   const int Nloc = Quadrature::N_SHAPE_3443 * 3;  // 16*3 = 48
   // Because large stack arrays can be heavy, but follow pattern from other
@@ -633,8 +640,26 @@ __device__ __forceinline__ void compute_hessian_assemble_csr<GPU_ANCF3443_Data>(
           Fh[j][0] * Fh[i][0] + Fh[j][1] * Fh[i][1] + Fh[j][2] * Fh[i][2];
 
       double Kblock[3][3];
-      svk_compute_tangent_block(Fh[i], Fh[j], h_ij, trE, Fhj_dot_Fhi, FFT,
-                               lambda, mu, dV, Kblock);
+      if (use_mr) {
+#pragma unroll
+        for (int d = 0; d < 3; d++) {
+#pragma unroll
+          for (int eidx = 0; eidx < 3; eidx++) {
+            double sum = 0.0;
+#pragma unroll
+            for (int J = 0; J < 3; J++) {
+#pragma unroll
+              for (int L = 0; L < 3; L++) {
+                sum += A_mr[d][J][eidx][L] * grad_s[i][J] * grad_s[j][L];
+              }
+            }
+            Kblock[d][eidx] = sum * dV;
+          }
+        }
+      } else {
+        svk_compute_tangent_block(Fh[i], Fh[j], h_ij, trE, Fhj_dot_Fhi, FFT,
+                                 lambda, mu, dV, Kblock);
+      }
 
       for (int d = 0; d < 3; d++) {
         for (int eidx = 0; eidx < 3; eidx++) {

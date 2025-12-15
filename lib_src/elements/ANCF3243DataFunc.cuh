@@ -525,6 +525,13 @@ __device__ __forceinline__ void compute_hessian_assemble_csr<GPU_ANCF3243_Data>(
       d_data->weight_zeta()(qp_idx % Quadrature::N_QP_2);
   double dV = scale * geom;
 
+  const bool use_mr = (d_data->material_model() == MATERIAL_MODEL_MOONEY_RIVLIN);
+  double A_mr[3][3][3][3];
+  if (use_mr) {
+    mr_compute_tangent_tensor(F, d_data->mu10(), d_data->mu01(), d_data->kappa(),
+                              A_mr);
+  }
+
   // Local K_elem 24x24
   double K_elem[24][24];
 #pragma unroll
@@ -542,8 +549,26 @@ __device__ __forceinline__ void compute_hessian_assemble_csr<GPU_ANCF3243_Data>(
           Fh[j][0] * Fh[i][0] + Fh[j][1] * Fh[i][1] + Fh[j][2] * Fh[i][2];
 
       double Kblock[3][3];
-      svk_compute_tangent_block(Fh[i], Fh[j], h_ij, trE, Fhj_dot_Fhi, FFT,
-                               lambda, mu, dV, Kblock);
+      if (use_mr) {
+#pragma unroll
+        for (int d = 0; d < 3; d++) {
+#pragma unroll
+          for (int e = 0; e < 3; e++) {
+            double sum = 0.0;
+#pragma unroll
+            for (int J = 0; J < 3; J++) {
+#pragma unroll
+              for (int L = 0; L < 3; L++) {
+                sum += A_mr[d][J][e][L] * grad_s[i][J] * grad_s[j][L];
+              }
+            }
+            Kblock[d][e] = sum * dV;
+          }
+        }
+      } else {
+        svk_compute_tangent_block(Fh[i], Fh[j], h_ij, trE, Fhj_dot_Fhi, FFT,
+                                 lambda, mu, dV, Kblock);
+      }
 
 #pragma unroll
       for (int d = 0; d < 3; d++) {
