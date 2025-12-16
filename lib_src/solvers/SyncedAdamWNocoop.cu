@@ -1,3 +1,17 @@
+/*==============================================================
+ *==============================================================
+ * Project: RoboDyna
+ * Author:  Json Zhou
+ * Email:   zzhou292@wisc.edu
+ * File:    SyncedAdamWNocoop.cu
+ * Brief:   Implements the GPU-synchronized AdamW optimizer (non-cooperative
+ *          variant) used to advance generalized velocities and positions in
+ *          RoboDyna. Defines kernels that evaluate element residuals,
+ *          constraint contributions, and apply AdamW updates for ANCF3243,
+ *          ANCF3443, and FEAT10 element data without cooperative groups.
+ *==============================================================
+ *==============================================================*/
+
 #include <algorithm>
 #include <cmath>
 #include <iomanip>

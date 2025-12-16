@@ -38,7 +38,7 @@ int main() {
   int plot_target_node;
   int n_nodes, n_elems;
 
-  MESH_RESOLUTION resolution = RES_4;
+  MESH_RESOLUTION resolution = RES_8;
 
   MATERIAL_MODEL material = MAT_SVK;
 

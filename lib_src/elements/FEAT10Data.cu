@@ -344,7 +344,7 @@ void GPU_FEAT10_Data::CalcConstraintData() {
 
 void GPU_FEAT10_Data::CalcMassMatrix() {
   if (!is_csr_setup) {
-    ConvertToCSRMass();
+    BuildMassCSRPattern();
   }
 
   int h_nnz = 0;

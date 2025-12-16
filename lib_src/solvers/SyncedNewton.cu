@@ -1,7 +1,7 @@
 /*==============================================================
  *==============================================================
  * Project: RoboDyna
- * Author:  Json Zhou
+ * Author:  Json Zhou, Ganesh Arivoli
  * Email:   zzhou292@wisc.edu
  * File:    SyncedNewton.cu
  * Brief:   Implements the GPU-synchronized Newton solver (SyncedNewton).

@@ -2,7 +2,7 @@
 /*==============================================================
  *==============================================================
  * Project: RoboDyna
- * Author:  Json Zhou
+ * Author:  Json Zhou, Ganesh Arivoli
  * Email:   zzhou292@wisc.edu
  * File:    SyncedNewton.cuh
  * Brief:   Declares the SyncedNewtonSolver class for a fully synchronized
@@ -282,6 +282,9 @@ class SyncedNewtonSolver : public SolverBase {
   }
   __device__ double solver_inner_atol() const {
     return *d_inner_atol_;
+  }
+  __device__ double solver_inner_rtol() const {
+    return *d_inner_rtol_;
   }
   __device__ double solver_outer_tol() const {
     return *d_outer_tol_;

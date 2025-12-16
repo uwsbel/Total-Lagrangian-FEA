@@ -1,3 +1,15 @@
+/*==============================================================
+ *==============================================================
+ * Project: RoboDyna
+ * Author:  Json Zhou
+ * Email:   zzhou292@wisc.edu
+ * File:    SyncedAdamWNocoop.cuh
+ * Brief:   Declares the non-cooperative GPU-synchronized AdamW solver.
+ *          Provides host/device storage and kernels to evaluate residuals and
+ *          apply AdamW updates for ANCF3243, ANCF3443, and FEAT10 element data.
+ *==============================================================
+ *==============================================================*/
+
 #pragma once
 
 #include <cublas_v2.h>

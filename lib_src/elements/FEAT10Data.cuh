@@ -321,14 +321,6 @@ struct GPU_FEAT10_Data : public ElementBase {
 
   void BuildMassCSRPattern();
 
-  void ConvertToCSRMass() {
-    BuildMassCSRPattern();
-  }
-
-  void AssembleMassMatrixCSR() {
-    CalcMassMatrix();
-  }
-
   void ConvertTOCSRConstraintJac();
 
   void BuildConstraintJacobianTransposeCSR() {

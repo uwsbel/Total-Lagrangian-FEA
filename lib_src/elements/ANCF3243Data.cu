@@ -285,7 +285,7 @@ void GPU_ANCF3243_Data::PrintDsDuPre() {
 
 void GPU_ANCF3243_Data::CalcMassMatrix() {
   if (!is_csr_setup) {
-    ConvertToCSRMass();
+    BuildMassCSRPattern();
   }
 
   int h_nnz = 0;

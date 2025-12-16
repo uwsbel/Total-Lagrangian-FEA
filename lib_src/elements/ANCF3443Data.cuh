@@ -816,14 +816,6 @@ struct GPU_ANCF3443_Data : public ElementBase {
 
   void BuildMassCSRPattern();
 
-  void ConvertToCSRMass() {
-    BuildMassCSRPattern();
-  }
-
-  void AssembleMassMatrixCSR() {
-    CalcMassMatrix();
-  }
-
   void ConvertTOCSRConstraintJac();
 
   void BuildConstraintJacobianTransposeCSR() {
