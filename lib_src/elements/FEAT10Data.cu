@@ -618,9 +618,12 @@ void GPU_FEAT10_Data::RetrieveDnDuPreToCPU(
   }
 }
 
-void GPU_FEAT10_Data::RetrieveMassMatrixToCPU(Eigen::MatrixXd &mass_matrix) {
-  mass_matrix.resize(n_coef, n_coef);
-  mass_matrix.setZero();
+void GPU_FEAT10_Data::RetrieveMassCSRToCPU(std::vector<int> &offsets,
+                                          std::vector<int> &columns,
+                                          std::vector<double> &values) {
+  offsets.assign(static_cast<size_t>(n_coef) + 1, 0);
+  columns.clear();
+  values.clear();
 
   if (!is_csr_setup) {
     return;
@@ -629,28 +632,18 @@ void GPU_FEAT10_Data::RetrieveMassMatrixToCPU(Eigen::MatrixXd &mass_matrix) {
   int h_nnz = 0;
   HANDLE_ERROR(cudaMemcpy(&h_nnz, d_nnz, sizeof(int), cudaMemcpyDeviceToHost));
 
-  std::vector<int> h_offsets(static_cast<size_t>(n_coef) + 1);
-  std::vector<int> h_columns(static_cast<size_t>(h_nnz));
-  std::vector<double> h_values(static_cast<size_t>(h_nnz));
+  columns.resize(static_cast<size_t>(h_nnz));
+  values.resize(static_cast<size_t>(h_nnz));
 
-  HANDLE_ERROR(cudaMemcpy(h_offsets.data(), d_csr_offsets,
+  HANDLE_ERROR(cudaMemcpy(offsets.data(), d_csr_offsets,
                           static_cast<size_t>(n_coef + 1) * sizeof(int),
                           cudaMemcpyDeviceToHost));
-  HANDLE_ERROR(cudaMemcpy(h_columns.data(), d_csr_columns,
+  HANDLE_ERROR(cudaMemcpy(columns.data(), d_csr_columns,
                           static_cast<size_t>(h_nnz) * sizeof(int),
                           cudaMemcpyDeviceToHost));
-  HANDLE_ERROR(cudaMemcpy(h_values.data(), d_csr_values,
+  HANDLE_ERROR(cudaMemcpy(values.data(), d_csr_values,
                           static_cast<size_t>(h_nnz) * sizeof(double),
                           cudaMemcpyDeviceToHost));
-
-  for (int i = 0; i < n_coef; ++i) {
-    const int start = h_offsets[static_cast<size_t>(i)];
-    const int end   = h_offsets[static_cast<size_t>(i) + 1];
-    for (int p = start; p < end; ++p) {
-      const int j = h_columns[static_cast<size_t>(p)];
-      mass_matrix(i, j) = h_values[static_cast<size_t>(p)];
-    }
-  }
 }
 
 void GPU_FEAT10_Data::RetrievePFromFToCPU(

@@ -6,9 +6,8 @@
  *
  * This suite validates sparse mass and constraint matrix assembly for the
  * FEAT10, ANCF3443, and ANCF3243 element data structures. It builds small
- * beam/tet meshes, compares dense mass matrices to printed output, and then
- * converts to CSR format to sanity-check the sparse layout and constraint
- * Jacobian construction.
+ * beam/tet meshes, assembles the mass matrix directly into CSR format, and
+ * sanity-checks the sparse layout and constraint Jacobian construction.
  */
 
 #include <gtest/gtest.h>
@@ -131,29 +130,6 @@ TEST_F(TestSparseMass, FEA_T10_SparseMassMatrix) {
 
   gpu_t10_data.CalcMassMatrix();
 
-  std::cout << "done CalcMassMatrix" << std::endl;
-
-  Eigen::MatrixXd mass_matrix;
-  gpu_t10_data.RetrieveMassMatrixToCPU(mass_matrix);
-
-  std::cout << "mass_matrix (size: " << mass_matrix.rows() << " x "
-            << mass_matrix.cols() << "):" << std::endl;
-
-  // print mass matrix
-  std::cout << "mass_matrix (size: " << mass_matrix.rows() << " x "
-            << mass_matrix.cols() << "):" << std::endl;
-  for (int i = 0; i < mass_matrix.rows(); ++i) {
-    for (int j = 0; j < mass_matrix.cols(); ++j) {
-      std::cout << std::setw(12) << std::setprecision(6) << std::fixed
-                << mass_matrix(i, j) << " ";
-    }
-    std::cout << std::endl;
-
-    // start converting to csr sparse format
-  }
-
-  gpu_t10_data.ConvertToCSRMass();
-
   gpu_t10_data.CalcConstraintData();
 
   gpu_t10_data.ConvertTOCSRConstraintJac();
@@ -260,23 +236,6 @@ TEST_F(TestSparseMass, ANCF_3443_SparseMassMatrix) {
 
   gpu_3443_data.CalcMassMatrix();
 
-  std::cout << "done CalcMassMatrix" << std::endl;
-
-  Eigen::MatrixXd mass_matrix;
-  gpu_3443_data.RetrieveMassMatrixToCPU(mass_matrix);
-
-  std::cout << "done RetrieveMassMatrixToCPU" << std::endl;
-
-  std::cout << "mass matrix:" << std::endl;
-  for (int i = 0; i < mass_matrix.rows(); i++) {
-    for (int j = 0; j < mass_matrix.cols(); j++) {
-      std::cout << mass_matrix(i, j) << " ";
-    }
-    std::cout << std::endl;
-  }
-
-  gpu_3443_data.ConvertToCSRMass();
-
   gpu_3443_data.CalcConstraintData();
 
   gpu_3443_data.ConvertTOCSRConstraintJac();
@@ -376,19 +335,6 @@ TEST_F(TestSparseMass, ANCF_3243_SparseMassMatrix) {
   gpu_3243_data.CalcDsDuPre();
   gpu_3243_data.PrintDsDuPre();
   gpu_3243_data.CalcMassMatrix();
-
-  Eigen::MatrixXd mass_matrix;
-  gpu_3243_data.RetrieveMassMatrixToCPU(mass_matrix);
-
-  std::cout << "mass matrix:" << std::endl;
-  for (int i = 0; i < mass_matrix.rows(); i++) {
-    for (int j = 0; j < mass_matrix.cols(); j++) {
-      std::cout << mass_matrix(i, j) << " ";
-    }
-    std::cout << std::endl;
-  }
-
-  gpu_3243_data.ConvertToCSRMass();
 
   gpu_3243_data.CalcConstraintData();
 

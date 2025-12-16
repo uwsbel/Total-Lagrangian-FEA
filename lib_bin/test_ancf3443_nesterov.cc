@@ -131,21 +131,6 @@ int main() {
 
   gpu_3443_data.CalcMassMatrix();
 
-  std::cout << "done CalcMassMatrix" << std::endl;
-
-  Eigen::MatrixXd mass_matrix;
-  gpu_3443_data.RetrieveMassMatrixToCPU(mass_matrix);
-
-  std::cout << "done RetrieveMassMatrixToCPU" << std::endl;
-
-  std::cout << "mass matrix:" << std::endl;
-  for (int i = 0; i < mass_matrix.rows(); i++) {
-    for (int j = 0; j < mass_matrix.cols(); j++) {
-      std::cout << mass_matrix(i, j) << " ";
-    }
-    std::cout << std::endl;
-  }
-
   gpu_3443_data.CalcConstraintData();
 
   std::cout << "done CalcConstraintData" << std::endl;

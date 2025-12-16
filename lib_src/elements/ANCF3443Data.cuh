@@ -439,8 +439,6 @@ struct GPU_ANCF3443_Data : public ElementBase {
 
     HANDLE_ERROR(cudaMalloc(&d_element_connectivity, n_beam * 4 * sizeof(int)));
 
-    d_node_values = nullptr;
-
     HANDLE_ERROR(cudaMalloc(
         &d_F, n_beam * Quadrature::N_TOTAL_QP_4_4_3 * 3 * 3 * sizeof(double)));
     HANDLE_ERROR(cudaMalloc(
@@ -840,7 +838,9 @@ struct GPU_ANCF3443_Data : public ElementBase {
 
   void PrintDsDuPre();
 
-  void RetrieveMassMatrixToCPU(Eigen::MatrixXd &mass_matrix);
+  void RetrieveMassCSRToCPU(std::vector<int> &offsets,
+                            std::vector<int> &columns,
+                            std::vector<double> &values);
 
   void RetrieveDeformationGradientToCPU(
       std::vector<std::vector<Eigen::MatrixXd>> &deformation_gradient);
@@ -882,8 +882,6 @@ struct GPU_ANCF3443_Data : public ElementBase {
   double *d_x12, *d_y12, *d_z12;
 
   int *d_element_connectivity;
-
-  double *d_node_values;
   int *d_csr_offsets, *d_csr_columns;
   double *d_csr_values;
   int *d_nnz;

@@ -44,7 +44,7 @@ int main() {
 
   MESH_RESOLUTION resolution = RES_16;
 
-  MATERIAL_MODEL material = MAT_MOONEY_RIVLIN;
+  MATERIAL_MODEL material = MAT_SVK;
 
   if (resolution == RES_0) {
     n_nodes = ANCFCPUUtils::FEAT10_read_nodes(
@@ -209,14 +209,6 @@ int main() {
   std::cout << "done retrieving detJ" << std::endl;
 
   gpu_t10_data.CalcMassMatrix();
-
-  std::cout << "done CalcMassMatrix" << std::endl;
-
-  // Eigen::MatrixXd mass_matrix;
-  // gpu_t10_data.RetrieveMassMatrixToCPU(mass_matrix);
-
-  // std::cout << "mass_matrix (size: " << mass_matrix.rows() << " x "
-  //           << mass_matrix.cols() << "):" << std::endl;
 
   gpu_t10_data.CalcConstraintData();
 

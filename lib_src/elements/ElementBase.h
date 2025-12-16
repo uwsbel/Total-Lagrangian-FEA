@@ -37,8 +37,6 @@ class ElementBase {
   virtual void CalcInternalForce()  = 0;
   virtual void CalcConstraintData() = 0;
   virtual void CalcP()              = 0;
-
-  virtual void RetrieveMassMatrixToCPU(Eigen::MatrixXd &mass_matrix)       = 0;
   virtual void RetrieveInternalForceToCPU(Eigen::VectorXd &internal_force) = 0;
   virtual void RetrieveConstraintDataToCPU(Eigen::VectorXd &constraint)    = 0;
   virtual void RetrieveConstraintJacobianToCPU(

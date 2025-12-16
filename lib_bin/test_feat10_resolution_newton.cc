@@ -38,7 +38,7 @@ int main() {
   int plot_target_node;
   int n_nodes, n_elems;
 
-  MESH_RESOLUTION resolution = RES_0;
+  MESH_RESOLUTION resolution = RES_16;
 
   MATERIAL_MODEL material = MAT_MOONEY_RIVLIN;
 
@@ -206,14 +206,6 @@ int main() {
 
   gpu_t10_data.CalcMassMatrix();
 
-  std::cout << "done CalcMassMatrix" << std::endl;
-
-  Eigen::MatrixXd mass_matrix;
-  gpu_t10_data.RetrieveMassMatrixToCPU(mass_matrix);
-
-  std::cout << "mass_matrix (size: " << mass_matrix.rows() << " x "
-            << mass_matrix.cols() << "):" << std::endl;
-
   gpu_t10_data.CalcConstraintData();
 
   std::cout << "done CalcConstraintData" << std::endl;
@@ -221,12 +213,6 @@ int main() {
   gpu_t10_data.ConvertTOCSRConstraintJac();
 
   std::cout << "done ConvertTOCSRConstraintJac" << std::endl;
-
-  // // Use Eigen's IOFormat for cleaner output
-  Eigen::IOFormat CleanFmt(4, 0, ", ", "\n", "[", "]");
-  std::cout << mass_matrix.format(CleanFmt) << std::endl;
-
-  std::cout << "\ndone retrieving mass_matrix" << std::endl;
 
   // calculate p
   gpu_t10_data.CalcP();

@@ -311,12 +311,10 @@ struct GPU_FEAT10_Data : public ElementBase {
     return n_constraint;
   }
 
-  // Add this missing virtual function from ElementBase:
   __host__ __device__ int get_n_beam() const override {
     return n_elem;
   }
 
-  // Core computation functions (empty implementations for now)
   void CalcDnDuPre();
 
   void CalcMassMatrix() override;
@@ -343,7 +341,9 @@ struct GPU_FEAT10_Data : public ElementBase {
 
   void CalcP() override;
 
-  void RetrieveMassMatrixToCPU(Eigen::MatrixXd &mass_matrix) override;
+  void RetrieveMassCSRToCPU(std::vector<int> &offsets,
+                            std::vector<int> &columns,
+                            std::vector<double> &values);
 
   void RetrieveInternalForceToCPU(Eigen::VectorXd &internal_force) override;
 
@@ -388,8 +388,6 @@ struct GPU_FEAT10_Data : public ElementBase {
     HANDLE_ERROR(cudaMalloc(&d_h_z12_jac, n_coef * sizeof(double)));
     HANDLE_ERROR(cudaMalloc(&d_element_connectivity,
                             n_elem * Quadrature::N_NODE_T10_10 * sizeof(int)));
-
-    d_node_values = nullptr;
 
     HANDLE_ERROR(
         cudaMalloc(&d_tet5pt_x, Quadrature::N_QP_T10_5 * sizeof(double)));
@@ -774,7 +772,6 @@ struct GPU_FEAT10_Data : public ElementBase {
   int *d_element_connectivity;  // (n_elem, 10)
 
   // Mass Matrix
-  double *d_node_values;
   // Mass Matrix in CSR format
   int *d_csr_offsets, *d_csr_columns;
   double *d_csr_values;
