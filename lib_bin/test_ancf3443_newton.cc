@@ -190,7 +190,7 @@ int main() {
     std::cout << std::endl;
   }
 
-  SyncedNewtonParams params = {1e-4, 1e-6, 1e14, 5, 10, 1e-3};
+  SyncedNewtonParams params = {1e-4, 0.0, 1e-6, 1e14, 5, 10, 1e-3};
 
   // for now, n_constraints needs to be explicitly defined
   SyncedNewtonSolver solver(&gpu_3443_data, gpu_3443_data.get_n_constraint());

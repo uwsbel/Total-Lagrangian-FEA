@@ -931,6 +931,8 @@ void SyncedNewtonSolver::OneStepNewtonCuDSS() {
     for (int outer_iter = 0; outer_iter < h_max_outer_; ++outer_iter) {
       std::cout << "Outer iter " << outer_iter << std::endl;
 
+      double norm_g0 = -1.0;
+
       for (int newton_iter = 0; newton_iter < h_max_inner_; ++newton_iter) {
         std::cout << "  Newton iter " << newton_iter << std::endl;
 
@@ -950,6 +952,20 @@ void SyncedNewtonSolver::OneStepNewtonCuDSS() {
 
         cudss_solve_compute_grad_l<<<numBlocks_grad_l, threadsPerBlock>>>(
             typed_data, d_newton_solver_);
+
+        HANDLE_ERROR(cudaDeviceSynchronize());
+        double norm_g = compute_l2_norm_cublas(d_g_, n_dofs);
+        std::cout << "    ||g|| = " << std::scientific << norm_g << std::endl;
+
+        if (norm_g0 < 0.0) {
+          norm_g0 = norm_g;
+        }
+
+        if (norm_g < h_inner_atol_ ||
+            (h_inner_rtol_ > 0.0 && norm_g0 > 0.0 &&
+             norm_g <= h_inner_rtol_ * norm_g0)) {
+          break;
+        }
 
         cudss_solve_initialize_prehess<<<numBlocks_initialize_prehess,
                                          threadsPerBlock>>>(typed_data,
@@ -987,14 +1003,6 @@ void SyncedNewtonSolver::OneStepNewtonCuDSS() {
                                      threadsPerBlock>>>(d_newton_solver_);
         cudss_solve_update_pos<<<numBlocks_update_pos, threadsPerBlock>>>(
             d_newton_solver_, typed_data);
-
-        HANDLE_ERROR(cudaDeviceSynchronize());
-        double norm_g = compute_l2_norm_cublas(d_g_, n_dofs);
-        std::cout << "    ||g|| = " << std::scientific << norm_g << std::endl;
-
-        if (norm_g < h_inner_tol_) {
-          break;
-        }
       }
 
       cudss_solve_update_v_prev<<<numBlocks_update_prev_v, threadsPerBlock>>>(
@@ -1031,6 +1039,8 @@ void SyncedNewtonSolver::OneStepNewtonCuDSS() {
     for (int outer_iter = 0; outer_iter < h_max_outer_; ++outer_iter) {
       std::cout << "Outer iter " << outer_iter << std::endl;
 
+      double norm_g0 = -1.0;
+
       for (int newton_iter = 0; newton_iter < h_max_inner_; ++newton_iter) {
         std::cout << "  Newton iter " << newton_iter << std::endl;
 
@@ -1050,6 +1060,20 @@ void SyncedNewtonSolver::OneStepNewtonCuDSS() {
 
         cudss_solve_compute_grad_l<<<numBlocks_grad_l, threadsPerBlock>>>(
             typed_data, d_newton_solver_);
+
+        HANDLE_ERROR(cudaDeviceSynchronize());
+        double norm_g = compute_l2_norm_cublas(d_g_, n_dofs);
+        std::cout << "    ||g|| = " << std::scientific << norm_g << std::endl;
+
+        if (norm_g0 < 0.0) {
+          norm_g0 = norm_g;
+        }
+
+        if (norm_g < h_inner_atol_ ||
+            (h_inner_rtol_ > 0.0 && norm_g0 > 0.0 &&
+             norm_g <= h_inner_rtol_ * norm_g0)) {
+          break;
+        }
 
         cudss_solve_initialize_prehess<<<numBlocks_initialize_prehess,
                                          threadsPerBlock>>>(typed_data,
@@ -1087,14 +1111,6 @@ void SyncedNewtonSolver::OneStepNewtonCuDSS() {
                                      threadsPerBlock>>>(d_newton_solver_);
         cudss_solve_update_pos<<<numBlocks_update_pos, threadsPerBlock>>>(
             d_newton_solver_, typed_data);
-
-        HANDLE_ERROR(cudaDeviceSynchronize());
-        double norm_g = compute_l2_norm_cublas(d_g_, n_dofs);
-        std::cout << "    ||g|| = " << std::scientific << norm_g << std::endl;
-
-        if (norm_g < h_inner_tol_) {
-          break;
-        }
       }
 
       cudss_solve_update_v_prev<<<numBlocks_update_prev_v, threadsPerBlock>>>(
@@ -1133,6 +1149,8 @@ void SyncedNewtonSolver::OneStepNewtonCuDSS() {
     for (int outer_iter = 0; outer_iter < h_max_outer_; ++outer_iter) {
       std::cout << "Outer iter " << outer_iter << std::endl;
 
+      double norm_g0 = -1.0;
+
       for (int newton_iter = 0; newton_iter < h_max_inner_; ++newton_iter) {
         std::cout << "  Newton iter " << newton_iter << std::endl;
 
@@ -1152,6 +1170,20 @@ void SyncedNewtonSolver::OneStepNewtonCuDSS() {
 
         cudss_solve_compute_grad_l<<<numBlocks_grad_l, threadsPerBlock>>>(
             typed_data, d_newton_solver_);
+
+        HANDLE_ERROR(cudaDeviceSynchronize());
+        double norm_g = compute_l2_norm_cublas(d_g_, n_dofs);
+        std::cout << "    ||g|| = " << std::scientific << norm_g << std::endl;
+
+        if (norm_g0 < 0.0) {
+          norm_g0 = norm_g;
+        }
+
+        if (norm_g < h_inner_atol_ ||
+            (h_inner_rtol_ > 0.0 && norm_g0 > 0.0 &&
+             norm_g <= h_inner_rtol_ * norm_g0)) {
+          break;
+        }
 
         cudss_solve_initialize_prehess<<<numBlocks_initialize_prehess,
                                          threadsPerBlock>>>(typed_data,
@@ -1189,14 +1221,6 @@ void SyncedNewtonSolver::OneStepNewtonCuDSS() {
                                      threadsPerBlock>>>(d_newton_solver_);
         cudss_solve_update_pos<<<numBlocks_update_pos, threadsPerBlock>>>(
             d_newton_solver_, typed_data);
-
-        HANDLE_ERROR(cudaDeviceSynchronize());
-        double norm_g = compute_l2_norm_cublas(d_g_, n_dofs);
-        std::cout << "    ||g|| = " << std::scientific << norm_g << std::endl;
-
-        if (norm_g < h_inner_tol_) {
-          break;
-        }
       }
 
       cudss_solve_update_v_prev<<<numBlocks_update_prev_v, threadsPerBlock>>>(

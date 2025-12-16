@@ -38,9 +38,9 @@ int main() {
   int plot_target_node;
   int n_nodes, n_elems;
 
-  MESH_RESOLUTION resolution = RES_16;
+  MESH_RESOLUTION resolution = RES_4;
 
-  MATERIAL_MODEL material = MAT_MOONEY_RIVLIN;
+  MATERIAL_MODEL material = MAT_SVK;
 
   if (resolution == RES_0) {
     n_nodes = ANCFCPUUtils::FEAT10_read_nodes(
@@ -245,7 +245,7 @@ int main() {
   std::cout << f_int.transpose() << std::endl;
   std::cout << "done retrieving internal force vector" << std::endl;
 
-  SyncedNewtonParams params = {1e-2, 1e-6, 1e14, 5, 10, 1e-3};
+  SyncedNewtonParams params = {1e-4, 1e-4, 1e-4, 1e14, 5, 10, 1e-3};
   SyncedNewtonSolver solver(&gpu_t10_data, gpu_t10_data.get_n_constraint());
   solver.Setup();
   solver.SetParameters(&params);
