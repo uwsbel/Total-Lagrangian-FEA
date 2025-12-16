@@ -912,14 +912,14 @@ void SyncedNewtonSolver::OneStepNewtonCuDSS() {
   CUDSS_OK(cudssMatrixCreateDn(&dssX, n_dofs, 1, n_dofs, d_delta_v_, CUDA_R_64F,
                                CUDSS_LAYOUT_COL_MAJOR));
 
+  HANDLE_ERROR(cudaEventRecord(start)); 
+  
   // Only run analysis if needed
   if (!analysis_done_ || !fixed_sparsity_pattern_) {
     CUDSS_OK(cudssExecute(cudss_handle_, CUDSS_PHASE_ANALYSIS, cudss_config_,
                           cudss_data_, dssA, dssX, dssB));
     analysis_done_ = true;
   }
-
-  HANDLE_ERROR(cudaEventRecord(start));
 
   // Dispatch based on element type
   if (type_ == TYPE_T10) {
