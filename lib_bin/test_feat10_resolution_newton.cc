@@ -272,6 +272,7 @@ int main() {
   std::vector<double> node_x_history;
 
   solver.AnalyzeHessianSparsity();
+  solver.SetFixedSparsityPattern(true);  // Enable analysis reuse for fixed structure
 
   for (int i = 0; i < 50; i++) {
     // solver.Solve();

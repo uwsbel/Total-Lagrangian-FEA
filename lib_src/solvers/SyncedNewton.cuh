@@ -44,7 +44,9 @@ class SyncedNewtonSolver : public SolverBase {
         d_csr_col_indices_(nullptr),
         d_csr_values_(nullptr),
         d_col_bitset_(nullptr),
-        d_nnz_per_row_(nullptr) {
+        d_nnz_per_row_(nullptr),
+        fixed_sparsity_pattern_(false),
+        analysis_done_(false) {
     // Type-based casting to get the correct d_data from derived class
     if (data->type == TYPE_3243) {
       type_            = TYPE_3243;
@@ -340,6 +342,10 @@ class SyncedNewtonSolver : public SolverBase {
     OneStepNewtonCuDSS();
   }
 
+  void SetFixedSparsityPattern(bool fixed) {
+    fixed_sparsity_pattern_ = fixed;
+  }
+
   double compute_l2_norm_cublas(double *d_vec, int n_dofs);
   void AnalyzeHessianSparsity();
 
@@ -381,4 +387,8 @@ class SyncedNewtonSolver : public SolverBase {
   cudssConfig_t cudss_config_;
   cudssData_t cudss_data_;
   double *d_norm_temp_;  // Reusable temp for cuBLAS norms
+
+  // Analysis reuse flags
+  bool fixed_sparsity_pattern_;  // User-set flag: if true, matrix structure is fixed
+  bool analysis_done_;           // Internal state: tracks if analysis has been performed
 };
