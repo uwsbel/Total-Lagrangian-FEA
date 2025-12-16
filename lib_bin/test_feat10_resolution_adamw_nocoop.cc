@@ -1,26 +1,30 @@
 /**
- * FEAT10 Beam Resolution Study (Newton)
+ * FEAT10 Beam Resolution Study (AdamW)
  *
  * Author: Json Zhou
  * Email:  zzhou292@wisc.edu
  *
- * This driver mirrors the FEAT10 AdamW resolution study but advances the
- * cantilever beam using the synchronized Newton solver. It varies mesh
- * resolution, applies distributed end loads, performs Hessian analysis, and
- * records the displacement history of a target node to CSV to compare
- * Newton-based dynamics across resolutions.
+ * This driver runs a cantilever FEAT10 beam at multiple mesh resolutions
+ * (RES_0, RES_2, RES_4, RES_8, RES_16) using the synchronized AdamW solver.
+ * It applies distributed end loads, tracks the displacement of a selected
+ * node over time, and writes its motion to CSV for mesh-convergence
+ * analysis.
  */
 
 #include <cuda_runtime.h>
 
 #include <Eigen/Dense>
+#include <cmath>
+#include <cstdlib>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <string>
+#include <vector>
 
 #include "../../lib_utils/quadrature_utils.h"
 #include "../lib_src/elements/FEAT10Data.cuh"
-#include "../lib_src/solvers/SyncedNewton.cuh"
+#include "../lib_src/solvers/SyncedAdamWNocoop.cuh"
 #include "../lib_utils/cpu_utils.h"
 
 const double E    = 7e8;   // Young's modulus
@@ -38,7 +42,7 @@ int main() {
   int plot_target_node;
   int n_nodes, n_elems;
 
-  MESH_RESOLUTION resolution = RES_8;
+  MESH_RESOLUTION resolution = RES_16;
 
   MATERIAL_MODEL material = MAT_SVK;
 
@@ -245,20 +249,31 @@ int main() {
   std::cout << f_int.transpose() << std::endl;
   std::cout << "done retrieving internal force vector" << std::endl;
 
-  SyncedNewtonParams params = {1e-4, 1e-4, 1e-4, 1e14, 5, 10, 1e-3};
-  SyncedNewtonSolver solver(&gpu_t10_data, gpu_t10_data.get_n_constraint());
+  SyncedAdamWNocoopParams params = {2e-4, 0.9,  0.999, 1e-8, 1e-4, 0.995, 1e-1,
+                                    1e-6, 1e14, 5,     800,  1e-3, 20};
+  SyncedAdamWNocoopSolver solver(&gpu_t10_data,
+                                 gpu_t10_data.get_n_constraint());
   solver.Setup();
   solver.SetParameters(&params);
 
   // Vector to store x position of node 353 at each step
   std::vector<double> node_x_history;
 
-  solver.AnalyzeHessianSparsity();
-  solver.SetFixedSparsityPattern(true);  // Enable analysis reuse for fixed structure
+  std::string csv_dir = ".";
+  if (const char* d = std::getenv("TEST_UNDECLARED_OUTPUTS_DIR")) {
+    csv_dir = d;
+  } else if (const char* d = std::getenv("BUILD_WORKSPACE_DIRECTORY")) {
+    csv_dir = d;
+  }
+
+  const std::string csv_path = csv_dir + "/node_x_history_nocoop.csv";
+  std::ofstream csv_file(csv_path);
+  csv_file << std::fixed << std::setprecision(17);
+  csv_file << "step,x_position\n";
 
   for (int i = 0; i < 50; i++) {
-    // solver.Solve();
     solver.Solve();
+
     // Retrieve current positions
     Eigen::VectorXd x12_current, y12_current, z12_current;
     gpu_t10_data.RetrievePositionToCPU(x12_current, y12_current, z12_current);
@@ -267,19 +282,15 @@ int main() {
       node_x_history.push_back(x12_current(plot_target_node));
       std::cout << "Step " << i << ": node " << plot_target_node
                 << " x = " << x12_current(plot_target_node) << std::endl;
+
+      csv_file << i << "," << x12_current(plot_target_node) << "\n";
+      csv_file.flush();
     }
   }
 
-  // Write to CSV file
-  std::ofstream csv_file("node_x_history.csv");
-  csv_file << std::fixed << std::setprecision(17);
-  csv_file << "step,x_position\n";
-  for (size_t i = 0; i < node_x_history.size(); i++) {
-    csv_file << i << "," << node_x_history[i] << "\n";
-  }
   csv_file.close();
-  std::cout << "Wrote node " << plot_target_node
-            << " x-position history to node_x_history.csv" << std::endl;
+  std::cout << "Wrote node " << plot_target_node << " x-position history to "
+            << csv_path << std::endl;
 
   // // Set highest precision for cout
   std::cout << std::fixed << std::setprecision(17);

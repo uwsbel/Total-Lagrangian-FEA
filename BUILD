@@ -207,6 +207,29 @@ cuda_library(
 )
 
 cuda_library(
+    name = "solvers_syncedadamwnocoop",
+    srcs = [
+        "lib_src/solvers/SyncedAdamWNocoop.cu",
+    ],
+    hdrs = [
+        "lib_src/solvers/SolverBase.h",
+        "lib_src/solvers/SyncedAdamW.cuh",
+        "lib_src/solvers/SyncedAdamWNocoop.cuh",
+    ],
+    copts = ["--std=c++17", "-O3", "--use_fast_math", "--extra-device-vectorization"],
+    linkopts = ["-lcublas"],
+    deps = [
+        ":ANCF3243Data",
+        ":ANCF3443Data",
+        ":FEAT10Data",
+        ":cuda_utils",
+        ":cpu_utils",
+        "@eigen//:eigen",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+cuda_library(
     name = "solvers_syncednewton",
     srcs = [
         "lib_src/solvers/SyncedNewton.cu",
@@ -389,6 +412,26 @@ cc_binary(
         ":cpu_utils",
         ":solvers_syncednesterov",
         ":solvers_syncedadamw",
+        ":solvers_syncednewton",
+        "@eigen//:eigen",
+    ],
+)
+
+cc_binary(
+    name = "test_feat10_resolution_adamw_nocoop",
+    srcs = ["lib_bin/test_feat10_resolution_adamw_nocoop.cc"],
+    copts = ["--std=c++17"],
+    linkopts = [
+        "-L/usr/local/cuda/lib64",
+        "-lcusparse",
+        "-lcudart",
+        "-lcublas",
+    ],
+    deps = [
+        ":FEAT10Data",
+        ":cpu_utils",
+        ":solvers_syncednesterov",
+        ":solvers_syncedadamwnocoop",
         ":solvers_syncednewton",
         "@eigen//:eigen",
     ],

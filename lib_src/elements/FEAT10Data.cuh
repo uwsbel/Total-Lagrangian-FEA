@@ -272,14 +272,6 @@ struct GPU_FEAT10_Data : public ElementBase {
 
   // ======================================================
 
-  __device__ Eigen::Map<Eigen::MatrixXd> node_values() {
-    return Eigen::Map<Eigen::MatrixXd>(d_node_values, n_coef, n_coef);
-  }
-
-  __device__ double *node_values(int i, int j) {
-    return d_node_values + j + i * n_coef;
-  }
-
   __device__ int *csr_offsets() {
     return d_csr_offsets;
   }
@@ -319,19 +311,21 @@ struct GPU_FEAT10_Data : public ElementBase {
     return n_constraint;
   }
 
-  // Add this missing virtual function from ElementBase:
   __host__ __device__ int get_n_beam() const override {
     return n_elem;
   }
 
-  // Core computation functions (empty implementations for now)
   void CalcDnDuPre();
 
   void CalcMassMatrix() override;
 
-  void ConvertToCSRMass();
+  void BuildMassCSRPattern();
 
   void ConvertTOCSRConstraintJac();
+
+  void BuildConstraintJacobianTransposeCSR() {
+    ConvertTOCSRConstraintJac();
+  }
 
   void CalcInternalForce() override;
 
@@ -339,7 +333,9 @@ struct GPU_FEAT10_Data : public ElementBase {
 
   void CalcP() override;
 
-  void RetrieveMassMatrixToCPU(Eigen::MatrixXd &mass_matrix) override;
+  void RetrieveMassCSRToCPU(std::vector<int> &offsets,
+                            std::vector<int> &columns,
+                            std::vector<double> &values);
 
   void RetrieveInternalForceToCPU(Eigen::VectorXd &internal_force) override;
 
@@ -384,8 +380,6 @@ struct GPU_FEAT10_Data : public ElementBase {
     HANDLE_ERROR(cudaMalloc(&d_h_z12_jac, n_coef * sizeof(double)));
     HANDLE_ERROR(cudaMalloc(&d_element_connectivity,
                             n_elem * Quadrature::N_NODE_T10_10 * sizeof(int)));
-
-    HANDLE_ERROR(cudaMalloc(&d_node_values, n_coef * n_coef * sizeof(double)));
 
     HANDLE_ERROR(
         cudaMalloc(&d_tet5pt_x, Quadrature::N_QP_T10_5 * sizeof(double)));
@@ -476,9 +470,6 @@ struct GPU_FEAT10_Data : public ElementBase {
                    n_elem * Quadrature::N_QP_T10_5 * 10 * 3 * sizeof(double)));
     HANDLE_ERROR(cudaMemset(d_detJ_ref, 0,
                             n_elem * Quadrature::N_QP_T10_5 * sizeof(double)));
-
-    HANDLE_ERROR(
-        cudaMemset(d_node_values, 0, n_coef * n_coef * sizeof(double)));
 
     cudaMemset(d_f_int, 0, n_coef * 3 * sizeof(double));
 
@@ -699,7 +690,6 @@ struct GPU_FEAT10_Data : public ElementBase {
     HANDLE_ERROR(cudaFree(d_h_z12_jac));
 
     HANDLE_ERROR(cudaFree(d_element_connectivity));
-    HANDLE_ERROR(cudaFree(d_node_values));
 
     if (is_csr_setup) {
       HANDLE_ERROR(cudaFree(d_csr_offsets));
@@ -774,7 +764,6 @@ struct GPU_FEAT10_Data : public ElementBase {
   int *d_element_connectivity;  // (n_elem, 10)
 
   // Mass Matrix
-  double *d_node_values;
   // Mass Matrix in CSR format
   int *d_csr_offsets, *d_csr_columns;
   double *d_csr_values;

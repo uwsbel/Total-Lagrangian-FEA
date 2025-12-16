@@ -280,82 +280,92 @@ __device__ __forceinline__ void compute_p(int elem_idx, int qp_idx,
         }
     }
 
-          // Precompute Ft (transpose of F) for later use in viscous terms
-          double Ft[3][3];
-          #pragma unroll
-          for (int i = 0; i < 3; ++i)
-            #pragma unroll
-            for (int j = 0; j < 3; ++j)
-              Ft[i][j] = d_data->F(elem_idx, qp_idx)(j, i);
+    // Precompute Ft (transpose of F) for reuse in viscous and elastic terms
+    double Ft[3][3];
+    #pragma unroll
+    for (int i = 0; i < 3; ++i)
+      #pragma unroll
+      for (int j = 0; j < 3; ++j)
+        Ft[i][j] = d_data->F(elem_idx, qp_idx)(j, i);
 
-          // Compute Fdot = sum_i v_i ⊗ ∇s_i
-          double Fdot[3][3] = {{0.0}};
-          #pragma unroll
-          for (int i = 0; i < Quadrature::N_SHAPE_3443; i++) {
-            double v_i[3] = {0.0, 0.0, 0.0};
-            int node_local = i / 4;
-            int dof_local  = i % 4;
-            int node_global = d_data->element_connectivity()(elem_idx, node_local);
-            int coef_idx = node_global * 4 + dof_local;
-            if (v_guess != nullptr) {
+          double eta = d_data->eta_damp();
+          double lambda_d = d_data->lambda_damp();
+          const bool do_damp = (v_guess != nullptr) && (eta != 0.0 || lambda_d != 0.0);
+          double P_vis[3][3] = {{0.0}};
+
+          if (do_damp) {
+            // Compute Fdot = sum_i v_i ⊗ ∇s_i
+            double Fdot[3][3] = {{0.0}};
+            #pragma unroll
+            for (int i = 0; i < Quadrature::N_SHAPE_3443; i++) {
+              double v_i[3] = {0.0, 0.0, 0.0};
+              int node_local = i / 4;
+              int dof_local  = i % 4;
+              int node_global = d_data->element_connectivity()(elem_idx, node_local);
+              int coef_idx = node_global * 4 + dof_local;
               v_i[0] = v_guess[coef_idx * 3 + 0];
               v_i[1] = v_guess[coef_idx * 3 + 1];
               v_i[2] = v_guess[coef_idx * 3 + 2];
+              #pragma unroll
+              for (int row = 0; row < 3; row++) {
+                #pragma unroll
+                for (int col = 0; col < 3; col++) {
+                  // grad_s not in scope here; read from precomputed ds_du_pre
+                  double grad_si_col = d_data->ds_du_pre(qp_idx)(i, col);
+                  Fdot[row][col] += v_i[row] * grad_si_col;
+                }
+              }
+            }
+
+            // Edot = 0.5*(Fdot^T * F + F^T * Fdot)
+            double FdotT_F[3][3] = {{0.0}};
+            double Ft_Fdot[3][3] = {{0.0}};
+            #pragma unroll
+            for (int i = 0; i < 3; i++) {
+              for (int j = 0; j < 3; j++) {
+                for (int k = 0; k < 3; k++) {
+                  FdotT_F[i][j] += Fdot[k][i] * d_data->F(elem_idx, qp_idx)(k, j);
+                  Ft_Fdot[i][j] += Ft[i][k] * Fdot[k][j];
+                }
+              }
+            }
+            double Edot[3][3] = {{0.0}};
+            #pragma unroll
+            for (int i = 0; i < 3; i++)
+              for (int j = 0; j < 3; j++)
+                Edot[i][j] = 0.5 * (FdotT_F[i][j] + Ft_Fdot[i][j]);
+
+            double trEdot = Edot[0][0] + Edot[1][1] + Edot[2][2];
+            double S_vis[3][3] = {{0.0}};
+            #pragma unroll
+            for (int i = 0; i < 3; i++) {
+              for (int j = 0; j < 3; j++) {
+                S_vis[i][j] = 2.0 * eta * Edot[i][j] +
+                              lambda_d * trEdot * (i == j ? 1.0 : 0.0);
+              }
             }
             #pragma unroll
-            for (int row = 0; row < 3; row++) {
-              #pragma unroll
-              for (int col = 0; col < 3; col++) {
-                // grad_s not in scope here; read from precomputed ds_du_pre
-                double grad_si_col = d_data->ds_du_pre(qp_idx)(i, col);
-                Fdot[row][col] += v_i[row] * grad_si_col;
+            for (int i = 0; i < 3; i++) {
+              for (int j = 0; j < 3; j++) {
+                for (int k = 0; k < 3; k++) {
+                  P_vis[i][j] += d_data->F(elem_idx, qp_idx)(i, k) * S_vis[k][j];
+                }
               }
             }
-          }
-
-          // Edot = 0.5*(Fdot^T * F + F^T * Fdot)
-          double FdotT_F[3][3] = {{0.0}};
-          double Ft_Fdot[3][3] = {{0.0}};
-          // reuse Ft declared earlier (transpose of F)
-          #pragma unroll
-          for (int i = 0; i < 3; i++) for (int j = 0; j < 3; j++) Ft[i][j] = d_data->F(elem_idx, qp_idx)(j, i);
-          #pragma unroll
-          for (int i = 0; i < 3; i++) {
-            for (int j = 0; j < 3; j++) {
-              for (int k = 0; k < 3; k++) {
-                FdotT_F[i][j] += Fdot[k][i] * d_data->F(elem_idx, qp_idx)(k, j);
-                Ft_Fdot[i][j] += Ft[i][k] * Fdot[k][j];
+            // store Fdot and P_vis
+            #pragma unroll
+            for (int i = 0; i < 3; i++)
+              for (int j = 0; j < 3; j++) {
+                d_data->Fdot(elem_idx, qp_idx)(i, j) = Fdot[i][j];
+                d_data->P_vis(elem_idx, qp_idx)(i, j) = P_vis[i][j];
               }
-            }
-          }
-          double Edot[3][3] = {{0.0}};
-          #pragma unroll
-          for (int i = 0; i < 3; i++) for (int j = 0; j < 3; j++) Edot[i][j] = 0.5 * (FdotT_F[i][j] + Ft_Fdot[i][j]);
-
-          double trEdot = Edot[0][0] + Edot[1][1] + Edot[2][2];
-          double eta = d_data->eta_damp();
-          double lambda_d = d_data->lambda_damp();
-          double S_vis[3][3] = {{0.0}};
-          #pragma unroll
-          for (int i = 0; i < 3; i++) {
-            for (int j = 0; j < 3; j++) {
-              S_vis[i][j] = 2.0 * eta * Edot[i][j] + lambda_d * trEdot * (i == j ? 1.0 : 0.0);
-            }
-          }
-          double P_vis[3][3] = {{0.0}};
-          #pragma unroll
-          for (int i = 0; i < 3; i++) {
-            for (int j = 0; j < 3; j++) {
-              for (int k = 0; k < 3; k++) {
-                P_vis[i][j] += d_data->F(elem_idx, qp_idx)(i, k) * S_vis[k][j];
+          } else {
+            #pragma unroll
+            for (int i = 0; i < 3; i++)
+              for (int j = 0; j < 3; j++) {
+                d_data->Fdot(elem_idx, qp_idx)(i, j) = 0.0;
+                d_data->P_vis(elem_idx, qp_idx)(i, j) = 0.0;
               }
-            }
-          }
-          // store Fdot and P_vis
-          #pragma unroll
-          for (int i = 0; i < 3; i++) for (int j = 0; j < 3; j++) {
-            d_data->Fdot(elem_idx, qp_idx)(i, j) = Fdot[i][j];
-            d_data->P_vis(elem_idx, qp_idx)(i, j) = P_vis[i][j];
           }
 
     double FtF[3][3] = {0.0};
@@ -709,6 +719,12 @@ __device__ __forceinline__ void compute_hessian_assemble_csr<GPU_ANCF3443_Data>(
     }
   }
 
+  double eta_d_3443    = d_data->eta_damp();
+  double lambda_d_3443 = d_data->lambda_damp();
+  if (eta_d_3443 == 0.0 && lambda_d_3443 == 0.0) {
+    return;
+  }
+
   // --- Viscous tangent (Kelvin-Voigt) assembly: C_elem (Nloc*3 x Nloc*3) ---
   const int Nloc3443 = Quadrature::N_SHAPE_3443;  // typically 16
   const int Ndof3443 = Nloc3443 * 3;              // 48
@@ -717,9 +733,6 @@ __device__ __forceinline__ void compute_hessian_assemble_csr<GPU_ANCF3443_Data>(
   for (int ii = 0; ii < Ndof3443; ii++)
     for (int jj = 0; jj < Ndof3443; jj++)
       C_elem_3443[ii][jj] = 0.0;
-
-  double eta_d_3443    = d_data->eta_damp();
-  double lambda_d_3443 = d_data->lambda_damp();
 
 #pragma unroll
   for (int a = 0; a < Nloc3443; a++) {

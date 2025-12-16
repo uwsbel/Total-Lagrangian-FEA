@@ -76,12 +76,27 @@ TEST(Test3243, MassMatrix2Beams) {
   gpu_3243_data.CalcDsDuPre();
   gpu_3243_data.CalcMassMatrix();
 
-  Eigen::MatrixXd computed_mass_matrix;
-  gpu_3243_data.RetrieveMassMatrixToCPU(computed_mass_matrix);
-
   Eigen::MatrixXd expected_mass_matrix;
   std::string csv_filepath = "data/utest/mass_matrix_2_beam.csv";
   ASSERT_TRUE(CSVUtils::loadMatrixCSV(expected_mass_matrix, csv_filepath));
+
+  std::vector<int> offsets;
+  std::vector<int> columns;
+  std::vector<double> values;
+  gpu_3243_data.RetrieveMassCSRToCPU(offsets, columns, values);
+
+  Eigen::MatrixXd computed_mass_matrix(expected_mass_matrix.rows(),
+                                       expected_mass_matrix.cols());
+  computed_mass_matrix.setZero();
+
+  for (int i = 0; i < gpu_3243_data.get_n_coef(); ++i) {
+    const int start = offsets[static_cast<size_t>(i)];
+    const int end   = offsets[static_cast<size_t>(i) + 1];
+    for (int p = start; p < end; ++p) {
+      const int j = columns[static_cast<size_t>(p)];
+      computed_mass_matrix(i, j) = values[static_cast<size_t>(p)];
+    }
+  }
 
   ASSERT_EQ(computed_mass_matrix.rows(), expected_mass_matrix.rows());
   ASSERT_EQ(computed_mass_matrix.cols(), expected_mass_matrix.cols());
@@ -100,9 +115,6 @@ TEST(Test3243, MassMatrix2Beams) {
   Eigen::MatrixXd diff =
       computed_mass_matrix - computed_mass_matrix.transpose();
   EXPECT_LT(diff.norm(), tolerance);
-
-  // TODO: in the end we will just use sparse, no more dense mass matrix
-  gpu_3243_data.ConvertToCSRMass();
 
   gpu_3243_data.Destroy();
 }
@@ -152,12 +164,27 @@ TEST(Test3243, MassMatrix3Beams) {
   gpu_3243_data.CalcDsDuPre();
   gpu_3243_data.CalcMassMatrix();
 
-  Eigen::MatrixXd computed_mass_matrix;
-  gpu_3243_data.RetrieveMassMatrixToCPU(computed_mass_matrix);
-
   Eigen::MatrixXd expected_mass_matrix;
   std::string csv_filepath = "data/utest/mass_matrix_3_beam.csv";
   ASSERT_TRUE(CSVUtils::loadMatrixCSV(expected_mass_matrix, csv_filepath));
+
+  std::vector<int> offsets;
+  std::vector<int> columns;
+  std::vector<double> values;
+  gpu_3243_data.RetrieveMassCSRToCPU(offsets, columns, values);
+
+  Eigen::MatrixXd computed_mass_matrix(expected_mass_matrix.rows(),
+                                       expected_mass_matrix.cols());
+  computed_mass_matrix.setZero();
+
+  for (int i = 0; i < gpu_3243_data.get_n_coef(); ++i) {
+    const int start = offsets[static_cast<size_t>(i)];
+    const int end   = offsets[static_cast<size_t>(i) + 1];
+    for (int p = start; p < end; ++p) {
+      const int j = columns[static_cast<size_t>(p)];
+      computed_mass_matrix(i, j) = values[static_cast<size_t>(p)];
+    }
+  }
 
   ASSERT_EQ(computed_mass_matrix.rows(), expected_mass_matrix.rows());
   ASSERT_EQ(computed_mass_matrix.cols(), expected_mass_matrix.cols());

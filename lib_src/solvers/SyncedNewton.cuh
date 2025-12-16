@@ -2,7 +2,7 @@
 /*==============================================================
  *==============================================================
  * Project: RoboDyna
- * Author:  Json Zhou
+ * Author:  Json Zhou, Ganesh Arivoli
  * Email:   zzhou292@wisc.edu
  * File:    SyncedNewton.cuh
  * Brief:   Declares the SyncedNewtonSolver class for a fully synchronized
@@ -27,7 +27,7 @@
 // Fully synced, computes full gradient and Hessian per iteration
 
 struct SyncedNewtonParams {
-  double inner_tol, outer_tol, rho;
+  double inner_atol, inner_rtol, outer_tol, rho;
   int max_outer, max_inner;
   double time_step;
 };
@@ -44,7 +44,9 @@ class SyncedNewtonSolver : public SolverBase {
         d_csr_col_indices_(nullptr),
         d_csr_values_(nullptr),
         d_col_bitset_(nullptr),
-        d_nnz_per_row_(nullptr) {
+        d_nnz_per_row_(nullptr),
+        fixed_sparsity_pattern_(false),
+        analysis_done_(false) {
     // Type-based casting to get the correct d_data from derived class
     if (data->type == TYPE_3243) {
       type_            = TYPE_3243;
@@ -82,8 +84,9 @@ class SyncedNewtonSolver : public SolverBase {
     cudaMalloc(&d_norm_g_, sizeof(double));
     cudaMalloc(&d_inner_flag_, sizeof(int));
     cudaMalloc(&d_outer_flag_, sizeof(int));
-    cudaMalloc(&d_inner_tol_, sizeof(double));
+    cudaMalloc(&d_inner_atol_, sizeof(double));
     cudaMalloc(&d_outer_tol_, sizeof(double));
+    cudaMalloc(&d_inner_rtol_, sizeof(double));
     cudaMalloc(&d_max_outer_, sizeof(int));
     cudaMalloc(&d_max_inner_, sizeof(int));
     cudaMalloc(&d_time_step_, sizeof(double));
@@ -150,8 +153,9 @@ class SyncedNewtonSolver : public SolverBase {
     cudaFree(d_norm_g_);
     cudaFree(d_inner_flag_);
     cudaFree(d_outer_flag_);
-    cudaFree(d_inner_tol_);
+    cudaFree(d_inner_atol_);
     cudaFree(d_outer_tol_);
+    cudaFree(d_inner_rtol_);
     cudaFree(d_max_outer_);
     cudaFree(d_max_inner_);
     cudaFree(d_time_step_);
@@ -198,13 +202,16 @@ class SyncedNewtonSolver : public SolverBase {
   void SetParameters(void *params) override {
     SyncedNewtonParams *p = static_cast<SyncedNewtonParams *>(params);
 
-    h_inner_tol_ = p->inner_tol;
+    h_inner_atol_ = p->inner_atol;
+    h_inner_rtol_ = p->inner_rtol;
     h_outer_tol_ = p->outer_tol;
 
     h_max_outer_ = p->max_outer;
     h_max_inner_ = p->max_inner;
 
-    cudaMemcpy(d_inner_tol_, &p->inner_tol, sizeof(double),
+    cudaMemcpy(d_inner_atol_, &p->inner_atol, sizeof(double),
+               cudaMemcpyHostToDevice);
+    cudaMemcpy(d_inner_rtol_, &p->inner_rtol, sizeof(double),
                cudaMemcpyHostToDevice);
     cudaMemcpy(d_outer_tol_, &p->outer_tol, sizeof(double),
                cudaMemcpyHostToDevice);
@@ -215,13 +222,6 @@ class SyncedNewtonSolver : public SolverBase {
     cudaMemcpy(d_time_step_, &p->time_step, sizeof(double),
                cudaMemcpyHostToDevice);
     cudaMemcpy(d_solver_rho_, &p->rho, sizeof(double), cudaMemcpyHostToDevice);
-
-    cudaMemset(d_delta_v_, 0, n_coef_ * 3 * sizeof(double));
-    cudaMemset(d_r_, 0, n_coef_ * 3 * sizeof(double));
-
-    cudaMemset(d_v_guess_, 0, n_coef_ * 3 * sizeof(double));
-    cudaMemset(d_v_prev_, 0, n_coef_ * 3 * sizeof(double));
-    cudaMemset(d_lambda_guess_, 0, n_constraints_ * sizeof(double));
   }
 
   void Setup() {
@@ -280,8 +280,11 @@ class SyncedNewtonSolver : public SolverBase {
   __device__ double *solver_rho() {
     return d_solver_rho_;
   }
-  __device__ double solver_inner_tol() const {
-    return *d_inner_tol_;
+  __device__ double solver_inner_atol() const {
+    return *d_inner_atol_;
+  }
+  __device__ double solver_inner_rtol() const {
+    return *d_inner_rtol_;
   }
   __device__ double solver_outer_tol() const {
     return *d_outer_tol_;
@@ -340,6 +343,10 @@ class SyncedNewtonSolver : public SolverBase {
     OneStepNewtonCuDSS();
   }
 
+  void SetFixedSparsityPattern(bool fixed) {
+    fixed_sparsity_pattern_ = fixed;
+  }
+
   double compute_l2_norm_cublas(double *d_vec, int n_dofs);
   void AnalyzeHessianSparsity();
 
@@ -356,8 +363,9 @@ class SyncedNewtonSolver : public SolverBase {
   double *d_lambda_guess_, *d_g_, *d_dv_;
   double *d_norm_g_;
   int *d_inner_flag_, *d_outer_flag_;
-  double *d_inner_tol_, *d_outer_tol_, *d_time_step_, *d_solver_rho_;
-  double h_inner_tol_, h_outer_tol_;
+  double *d_inner_atol_, *d_inner_rtol_, *d_outer_tol_, *d_time_step_,
+      *d_solver_rho_;
+  double h_inner_atol_, h_outer_tol_, h_inner_rtol_;
   int h_max_outer_, h_max_inner_;
   int *d_max_inner_, *d_max_outer_;
   double *d_delta_v_, *d_r_;
@@ -381,4 +389,8 @@ class SyncedNewtonSolver : public SolverBase {
   cudssConfig_t cudss_config_;
   cudssData_t cudss_data_;
   double *d_norm_temp_;  // Reusable temp for cuBLAS norms
+
+  // Analysis reuse flags
+  bool fixed_sparsity_pattern_;  // User-set flag: if true, matrix structure is fixed
+  bool analysis_done_;           // Internal state: tracks if analysis has been performed
 };

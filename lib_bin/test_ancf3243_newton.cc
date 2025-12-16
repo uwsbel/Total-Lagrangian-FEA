@@ -126,22 +126,6 @@ int main() {
   gpu_3243_data.PrintDsDuPre();
   gpu_3243_data.CalcMassMatrix();
 
-  Eigen::MatrixXd mass_matrix;
-  gpu_3243_data.RetrieveMassMatrixToCPU(mass_matrix);
-
-  std::cout << "mass matrix:" << std::endl;
-  for (int i = 0; i < mass_matrix.rows(); i++) {
-    for (int j = 0; j < mass_matrix.cols(); j++) {
-      std::cout << std::setw(10) << std::setprecision(3) << mass_matrix(i, j)
-                << " ";
-    }
-    std::cout << std::endl;
-  }
-
-  gpu_3243_data.ConvertToCSRMass();
-
-  std::cout << "done ConvertToCSRMass" << std::endl;
-
   gpu_3243_data.CalcConstraintData();
 
   std::cout << "done CalcConstraintData" << std::endl;
@@ -203,7 +187,7 @@ int main() {
     std::cout << std::endl;
   }
 
-  SyncedNewtonParams params = {1e-4, 1e-6, 1e14, 5, 10, 1e-3};
+  SyncedNewtonParams params = {1e-4, 0.0, 1e-6, 1e14, 5, 10, 1e-3};
 
   // for now, n_constraints needs to be explicitly defined
   SyncedNewtonSolver solver(&gpu_3243_data, gpu_3243_data.get_n_constraint());
