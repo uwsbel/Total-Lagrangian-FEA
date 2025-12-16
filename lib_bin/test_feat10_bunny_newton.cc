@@ -200,6 +200,7 @@ int main() {
   solver.SetParameters(&params);
 
   solver.AnalyzeHessianSparsity();
+  solver.SetFixedSparsityPattern(true);  // Enable analysis reuse for fixed structure
 
   int output_interval = 10;  // 10 vtk per seconds
   int output_frame    = 0;
