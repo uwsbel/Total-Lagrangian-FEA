@@ -13,6 +13,8 @@
  *==============================================================*/
 
 #include "ANCF3443Data.cuh"
+#include "../materials/SVK.cuh"
+#include "../materials/MooneyRivlin.cuh"
 
 // forward-declare solver type (pointer-only used here)
 struct SyncedNewtonSolver;
@@ -278,82 +280,92 @@ __device__ __forceinline__ void compute_p(int elem_idx, int qp_idx,
         }
     }
 
-          // Precompute Ft (transpose of F) for later use in viscous terms
-          double Ft[3][3];
-          #pragma unroll
-          for (int i = 0; i < 3; ++i)
-            #pragma unroll
-            for (int j = 0; j < 3; ++j)
-              Ft[i][j] = d_data->F(elem_idx, qp_idx)(j, i);
+    // Precompute Ft (transpose of F) for reuse in viscous and elastic terms
+    double Ft[3][3];
+    #pragma unroll
+    for (int i = 0; i < 3; ++i)
+      #pragma unroll
+      for (int j = 0; j < 3; ++j)
+        Ft[i][j] = d_data->F(elem_idx, qp_idx)(j, i);
 
-          // Compute Fdot = sum_i v_i ⊗ ∇s_i
-          double Fdot[3][3] = {{0.0}};
-          #pragma unroll
-          for (int i = 0; i < Quadrature::N_SHAPE_3443; i++) {
-            double v_i[3] = {0.0, 0.0, 0.0};
-            int node_local = i / 4;
-            int dof_local  = i % 4;
-            int node_global = d_data->element_connectivity()(elem_idx, node_local);
-            int coef_idx = node_global * 4 + dof_local;
-            if (v_guess != nullptr) {
+          double eta = d_data->eta_damp();
+          double lambda_d = d_data->lambda_damp();
+          const bool do_damp = (v_guess != nullptr) && (eta != 0.0 || lambda_d != 0.0);
+          double P_vis[3][3] = {{0.0}};
+
+          if (do_damp) {
+            // Compute Fdot = sum_i v_i ⊗ ∇s_i
+            double Fdot[3][3] = {{0.0}};
+            #pragma unroll
+            for (int i = 0; i < Quadrature::N_SHAPE_3443; i++) {
+              double v_i[3] = {0.0, 0.0, 0.0};
+              int node_local = i / 4;
+              int dof_local  = i % 4;
+              int node_global = d_data->element_connectivity()(elem_idx, node_local);
+              int coef_idx = node_global * 4 + dof_local;
               v_i[0] = v_guess[coef_idx * 3 + 0];
               v_i[1] = v_guess[coef_idx * 3 + 1];
               v_i[2] = v_guess[coef_idx * 3 + 2];
+              #pragma unroll
+              for (int row = 0; row < 3; row++) {
+                #pragma unroll
+                for (int col = 0; col < 3; col++) {
+                  // grad_s not in scope here; read from precomputed ds_du_pre
+                  double grad_si_col = d_data->ds_du_pre(qp_idx)(i, col);
+                  Fdot[row][col] += v_i[row] * grad_si_col;
+                }
+              }
+            }
+
+            // Edot = 0.5*(Fdot^T * F + F^T * Fdot)
+            double FdotT_F[3][3] = {{0.0}};
+            double Ft_Fdot[3][3] = {{0.0}};
+            #pragma unroll
+            for (int i = 0; i < 3; i++) {
+              for (int j = 0; j < 3; j++) {
+                for (int k = 0; k < 3; k++) {
+                  FdotT_F[i][j] += Fdot[k][i] * d_data->F(elem_idx, qp_idx)(k, j);
+                  Ft_Fdot[i][j] += Ft[i][k] * Fdot[k][j];
+                }
+              }
+            }
+            double Edot[3][3] = {{0.0}};
+            #pragma unroll
+            for (int i = 0; i < 3; i++)
+              for (int j = 0; j < 3; j++)
+                Edot[i][j] = 0.5 * (FdotT_F[i][j] + Ft_Fdot[i][j]);
+
+            double trEdot = Edot[0][0] + Edot[1][1] + Edot[2][2];
+            double S_vis[3][3] = {{0.0}};
+            #pragma unroll
+            for (int i = 0; i < 3; i++) {
+              for (int j = 0; j < 3; j++) {
+                S_vis[i][j] = 2.0 * eta * Edot[i][j] +
+                              lambda_d * trEdot * (i == j ? 1.0 : 0.0);
+              }
             }
             #pragma unroll
-            for (int row = 0; row < 3; row++) {
-              #pragma unroll
-              for (int col = 0; col < 3; col++) {
-                // grad_s not in scope here; read from precomputed ds_du_pre
-                double grad_si_col = d_data->ds_du_pre(qp_idx)(i, col);
-                Fdot[row][col] += v_i[row] * grad_si_col;
+            for (int i = 0; i < 3; i++) {
+              for (int j = 0; j < 3; j++) {
+                for (int k = 0; k < 3; k++) {
+                  P_vis[i][j] += d_data->F(elem_idx, qp_idx)(i, k) * S_vis[k][j];
+                }
               }
             }
-          }
-
-          // Edot = 0.5*(Fdot^T * F + F^T * Fdot)
-          double FdotT_F[3][3] = {{0.0}};
-          double Ft_Fdot[3][3] = {{0.0}};
-          // reuse Ft declared earlier (transpose of F)
-          #pragma unroll
-          for (int i = 0; i < 3; i++) for (int j = 0; j < 3; j++) Ft[i][j] = d_data->F(elem_idx, qp_idx)(j, i);
-          #pragma unroll
-          for (int i = 0; i < 3; i++) {
-            for (int j = 0; j < 3; j++) {
-              for (int k = 0; k < 3; k++) {
-                FdotT_F[i][j] += Fdot[k][i] * d_data->F(elem_idx, qp_idx)(k, j);
-                Ft_Fdot[i][j] += Ft[i][k] * Fdot[k][j];
+            // store Fdot and P_vis
+            #pragma unroll
+            for (int i = 0; i < 3; i++)
+              for (int j = 0; j < 3; j++) {
+                d_data->Fdot(elem_idx, qp_idx)(i, j) = Fdot[i][j];
+                d_data->P_vis(elem_idx, qp_idx)(i, j) = P_vis[i][j];
               }
-            }
-          }
-          double Edot[3][3] = {{0.0}};
-          #pragma unroll
-          for (int i = 0; i < 3; i++) for (int j = 0; j < 3; j++) Edot[i][j] = 0.5 * (FdotT_F[i][j] + Ft_Fdot[i][j]);
-
-          double trEdot = Edot[0][0] + Edot[1][1] + Edot[2][2];
-          double eta = d_data->eta_damp();
-          double lambda_d = d_data->lambda_damp();
-          double S_vis[3][3] = {{0.0}};
-          #pragma unroll
-          for (int i = 0; i < 3; i++) {
-            for (int j = 0; j < 3; j++) {
-              S_vis[i][j] = 2.0 * eta * Edot[i][j] + lambda_d * trEdot * (i == j ? 1.0 : 0.0);
-            }
-          }
-          double P_vis[3][3] = {{0.0}};
-          #pragma unroll
-          for (int i = 0; i < 3; i++) {
-            for (int j = 0; j < 3; j++) {
-              for (int k = 0; k < 3; k++) {
-                P_vis[i][j] += d_data->F(elem_idx, qp_idx)(i, k) * S_vis[k][j];
+          } else {
+            #pragma unroll
+            for (int i = 0; i < 3; i++)
+              for (int j = 0; j < 3; j++) {
+                d_data->Fdot(elem_idx, qp_idx)(i, j) = 0.0;
+                d_data->P_vis(elem_idx, qp_idx)(i, j) = 0.0;
               }
-            }
-          }
-          // store Fdot and P_vis
-          #pragma unroll
-          for (int i = 0; i < 3; i++) for (int j = 0; j < 3; j++) {
-            d_data->Fdot(elem_idx, qp_idx)(i, j) = Fdot[i][j];
-            d_data->P_vis(elem_idx, qp_idx)(i, j) = P_vis[i][j];
           }
 
     double FtF[3][3] = {0.0};
@@ -397,14 +409,27 @@ __device__ __forceinline__ void compute_p(int elem_idx, int qp_idx,
             }
 
     // --- Compute P ---
-    double factor = d_data->lambda() * (0.5 * tr_FtF - 1.5);
+    double F_local[3][3];
     #pragma unroll
     for (int i = 0; i < 3; ++i)
-        #pragma unroll
-        for (int j = 0; j < 3; ++j)
-        {
-            d_data->P(elem_idx, qp_idx)(i, j) = factor * d_data->F(elem_idx, qp_idx)(i, j) + d_data->mu() * (FFF[i][j] - d_data->F(elem_idx, qp_idx)(i, j)) + P_vis[i][j];
-        }
+      #pragma unroll
+      for (int j = 0; j < 3; ++j)
+        F_local[i][j] = d_data->F(elem_idx, qp_idx)(i, j);
+
+    double P_el[3][3];
+    if (d_data->material_model() == MATERIAL_MODEL_MOONEY_RIVLIN) {
+      mr_compute_P(F_local, d_data->mu10(), d_data->mu01(), d_data->kappa(),
+                   P_el);
+    } else {
+      svk_compute_P_from_trFtF_and_FFtF(F_local, tr_FtF, FFF, d_data->lambda(),
+                                       d_data->mu(), P_el);
+    }
+
+    #pragma unroll
+    for (int i = 0; i < 3; ++i)
+      #pragma unroll
+      for (int j = 0; j < 3; ++j)
+        d_data->P(elem_idx, qp_idx)(i, j) = P_el[i][j] + P_vis[i][j];
 
   // clang-format on
 }
@@ -597,6 +622,13 @@ __device__ __forceinline__ void compute_hessian_assemble_csr<GPU_ANCF3443_Data>(
       d_data->weight_zeta()(qp_idx % Quadrature::N_QP_3);
   double dV = scale * geom;
 
+  const bool use_mr = (d_data->material_model() == MATERIAL_MODEL_MOONEY_RIVLIN);
+  double A_mr[3][3][3][3];
+  if (use_mr) {
+    mr_compute_tangent_tensor(F, d_data->mu10(), d_data->mu01(), d_data->kappa(),
+                              A_mr);
+  }
+
   // Local K_elem (48 x 48)
   const int Nloc = Quadrature::N_SHAPE_3443 * 3;  // 16*3 = 48
   // Because large stack arrays can be heavy, but follow pattern from other
@@ -617,21 +649,33 @@ __device__ __forceinline__ void compute_hessian_assemble_csr<GPU_ANCF3443_Data>(
       double Fhj_dot_Fhi =
           Fh[j][0] * Fh[i][0] + Fh[j][1] * Fh[i][1] + Fh[j][2] * Fh[i][2];
 
+      double Kblock[3][3];
+      if (use_mr) {
+#pragma unroll
+        for (int d = 0; d < 3; d++) {
+#pragma unroll
+          for (int eidx = 0; eidx < 3; eidx++) {
+            double sum = 0.0;
+#pragma unroll
+            for (int J = 0; J < 3; J++) {
+#pragma unroll
+              for (int L = 0; L < 3; L++) {
+                sum += A_mr[d][J][eidx][L] * grad_s[i][J] * grad_s[j][L];
+              }
+            }
+            Kblock[d][eidx] = sum * dV;
+          }
+        }
+      } else {
+        svk_compute_tangent_block(Fh[i], Fh[j], h_ij, trE, Fhj_dot_Fhi, FFT,
+                                 lambda, mu, dV, Kblock);
+      }
+
       for (int d = 0; d < 3; d++) {
         for (int eidx = 0; eidx < 3; eidx++) {
-          double A_de    = lambda * Fh[i][d] * Fh[j][eidx];
-          double B_de    = lambda * trE * h_ij * (d == eidx ? 1.0 : 0.0);
-          double C1_de   = mu * Fhj_dot_Fhi * (d == eidx ? 1.0 : 0.0);
-          double D_de    = mu * Fh[j][d] * Fh[i][eidx];
-          double Etrm_de = mu * h_ij * FFT[d][eidx];
-          double Ftrm_de = -mu * h_ij * (d == eidx ? 1.0 : 0.0);
-
-          double K_ij_de =
-              (A_de + B_de + C1_de + D_de + Etrm_de + Ftrm_de) * dV;
-
           int row          = 3 * i + d;
           int col          = 3 * j + eidx;
-          K_elem[row][col] = K_ij_de;
+          K_elem[row][col] = Kblock[d][eidx];
         }
       }
     }
@@ -675,6 +719,12 @@ __device__ __forceinline__ void compute_hessian_assemble_csr<GPU_ANCF3443_Data>(
     }
   }
 
+  double eta_d_3443    = d_data->eta_damp();
+  double lambda_d_3443 = d_data->lambda_damp();
+  if (eta_d_3443 == 0.0 && lambda_d_3443 == 0.0) {
+    return;
+  }
+
   // --- Viscous tangent (Kelvin-Voigt) assembly: C_elem (Nloc*3 x Nloc*3) ---
   const int Nloc3443 = Quadrature::N_SHAPE_3443;  // typically 16
   const int Ndof3443 = Nloc3443 * 3;              // 48
@@ -683,9 +733,6 @@ __device__ __forceinline__ void compute_hessian_assemble_csr<GPU_ANCF3443_Data>(
   for (int ii = 0; ii < Ndof3443; ii++)
     for (int jj = 0; jj < Ndof3443; jj++)
       C_elem_3443[ii][jj] = 0.0;
-
-  double eta_d_3443    = d_data->eta_damp();
-  double lambda_d_3443 = d_data->lambda_damp();
 
 #pragma unroll
   for (int a = 0; a < Nloc3443; a++) {

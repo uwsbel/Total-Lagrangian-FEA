@@ -109,6 +109,9 @@ cuda_library(
     srcs = ["lib_src/elements/ANCF3243Data.cu"],
     hdrs = ["lib_src/elements/ANCF3243Data.cuh",
             "lib_src/elements/ANCF3243DataFunc.cuh",
+            "lib_src/materials/MaterialModel.cuh",
+            "lib_src/materials/MooneyRivlin.cuh",
+            "lib_src/materials/SVK.cuh",
             "lib_src/elements/ElementBase.h"],
     copts = ["--std=c++17", "-O3", "--use_fast_math", "--extra-device-vectorization"],
     linkopts = ["-lcusolver","-lcublas", "-lcusparse"],
@@ -125,6 +128,9 @@ cuda_library(
     srcs = ["lib_src/elements/ANCF3443Data.cu"],
     hdrs = ["lib_src/elements/ANCF3443Data.cuh",
             "lib_src/elements/ANCF3443DataFunc.cuh",
+            "lib_src/materials/MaterialModel.cuh",
+            "lib_src/materials/MooneyRivlin.cuh",
+            "lib_src/materials/SVK.cuh",
             "lib_src/elements/ElementBase.h"],
     copts = ["--std=c++17", "-O3", "--use_fast_math", "--extra-device-vectorization"],
     linkopts = ["-lcusolver","-lcublas","-lcusparse"],
@@ -141,6 +147,9 @@ cuda_library(
     srcs = ["lib_src/elements/FEAT10Data.cu"],
     hdrs = ["lib_src/elements/FEAT10Data.cuh",
             "lib_src/elements/FEAT10DataFunc.cuh",
+            "lib_src/materials/MaterialModel.cuh",
+            "lib_src/materials/MooneyRivlin.cuh",
+            "lib_src/materials/SVK.cuh",
             "lib_src/elements/ElementBase.h"],
     copts = ["--std=c++17", "-O3", "--use_fast_math", "--extra-device-vectorization"],
     linkopts = ["-lcusolver","-lcublas", "-lcusparse"],
@@ -186,6 +195,29 @@ cuda_library(
         "lib_src/solvers/SyncedAdamW.cuh",
     ],
     copts = ["--std=c++17", "-O3", "--use_fast_math", "--extra-device-vectorization"],
+    deps = [
+        ":ANCF3243Data",
+        ":ANCF3443Data",
+        ":FEAT10Data",
+        ":cuda_utils",
+        ":cpu_utils",
+        "@eigen//:eigen",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+cuda_library(
+    name = "solvers_syncedadamwnocoop",
+    srcs = [
+        "lib_src/solvers/SyncedAdamWNocoop.cu",
+    ],
+    hdrs = [
+        "lib_src/solvers/SolverBase.h",
+        "lib_src/solvers/SyncedAdamW.cuh",
+        "lib_src/solvers/SyncedAdamWNocoop.cuh",
+    ],
+    copts = ["--std=c++17", "-O3", "--use_fast_math", "--extra-device-vectorization"],
+    linkopts = ["-lcublas"],
     deps = [
         ":ANCF3243Data",
         ":ANCF3443Data",
@@ -380,6 +412,26 @@ cc_binary(
         ":cpu_utils",
         ":solvers_syncednesterov",
         ":solvers_syncedadamw",
+        ":solvers_syncednewton",
+        "@eigen//:eigen",
+    ],
+)
+
+cc_binary(
+    name = "test_feat10_resolution_adamw_nocoop",
+    srcs = ["lib_bin/test_feat10_resolution_adamw_nocoop.cc"],
+    copts = ["--std=c++17"],
+    linkopts = [
+        "-L/usr/local/cuda/lib64",
+        "-lcusparse",
+        "-lcudart",
+        "-lcublas",
+    ],
+    deps = [
+        ":FEAT10Data",
+        ":cpu_utils",
+        ":solvers_syncednesterov",
+        ":solvers_syncedadamwnocoop",
         ":solvers_syncednewton",
         "@eigen//:eigen",
     ],

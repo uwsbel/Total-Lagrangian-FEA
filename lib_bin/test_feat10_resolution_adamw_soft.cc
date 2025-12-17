@@ -143,13 +143,13 @@ int main() {
   const Eigen::VectorXd& tet5pt_weights_host = Quadrature::tet5pt_weights;
 
   // Call Setup with all required parameters
-  gpu_t10_data.Setup(rho0, nu, E, 0.0, 0.0,  // Material properties + damping
-                     tet5pt_x_host,          // Quadrature points
-                     tet5pt_y_host,          // Quadrature points
-                     tet5pt_z_host,          // Quadrature points
-                     tet5pt_weights_host,    // Quadrature weights
-                     h_x12, h_y12, h_z12,    // Node coordinates
-                     elements);              // Element connectivity
+  gpu_t10_data.Setup(tet5pt_x_host, tet5pt_y_host, tet5pt_z_host,
+                     tet5pt_weights_host, h_x12, h_y12, h_z12, elements);
+
+  gpu_t10_data.SetDensity(rho0);
+  gpu_t10_data.SetDamping(0.0, 0.0);
+
+  gpu_t10_data.SetSVK(E, nu);
 
   // =========================================================================
 
@@ -182,18 +182,6 @@ int main() {
 
   gpu_t10_data.CalcMassMatrix();
 
-  std::cout << "done CalcMassMatrix" << std::endl;
-
-  Eigen::MatrixXd mass_matrix;
-  gpu_t10_data.RetrieveMassMatrixToCPU(mass_matrix);
-
-  std::cout << "mass_matrix (size: " << mass_matrix.rows() << " x "
-            << mass_matrix.cols() << "):" << std::endl;
-
-  gpu_t10_data.ConvertToCSRMass();
-
-  std::cout << "done ConvertToCSRMass" << std::endl;
-
   gpu_t10_data.CalcConstraintData();
 
   std::cout << "done CalcConstraintData" << std::endl;
@@ -201,12 +189,6 @@ int main() {
   gpu_t10_data.ConvertTOCSRConstraintJac();
 
   std::cout << "done ConvertTOCSRConstraintJac" << std::endl;
-
-  // // Use Eigen's IOFormat for cleaner output
-  Eigen::IOFormat CleanFmt(4, 0, ", ", "\n", "[", "]");
-  std::cout << mass_matrix.format(CleanFmt) << std::endl;
-
-  std::cout << "\ndone retrieving mass_matrix" << std::endl;
 
   // calculate p
   gpu_t10_data.CalcP();

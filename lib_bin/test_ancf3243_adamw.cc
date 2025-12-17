@@ -108,34 +108,23 @@ int main() {
   gpu_3243_data.SetExternalForce(h_f_ext);
 
   // set up the system
-  gpu_3243_data.Setup(L, W, H, rho0, nu, E, 0.0, 0.0, h_B_inv,
-                      Quadrature::gauss_xi_m_6, Quadrature::gauss_xi_3,
-                      Quadrature::gauss_eta_2, Quadrature::gauss_zeta_2,
-                      Quadrature::weight_xi_m_6, Quadrature::weight_xi_3,
-                      Quadrature::weight_eta_2, Quadrature::weight_zeta_2,
-                      h_x12, h_y12, h_z12, h_element_connectivity);
+  gpu_3243_data.Setup(L, W, H, h_B_inv, Quadrature::gauss_xi_m_6,
+                      Quadrature::gauss_xi_3, Quadrature::gauss_eta_2,
+                      Quadrature::gauss_zeta_2, Quadrature::weight_xi_m_6,
+                      Quadrature::weight_xi_3, Quadrature::weight_eta_2,
+                      Quadrature::weight_zeta_2, h_x12, h_y12, h_z12,
+                      h_element_connectivity);
+
+  gpu_3243_data.SetDensity(rho0);
+  gpu_3243_data.SetDamping(0.0, 0.0);
+
+  gpu_3243_data.SetSVK(E, nu);
 
   // ======================================================================
 
   gpu_3243_data.CalcDsDuPre();
   gpu_3243_data.PrintDsDuPre();
   gpu_3243_data.CalcMassMatrix();
-
-  Eigen::MatrixXd mass_matrix;
-  gpu_3243_data.RetrieveMassMatrixToCPU(mass_matrix);
-
-  std::cout << "mass matrix:" << std::endl;
-  for (int i = 0; i < mass_matrix.rows(); i++) {
-    for (int j = 0; j < mass_matrix.cols(); j++) {
-      std::cout << std::setw(10) << std::setprecision(3) << mass_matrix(i, j)
-                << " ";
-    }
-    std::cout << std::endl;
-  }
-
-  gpu_3243_data.ConvertToCSRMass();
-
-  std::cout << "done ConvertToCSRMass" << std::endl;
 
   gpu_3243_data.CalcConstraintData();
 

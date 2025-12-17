@@ -9,6 +9,7 @@
 #include "../../lib_utils/cuda_utils.h"
 #include "../../lib_utils/quadrature_utils.h"
 #include "ElementBase.h"
+#include "../materials/MaterialModel.cuh"
 
 // Definition of GPU_ANCF3443 and data access device functions
 #pragma once
@@ -241,6 +242,22 @@ struct GPU_FEAT10_Data : public ElementBase {
     return *d_mu;
   }
 
+  __device__ int material_model() const {
+    return *d_material_model;
+  }
+
+  __device__ double mu10() const {
+    return *d_mu10;
+  }
+
+  __device__ double mu01() const {
+    return *d_mu01;
+  }
+
+  __device__ double kappa() const {
+    return *d_kappa;
+  }
+
   __device__ int gpu_n_elem() const {
     return n_elem;
   }
@@ -254,14 +271,6 @@ struct GPU_FEAT10_Data : public ElementBase {
   }
 
   // ======================================================
-
-  __device__ Eigen::Map<Eigen::MatrixXd> node_values() {
-    return Eigen::Map<Eigen::MatrixXd>(d_node_values, n_coef, n_coef);
-  }
-
-  __device__ double *node_values(int i, int j) {
-    return d_node_values + j + i * n_coef;
-  }
 
   __device__ int *csr_offsets() {
     return d_csr_offsets;
@@ -302,19 +311,21 @@ struct GPU_FEAT10_Data : public ElementBase {
     return n_constraint;
   }
 
-  // Add this missing virtual function from ElementBase:
   __host__ __device__ int get_n_beam() const override {
     return n_elem;
   }
 
-  // Core computation functions (empty implementations for now)
   void CalcDnDuPre();
 
   void CalcMassMatrix() override;
 
-  void ConvertToCSRMass();
+  void BuildMassCSRPattern();
 
   void ConvertTOCSRConstraintJac();
+
+  void BuildConstraintJacobianTransposeCSR() {
+    ConvertTOCSRConstraintJac();
+  }
 
   void CalcInternalForce() override;
 
@@ -322,7 +333,9 @@ struct GPU_FEAT10_Data : public ElementBase {
 
   void CalcP() override;
 
-  void RetrieveMassMatrixToCPU(Eigen::MatrixXd &mass_matrix) override;
+  void RetrieveMassCSRToCPU(std::vector<int> &offsets,
+                            std::vector<int> &columns,
+                            std::vector<double> &values);
 
   void RetrieveInternalForceToCPU(Eigen::VectorXd &internal_force) override;
 
@@ -368,8 +381,6 @@ struct GPU_FEAT10_Data : public ElementBase {
     HANDLE_ERROR(cudaMalloc(&d_element_connectivity,
                             n_elem * Quadrature::N_NODE_T10_10 * sizeof(int)));
 
-    HANDLE_ERROR(cudaMalloc(&d_node_values, n_coef * n_coef * sizeof(double)));
-
     HANDLE_ERROR(
         cudaMalloc(&d_tet5pt_x, Quadrature::N_QP_T10_5 * sizeof(double)));
     HANDLE_ERROR(
@@ -401,6 +412,10 @@ struct GPU_FEAT10_Data : public ElementBase {
     HANDLE_ERROR(cudaMalloc(&d_E, sizeof(double)));
     HANDLE_ERROR(cudaMalloc(&d_lambda, sizeof(double)));
     HANDLE_ERROR(cudaMalloc(&d_mu, sizeof(double)));
+    HANDLE_ERROR(cudaMalloc(&d_material_model, sizeof(int)));
+    HANDLE_ERROR(cudaMalloc(&d_mu10, sizeof(double)));
+    HANDLE_ERROR(cudaMalloc(&d_mu01, sizeof(double)));
+    HANDLE_ERROR(cudaMalloc(&d_kappa, sizeof(double)));
     // damping parameters
     HANDLE_ERROR(cudaMalloc(&d_eta_damp, sizeof(double)));
     HANDLE_ERROR(cudaMalloc(&d_lambda_damp, sizeof(double)));
@@ -409,8 +424,7 @@ struct GPU_FEAT10_Data : public ElementBase {
     HANDLE_ERROR(cudaMalloc(&d_data, sizeof(GPU_FEAT10_Data)));
   }
 
-  void Setup(double rho0, double nu, double E, double eta_damp,
-             double lambda_damp, const Eigen::VectorXd &tet5pt_x_host,
+  void Setup(const Eigen::VectorXd &tet5pt_x_host,
              const Eigen::VectorXd &tet5pt_y_host,
              const Eigen::VectorXd &tet5pt_z_host,
              const Eigen::VectorXd &tet5pt_weights_host,
@@ -457,9 +471,6 @@ struct GPU_FEAT10_Data : public ElementBase {
     HANDLE_ERROR(cudaMemset(d_detJ_ref, 0,
                             n_elem * Quadrature::N_QP_T10_5 * sizeof(double)));
 
-    HANDLE_ERROR(
-        cudaMemset(d_node_values, 0, n_coef * n_coef * sizeof(double)));
-
     cudaMemset(d_f_int, 0, n_coef * 3 * sizeof(double));
 
     cudaMemset(d_F, 0,
@@ -472,29 +483,146 @@ struct GPU_FEAT10_Data : public ElementBase {
     cudaMemset(d_P_vis, 0,
                n_elem * Quadrature::N_QP_T10_5 * 3 * 3 * sizeof(double));
 
+    double rho0         = 0.0;
+    double nu           = 0.0;
+    double E            = 0.0;
+    // Compute material constants
+    double mu = E / (2 * (1 + nu));  // Shear modulus μ
+    double lambda =
+        (E * nu) / ((1 + nu) * (1 - 2 * nu));  // Lamé's first parameter λ
+    double eta_damp     = 0.0;
+    double lambda_damp  = 0.0;
+    int material_model  = MATERIAL_MODEL_SVK;
+    double mu10         = 0.0;
+    double mu01         = 0.0;
+    double kappa        = 0.0;
+
     HANDLE_ERROR(
         cudaMemcpy(d_rho0, &rho0, sizeof(double), cudaMemcpyHostToDevice));
     HANDLE_ERROR(cudaMemcpy(d_nu, &nu, sizeof(double), cudaMemcpyHostToDevice));
     HANDLE_ERROR(cudaMemcpy(d_E, &E, sizeof(double), cudaMemcpyHostToDevice));
+    HANDLE_ERROR(cudaMemcpy(d_mu, &mu, sizeof(double), cudaMemcpyHostToDevice));
+    HANDLE_ERROR(
+        cudaMemcpy(d_lambda, &lambda, sizeof(double), cudaMemcpyHostToDevice));
     // copy damping parameters
     HANDLE_ERROR(cudaMemcpy(d_eta_damp, &eta_damp, sizeof(double),
                             cudaMemcpyHostToDevice));
     HANDLE_ERROR(cudaMemcpy(d_lambda_damp, &lambda_damp, sizeof(double),
                             cudaMemcpyHostToDevice));
-
-    // Compute material constants
-    double mu = E / (2 * (1 + nu));  // Shear modulus μ
-    double lambda =
-        (E * nu) / ((1 + nu) * (1 - 2 * nu));  // Lamé's first parameter λ
-
-    HANDLE_ERROR(cudaMemcpy(d_mu, &mu, sizeof(double), cudaMemcpyHostToDevice));
+    HANDLE_ERROR(cudaMemcpy(d_material_model, &material_model, sizeof(int),
+                            cudaMemcpyHostToDevice));
     HANDLE_ERROR(
-        cudaMemcpy(d_lambda, &lambda, sizeof(double), cudaMemcpyHostToDevice));
+        cudaMemcpy(d_mu10, &mu10, sizeof(double), cudaMemcpyHostToDevice));
+    HANDLE_ERROR(
+        cudaMemcpy(d_mu01, &mu01, sizeof(double), cudaMemcpyHostToDevice));
+    HANDLE_ERROR(
+        cudaMemcpy(d_kappa, &kappa, sizeof(double), cudaMemcpyHostToDevice));
 
     HANDLE_ERROR(cudaMemcpy(d_data, this, sizeof(GPU_FEAT10_Data),
                             cudaMemcpyHostToDevice));
 
     is_setup = true;
+  }
+
+  /**
+   * Set reference density (used for mass/inertial terms).
+   */
+  void SetDensity(double rho0) {
+    if (!is_setup) {
+      std::cerr << "GPU_FEAT10_Data must be set up before setting density."
+                << std::endl;
+      return;
+    }
+    HANDLE_ERROR(
+        cudaMemcpy(d_rho0, &rho0, sizeof(double), cudaMemcpyHostToDevice));
+  }
+
+  /**
+   * Set Kelvin-Voigt damping parameters.
+   * eta_damp: shear-like damping coefficient
+   * lambda_damp: volumetric-like damping coefficient
+   */
+  void SetDamping(double eta_damp, double lambda_damp) {
+    if (!is_setup) {
+      std::cerr << "GPU_FEAT10_Data must be set up before setting damping."
+                << std::endl;
+      return;
+    }
+    HANDLE_ERROR(cudaMemcpy(d_eta_damp, &eta_damp, sizeof(double),
+                            cudaMemcpyHostToDevice));
+    HANDLE_ERROR(cudaMemcpy(d_lambda_damp, &lambda_damp, sizeof(double),
+                            cudaMemcpyHostToDevice));
+  }
+
+  /**
+   * Select Saint Venant-Kirchhoff (SVK) material model using current E/nu.
+   */
+  void SetSVK() {
+    if (!is_setup) {
+      std::cerr << "GPU_FEAT10_Data must be set up before setting material."
+                << std::endl;
+      return;
+    }
+
+    int material_model = MATERIAL_MODEL_SVK;
+    double mu10        = 0.0;
+    double mu01        = 0.0;
+    double kappa       = 0.0;
+    HANDLE_ERROR(cudaMemcpy(d_material_model, &material_model, sizeof(int),
+                            cudaMemcpyHostToDevice));
+    HANDLE_ERROR(
+        cudaMemcpy(d_mu10, &mu10, sizeof(double), cudaMemcpyHostToDevice));
+    HANDLE_ERROR(
+        cudaMemcpy(d_mu01, &mu01, sizeof(double), cudaMemcpyHostToDevice));
+    HANDLE_ERROR(
+        cudaMemcpy(d_kappa, &kappa, sizeof(double), cudaMemcpyHostToDevice));
+  }
+
+  /**
+   * Set Saint Venant-Kirchhoff (SVK) parameters.
+   * E: Young's modulus
+   * nu: Poisson's ratio
+   */
+  void SetSVK(double E, double nu) {
+    if (!is_setup) {
+      std::cerr << "GPU_FEAT10_Data must be set up before setting material."
+                << std::endl;
+      return;
+    }
+
+    HANDLE_ERROR(cudaMemcpy(d_nu, &nu, sizeof(double), cudaMemcpyHostToDevice));
+    HANDLE_ERROR(cudaMemcpy(d_E, &E, sizeof(double), cudaMemcpyHostToDevice));
+
+    double mu = E / (2 * (1 + nu));
+    double lambda = (E * nu) / ((1 + nu) * (1 - 2 * nu));
+    HANDLE_ERROR(cudaMemcpy(d_mu, &mu, sizeof(double), cudaMemcpyHostToDevice));
+    HANDLE_ERROR(
+        cudaMemcpy(d_lambda, &lambda, sizeof(double), cudaMemcpyHostToDevice));
+
+    SetSVK();
+  }
+
+  /**
+   * Set compressible Mooney-Rivlin parameters.
+   * mu10, mu01: isochoric Mooney-Rivlin coefficients
+   * kappa: volumetric penalty (bulk-modulus-like) coefficient
+   */
+  void SetMooneyRivlin(double mu10, double mu01, double kappa) {
+    if (!is_setup) {
+      std::cerr << "GPU_FEAT10_Data must be set up before setting material."
+                << std::endl;
+      return;
+    }
+
+    int material_model = MATERIAL_MODEL_MOONEY_RIVLIN;
+    HANDLE_ERROR(cudaMemcpy(d_material_model, &material_model, sizeof(int),
+                            cudaMemcpyHostToDevice));
+    HANDLE_ERROR(
+        cudaMemcpy(d_mu10, &mu10, sizeof(double), cudaMemcpyHostToDevice));
+    HANDLE_ERROR(
+        cudaMemcpy(d_mu01, &mu01, sizeof(double), cudaMemcpyHostToDevice));
+    HANDLE_ERROR(
+        cudaMemcpy(d_kappa, &kappa, sizeof(double), cudaMemcpyHostToDevice));
   }
 
   void SetExternalForce(const Eigen::VectorXd &h_f_ext) {
@@ -562,7 +690,6 @@ struct GPU_FEAT10_Data : public ElementBase {
     HANDLE_ERROR(cudaFree(d_h_z12_jac));
 
     HANDLE_ERROR(cudaFree(d_element_connectivity));
-    HANDLE_ERROR(cudaFree(d_node_values));
 
     if (is_csr_setup) {
       HANDLE_ERROR(cudaFree(d_csr_offsets));
@@ -598,6 +725,10 @@ struct GPU_FEAT10_Data : public ElementBase {
     HANDLE_ERROR(cudaFree(d_E));
     HANDLE_ERROR(cudaFree(d_lambda));
     HANDLE_ERROR(cudaFree(d_mu));
+    HANDLE_ERROR(cudaFree(d_material_model));
+    HANDLE_ERROR(cudaFree(d_mu10));
+    HANDLE_ERROR(cudaFree(d_mu01));
+    HANDLE_ERROR(cudaFree(d_kappa));
     HANDLE_ERROR(cudaFree(d_eta_damp));
     HANDLE_ERROR(cudaFree(d_lambda_damp));
 
@@ -633,7 +764,6 @@ struct GPU_FEAT10_Data : public ElementBase {
   int *d_element_connectivity;  // (n_elem, 10)
 
   // Mass Matrix
-  double *d_node_values;
   // Mass Matrix in CSR format
   int *d_csr_offsets, *d_csr_columns;
   double *d_csr_values;
@@ -656,6 +786,8 @@ struct GPU_FEAT10_Data : public ElementBase {
 
   // Material properties
   double *d_E, *d_nu, *d_rho0, *d_lambda, *d_mu;
+  int *d_material_model;
+  double *d_mu10, *d_mu01, *d_kappa;
   // Damping parameters
   double *d_eta_damp, *d_lambda_damp;
 

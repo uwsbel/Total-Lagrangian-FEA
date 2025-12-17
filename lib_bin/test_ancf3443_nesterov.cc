@@ -103,14 +103,19 @@ int main() {
   h_f_ext(3 * gpu_3443_data.get_n_coef() - 22) = 500.0;
   gpu_3443_data.SetExternalForce(h_f_ext);
 
-  gpu_3443_data.Setup(L, W, H, rho0, nu, E, 0.0, 0.0, h_B_inv,
-                      Quadrature::gauss_xi_m_7, Quadrature::gauss_eta_m_7,
-                      Quadrature::gauss_zeta_m_3, Quadrature::gauss_xi_4,
-                      Quadrature::gauss_eta_4, Quadrature::gauss_zeta_3,
-                      Quadrature::weight_xi_m_7, Quadrature::weight_eta_m_7,
-                      Quadrature::weight_zeta_m_3, Quadrature::weight_xi_4,
-                      Quadrature::weight_eta_4, Quadrature::weight_zeta_3,
-                      h_x12, h_y12, h_z12, element_connectivity);
+  gpu_3443_data.Setup(L, W, H, h_B_inv, Quadrature::gauss_xi_m_7,
+                      Quadrature::gauss_eta_m_7, Quadrature::gauss_zeta_m_3,
+                      Quadrature::gauss_xi_4, Quadrature::gauss_eta_4,
+                      Quadrature::gauss_zeta_3, Quadrature::weight_xi_m_7,
+                      Quadrature::weight_eta_m_7, Quadrature::weight_zeta_m_3,
+                      Quadrature::weight_xi_4, Quadrature::weight_eta_4,
+                      Quadrature::weight_zeta_3, h_x12, h_y12, h_z12,
+                      element_connectivity);
+
+  gpu_3443_data.SetDensity(rho0);
+  gpu_3443_data.SetDamping(0.0, 0.0);
+
+  gpu_3443_data.SetSVK(E, nu);
 
   // =======================================================
 
@@ -125,25 +130,6 @@ int main() {
             << std::endl;
 
   gpu_3443_data.CalcMassMatrix();
-
-  std::cout << "done CalcMassMatrix" << std::endl;
-
-  Eigen::MatrixXd mass_matrix;
-  gpu_3443_data.RetrieveMassMatrixToCPU(mass_matrix);
-
-  std::cout << "done RetrieveMassMatrixToCPU" << std::endl;
-
-  std::cout << "mass matrix:" << std::endl;
-  for (int i = 0; i < mass_matrix.rows(); i++) {
-    for (int j = 0; j < mass_matrix.cols(); j++) {
-      std::cout << mass_matrix(i, j) << " ";
-    }
-    std::cout << std::endl;
-  }
-
-  gpu_3443_data.ConvertToCSRMass();
-
-  std::cout << "done ConvertToCSRMass" << std::endl;
 
   gpu_3443_data.CalcConstraintData();
 

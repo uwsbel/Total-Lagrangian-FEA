@@ -10,11 +10,11 @@
 #include <cuda_runtime.h>
 
 #include <Eigen/Dense>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
-#include <cstdlib>
 
 #include "../lib_src/collision/Broadphase.cuh"
 #include "../lib_src/collision/Narrowphase.cuh"
@@ -182,13 +182,16 @@ int main(int argc, char** argv) {
   const Eigen::VectorXd& tet5pt_z       = Quadrature::tet5pt_z;
   const Eigen::VectorXd& tet5pt_weights = Quadrature::tet5pt_weights;
 
-  gpu_t10_data.Setup(rho0, nu, E, 1e4, 1e4,  // Material + damping
-                     tet5pt_x, tet5pt_y, tet5pt_z, tet5pt_weights, h_x12, h_y12,
+  gpu_t10_data.Setup(tet5pt_x, tet5pt_y, tet5pt_z, tet5pt_weights, h_x12, h_y12,
                      h_z12, elements);
+
+  gpu_t10_data.SetDensity(rho0);
+  gpu_t10_data.SetDamping(1e4, 1e4);
+
+  gpu_t10_data.SetSVK(E, nu);
 
   gpu_t10_data.CalcDnDuPre();
   gpu_t10_data.CalcMassMatrix();
-  gpu_t10_data.ConvertToCSRMass();
   gpu_t10_data.CalcConstraintData();
   gpu_t10_data.ConvertTOCSRConstraintJac();
 
@@ -197,7 +200,7 @@ int main(int argc, char** argv) {
   // =========================================================================
   // Initialize Newton solver
   // =========================================================================
-  SyncedNewtonParams params = {1e-8, 1e-10, 1e12, 3, 5, dt};
+  SyncedNewtonParams params = {1e-8, 0.0, 1e-10, 1e12, 3, 5, dt};
   SyncedNewtonSolver solver(&gpu_t10_data, gpu_t10_data.get_n_constraint());
   solver.Setup();
   solver.SetParameters(&params);
@@ -289,10 +292,8 @@ int main(int argc, char** argv) {
     h_f_ext.setZero();
 
     // Add contact forces from collision patches (GPU version)
-    Eigen::VectorXd contact_forces =
-        narrowphase.ComputeExternalForcesGPU(
-            solver.GetVelocityGuessDevicePtr(), contact_damping,
-            contact_friction);
+    Eigen::VectorXd contact_forces = narrowphase.ComputeExternalForcesGPU(
+        solver.GetVelocityGuessDevicePtr(), contact_damping, contact_friction);
     if (contact_forces.size() == h_f_ext.size()) {
       h_f_ext += contact_forces;
     }

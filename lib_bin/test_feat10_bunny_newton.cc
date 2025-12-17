@@ -16,6 +16,7 @@
 #include <Eigen/Dense>
 #include <iomanip>
 #include <iostream>
+#include <vector>
 
 #include "../../lib_utils/quadrature_utils.h"
 #include "../lib_src/elements/FEAT10Data.cuh"
@@ -25,6 +26,8 @@
 const double E    = 3.0e8;  // Pa  (~0.3 GPa, between 0.7 GPa and 0.13 GPa)
 const double nu   = 0.40;   // polymers tend to be higher than metals
 const double rho0 = 920.0;  // kg/m^3, typical polyethylene density
+
+enum MATERIAL_MODEL { MAT_SVK, MAT_MOONEY_RIVLIN };
 
 int main() {
   // Read mesh data
@@ -44,6 +47,8 @@ int main() {
   std::cout << nodes << std::endl;
   std::cout << "elements matrix:" << std::endl;
   std::cout << elements << std::endl;
+
+  MATERIAL_MODEL material = MAT_SVK;
 
   GPU_FEAT10_Data gpu_t10_data(n_elems, n_nodes);
 
@@ -103,14 +108,24 @@ int main() {
   const Eigen::VectorXd& tet5pt_weights_host = Quadrature::tet5pt_weights;
 
   // Call Setup with all required parameters
-  gpu_t10_data.Setup(rho0, nu, E, 0.0,
-                     0.0,                  // Material properties + damping
-                     tet5pt_x_host,        // Quadrature points
-                     tet5pt_y_host,        // Quadrature points
-                     tet5pt_z_host,        // Quadrature points
-                     tet5pt_weights_host,  // Quadrature weights
-                     h_x12, h_y12, h_z12,  // Node coordinates
-                     elements);            // Element connectivity
+  gpu_t10_data.Setup(tet5pt_x_host, tet5pt_y_host, tet5pt_z_host,
+                     tet5pt_weights_host, h_x12, h_y12, h_z12, elements);
+
+  gpu_t10_data.SetDensity(rho0);
+  gpu_t10_data.SetDamping(0.0, 0.0);
+
+  if (material == MAT_SVK) {
+    gpu_t10_data.SetSVK(E, nu);
+    std::cout << "Material: SVK" << std::endl;
+  } else {
+    const double mu    = E / (2.0 * (1.0 + nu));
+    const double K     = E / (3.0 * (1.0 - 2.0 * nu));
+    const double kappa = 1.5 * K;
+    const double mu10  = 0.30 * mu;
+    const double mu01  = 0.20 * mu;
+    gpu_t10_data.SetMooneyRivlin(mu10, mu01, kappa);
+    std::cout << "Material: Mooney-Rivlin" << std::endl;
+  }
 
   gpu_t10_data.CalcDnDuPre();
 
@@ -140,24 +155,6 @@ int main() {
   std::cout << "done retrieving detJ" << std::endl;
 
   gpu_t10_data.CalcMassMatrix();
-
-  std::cout << "done CalcMassMatrix" << std::endl;
-
-  Eigen::MatrixXd mass_matrix;
-  gpu_t10_data.RetrieveMassMatrixToCPU(mass_matrix);
-
-  std::cout << "mass_matrix (size: " << mass_matrix.rows() << " x "
-            << mass_matrix.cols() << "):" << std::endl;
-
-  // Use Eigen's IOFormat for cleaner output
-  Eigen::IOFormat CleanFmt(4, 0, ", ", "\n", "[", "]");
-  std::cout << mass_matrix.format(CleanFmt) << std::endl;
-
-  std::cout << "\ndone retrieving mass_matrix" << std::endl;
-
-  gpu_t10_data.ConvertToCSRMass();
-
-  std::cout << "done ConvertToCSRMass" << std::endl;
 
   gpu_t10_data.CalcConstraintData();
 
@@ -197,12 +194,13 @@ int main() {
             << "):" << std::endl;
   std::cout << f_int.transpose() << std::endl;
   std::cout << "done retrieving internal force vector" << std::endl;
-  SyncedNewtonParams params = {1e-2, 1e-6, 1e14, 5, 10, 1e-3};
+  SyncedNewtonParams params = {1e-4, 1e-4, 1e-4, 1e14, 5, 10, 1e-3};
   SyncedNewtonSolver solver(&gpu_t10_data, gpu_t10_data.get_n_constraint());
   solver.Setup();
   solver.SetParameters(&params);
 
   solver.AnalyzeHessianSparsity();
+  solver.SetFixedSparsityPattern(true);  // Enable analysis reuse for fixed structure
 
   int output_interval = 10;  // 10 vtk per seconds
   int output_frame    = 0;
@@ -218,7 +216,7 @@ int main() {
 
     solver.Solve();
     if (i % output_interval == 0) {
-      gpu_t10_data.WriteOutputVTK("output/bunny_adamw_step_" +
+      gpu_t10_data.WriteOutputVTK("output/bunny_newton_step_" +
                                   std::to_string(output_frame) + ".vtk");
       output_frame++;
     }
