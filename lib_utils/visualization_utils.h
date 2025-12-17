@@ -26,7 +26,8 @@ class VisualizationUtils {
    * @return true if export successful
    */
   static bool ExportContactPatchesToVTP(
-      const std::vector<ContactPatch>& patches, const std::string& filename) {
+      const std::vector<ContactPatch>& patches, const std::string& filename,
+      double normalScale = 0.02) {
     std::ofstream file(filename);
     if (!file.is_open()) {
       std::cerr << "Error: Cannot open file " << filename << " for writing"
@@ -44,6 +45,9 @@ class VisualizationUtils {
       }
     }
 
+    int numLines    = numPolygons;
+    int totalPoints = totalVerts + numLines * 2;
+
     file << std::setprecision(15) << std::scientific;
 
     // VTP XML header
@@ -51,8 +55,9 @@ class VisualizationUtils {
     file << "<VTKFile type=\"PolyData\" version=\"1.0\" "
             "byte_order=\"LittleEndian\">\n";
     file << "  <PolyData>\n";
-    file << "    <Piece NumberOfPoints=\"" << totalVerts
-         << "\" NumberOfPolys=\"" << numPolygons << "\">\n";
+    file << "    <Piece NumberOfPoints=\"" << totalPoints
+         << "\" NumberOfLines=\"" << numLines << "\" NumberOfPolys=\""
+         << numPolygons << "\">\n";
 
     // Handle empty patches case - write minimal valid VTP structure
     if (numPolygons == 0) {
@@ -61,6 +66,16 @@ class VisualizationUtils {
               "format=\"ascii\">\n";
       file << "        </DataArray>\n";
       file << "      </Points>\n";
+
+      file << "      <Lines>\n";
+      file << "        <DataArray type=\"Int32\" Name=\"connectivity\" "
+              "format=\"ascii\">\n";
+      file << "        </DataArray>\n";
+      file << "        <DataArray type=\"Int32\" Name=\"offsets\" "
+              "format=\"ascii\">\n";
+      file << "        </DataArray>\n";
+      file << "      </Lines>\n";
+
       file << "      <Polys>\n";
       file << "        <DataArray type=\"Int32\" Name=\"connectivity\" "
               "format=\"ascii\">\n";
@@ -88,8 +103,40 @@ class VisualizationUtils {
         }
       }
     }
+
+    for (const auto& patch : patches) {
+      if (patch.isValid && patch.numVertices >= 3) {
+        file << "          " << patch.centroid.x << " " << patch.centroid.y
+             << " " << patch.centroid.z << "\n";
+        file << "          " << patch.centroid.x + normalScale * patch.normal.x
+             << " " << patch.centroid.y + normalScale * patch.normal.y << " "
+             << patch.centroid.z + normalScale * patch.normal.z << "\n";
+      }
+    }
     file << "        </DataArray>\n";
     file << "      </Points>\n";
+
+    file << "      <Lines>\n";
+    file << "        <DataArray type=\"Int32\" Name=\"connectivity\" "
+            "format=\"ascii\">\n";
+    int linePointOffset = totalVerts;
+    int arrowIdx        = 0;
+    for (const auto& patch : patches) {
+      if (patch.isValid && patch.numVertices >= 3) {
+        file << "          " << linePointOffset + arrowIdx * 2 << " "
+             << linePointOffset + arrowIdx * 2 + 1 << "\n";
+        arrowIdx++;
+      }
+    }
+    file << "        </DataArray>\n";
+
+    file << "        <DataArray type=\"Int32\" Name=\"offsets\" "
+            "format=\"ascii\">\n";
+    for (int i = 0; i < numLines; ++i) {
+      file << "          " << (i + 1) * 2 << "\n";
+    }
+    file << "        </DataArray>\n";
+    file << "      </Lines>\n";
 
     // Polygons (connectivity and offsets)
     file << "      <Polys>\n";
@@ -134,11 +181,21 @@ class VisualizationUtils {
         file << "          " << patch.area << "\n";
       }
     }
+    for (const auto& patch : patches) {
+      if (patch.isValid && patch.numVertices >= 3) {
+        file << "          " << patch.area << "\n";
+      }
+    }
     file << "        </DataArray>\n";
 
     // g_A (gradient in A direction)
     file << "        <DataArray type=\"Float64\" Name=\"g_A\" "
             "format=\"ascii\">\n";
+    for (const auto& patch : patches) {
+      if (patch.isValid && patch.numVertices >= 3) {
+        file << "          " << patch.g_A << "\n";
+      }
+    }
     for (const auto& patch : patches) {
       if (patch.isValid && patch.numVertices >= 3) {
         file << "          " << patch.g_A << "\n";
@@ -154,11 +211,21 @@ class VisualizationUtils {
         file << "          " << patch.g_B << "\n";
       }
     }
+    for (const auto& patch : patches) {
+      if (patch.isValid && patch.numVertices >= 3) {
+        file << "          " << patch.g_B << "\n";
+      }
+    }
     file << "        </DataArray>\n";
 
     // Equilibrium pressure
     file << "        <DataArray type=\"Float64\" Name=\"p_equilibrium\" "
             "format=\"ascii\">\n";
+    for (const auto& patch : patches) {
+      if (patch.isValid && patch.numVertices >= 3) {
+        file << "          " << patch.p_equilibrium << "\n";
+      }
+    }
     for (const auto& patch : patches) {
       if (patch.isValid && patch.numVertices >= 3) {
         file << "          " << patch.p_equilibrium << "\n";
@@ -174,10 +241,20 @@ class VisualizationUtils {
         file << "          " << patch.tetA_idx << "\n";
       }
     }
+    for (const auto& patch : patches) {
+      if (patch.isValid && patch.numVertices >= 3) {
+        file << "          " << patch.tetA_idx << "\n";
+      }
+    }
     file << "        </DataArray>\n";
 
     file << "        <DataArray type=\"Int32\" Name=\"TetB_idx\" "
             "format=\"ascii\">\n";
+    for (const auto& patch : patches) {
+      if (patch.isValid && patch.numVertices >= 3) {
+        file << "          " << patch.tetB_idx << "\n";
+      }
+    }
     for (const auto& patch : patches) {
       if (patch.isValid && patch.numVertices >= 3) {
         file << "          " << patch.tetB_idx << "\n";
@@ -188,6 +265,11 @@ class VisualizationUtils {
     // Valid orientation flag
     file << "        <DataArray type=\"Int32\" Name=\"ValidOrientation\" "
             "format=\"ascii\">\n";
+    for (const auto& patch : patches) {
+      if (patch.isValid && patch.numVertices >= 3) {
+        file << "          " << (patch.validOrientation ? 1 : 0) << "\n";
+      }
+    }
     for (const auto& patch : patches) {
       if (patch.isValid && patch.numVertices >= 3) {
         file << "          " << (patch.validOrientation ? 1 : 0) << "\n";
@@ -204,11 +286,23 @@ class VisualizationUtils {
              << patch.normal.z << "\n";
       }
     }
+    for (const auto& patch : patches) {
+      if (patch.isValid && patch.numVertices >= 3) {
+        file << "          " << patch.normal.x << " " << patch.normal.y << " "
+             << patch.normal.z << "\n";
+      }
+    }
     file << "        </DataArray>\n";
 
     // Centroid
     file << "        <DataArray type=\"Float64\" Name=\"Centroid\" "
             "NumberOfComponents=\"3\" format=\"ascii\">\n";
+    for (const auto& patch : patches) {
+      if (patch.isValid && patch.numVertices >= 3) {
+        file << "          " << patch.centroid.x << " " << patch.centroid.y
+             << " " << patch.centroid.z << "\n";
+      }
+    }
     for (const auto& patch : patches) {
       if (patch.isValid && patch.numVertices >= 3) {
         file << "          " << patch.centroid.x << " " << patch.centroid.y
@@ -469,8 +563,34 @@ class VisualizationUtils {
     }
 
     if (numArrows == 0) {
-      std::cerr << "Warning: No valid patches for normal arrows" << std::endl;
-      return false;
+      file << std::setprecision(15) << std::scientific;
+
+      file << "<?xml version=\"1.0\"?>\n";
+      file << "<VTKFile type=\"PolyData\" version=\"1.0\" "
+              "byte_order=\"LittleEndian\">\n";
+      file << "  <PolyData>\n";
+      file << "    <Piece NumberOfPoints=\"0\" NumberOfLines=\"0\">\n";
+
+      file << "      <Points>\n";
+      file << "        <DataArray type=\"Float64\" NumberOfComponents=\"3\" "
+              "format=\"ascii\">\n";
+      file << "        </DataArray>\n";
+      file << "      </Points>\n";
+
+      file << "      <Lines>\n";
+      file << "        <DataArray type=\"Int32\" Name=\"connectivity\" "
+              "format=\"ascii\">\n";
+      file << "        </DataArray>\n";
+      file << "        <DataArray type=\"Int32\" Name=\"offsets\" "
+              "format=\"ascii\">\n";
+      file << "        </DataArray>\n";
+      file << "      </Lines>\n";
+
+      file << "    </Piece>\n";
+      file << "  </PolyData>\n";
+      file << "</VTKFile>\n";
+      file.close();
+      return true;
     }
 
     file << std::setprecision(15) << std::scientific;

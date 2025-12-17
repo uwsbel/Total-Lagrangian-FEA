@@ -205,10 +205,6 @@ TEST_F(TestCollision, NarrowphaseContactPatches) {
   ANCFCPUUtils::VisualizationUtils::ExportContactPatchesToJSON(
       validPatches, "output/contact_patches.json");
 
-  // Export normal vectors as arrows
-  ANCFCPUUtils::VisualizationUtils::ExportNormalsAsArrows(
-      validPatches, 0.02, "output/contact_normals.vtp");
-
   // Export mesh with scalar field to VTU
   ANCFCPUUtils::VisualizationUtils::ExportMeshToVTU(
       nodes, elements, pressure, "output/mesh_with_pressure.vtu");
