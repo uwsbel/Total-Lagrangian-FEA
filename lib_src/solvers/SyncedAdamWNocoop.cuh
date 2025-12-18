@@ -70,6 +70,7 @@ class SyncedAdamWNocoopSolver : public SolverBase {
     cudaMalloc(&d_outer_flag_, sizeof(int));
     cudaMalloc(&d_alpha_, sizeof(double));
     cudaMalloc(&d_inner_tol_, sizeof(double));
+    cudaMalloc(&d_inner_rtol_, sizeof(double));
     cudaMalloc(&d_outer_tol_, sizeof(double));
     cudaMalloc(&d_max_outer_, sizeof(int));
     cudaMalloc(&d_max_inner_, sizeof(int));
@@ -111,6 +112,7 @@ class SyncedAdamWNocoopSolver : public SolverBase {
     cudaFree(d_outer_flag_);
     cudaFree(d_alpha_);
     cudaFree(d_inner_tol_);
+    cudaFree(d_inner_rtol_);
     cudaFree(d_outer_tol_);
     cudaFree(d_max_outer_);
     cudaFree(d_max_inner_);
@@ -152,6 +154,8 @@ class SyncedAdamWNocoopSolver : public SolverBase {
                cudaMemcpyHostToDevice);
 
     cudaMemcpy(d_inner_tol_, &p->inner_tol, sizeof(double),
+               cudaMemcpyHostToDevice);
+    cudaMemcpy(d_inner_rtol_, &p->inner_rtol, sizeof(double),
                cudaMemcpyHostToDevice);
     cudaMemcpy(d_outer_tol_, &p->outer_tol, sizeof(double),
                cudaMemcpyHostToDevice);
@@ -246,6 +250,9 @@ class SyncedAdamWNocoopSolver : public SolverBase {
   __device__ double solver_inner_tol() const {
     return *d_inner_tol_;
   }
+  __device__ double solver_inner_rtol() const {
+    return *d_inner_rtol_;
+  }
   __device__ double solver_outer_tol() const {
     return *d_outer_tol_;
   }
@@ -325,7 +332,8 @@ class SyncedAdamWNocoopSolver : public SolverBase {
 
   double *d_lr_, *d_beta1_, *d_beta2_, *d_eps_, *d_weight_decay_, *d_lr_decay_;
 
-  double *d_alpha_, *d_inner_tol_, *d_outer_tol_, *d_time_step_, *d_solver_rho_;
+  double *d_alpha_, *d_inner_tol_, *d_inner_rtol_, *d_outer_tol_, *d_time_step_,
+      *d_solver_rho_;
 
   int *d_convergence_check_interval_;
 

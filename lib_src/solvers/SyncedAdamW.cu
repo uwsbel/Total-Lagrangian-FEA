@@ -143,6 +143,7 @@ __global__ void one_step_adamw_kernel_impl(ElementType *d_data,
         t                        = 1.0;
       }
 
+      double norm_g0 = -1.0;
       for (int inner_iter = 0; inner_iter < d_adamw_solver->solver_max_inner();
            inner_iter++) {
         grid.sync();
@@ -247,6 +248,10 @@ __global__ void one_step_adamw_kernel_impl(ElementType *d_data,
             }
             *d_adamw_solver->norm_g() = sqrt(norm_g);
 
+            if (norm_g0 < 0.0) {
+              norm_g0 = *d_adamw_solver->norm_g();
+            }
+
             double norm_v_curr = 0.0;
             for (int i = 0; i < 3 * d_adamw_solver->get_n_coef(); i++) {
               norm_v_curr +=
@@ -254,14 +259,21 @@ __global__ void one_step_adamw_kernel_impl(ElementType *d_data,
             }
             norm_v_curr = sqrt(norm_v_curr);
 
-            printf("norm_g: %.17f, norm_v_curr: %.17f\n",
-                   *d_adamw_solver->norm_g(), norm_v_curr);
+            const double inner_tol = d_adamw_solver->solver_inner_tol();
+            const double rtol = d_adamw_solver->solver_inner_rtol();
+            const double tol_abs = inner_tol * (1.0 + norm_v_curr);
+            const double tol_rel =
+                (rtol > 0.0 && norm_g0 > 0.0) ? (rtol * norm_g0) : 0.0;
 
-            if (*d_adamw_solver->norm_g() <=
-                d_adamw_solver->solver_inner_tol() * (1.0 + norm_v_curr)) {
-              printf("Converged: gnorm=%.17f <= tol*(1+||v||)=%.17f\n",
-                     *d_adamw_solver->norm_g(),
-                     d_adamw_solver->solver_inner_tol() * (1.0 + norm_v_curr));
+            printf(
+                "norm_g: %.17f, norm_v_curr: %.17f, tol_abs: %.17f, rtol*g0: %.17f\n",
+                *d_adamw_solver->norm_g(), norm_v_curr, tol_abs, tol_rel);
+
+            if (*d_adamw_solver->norm_g() <= tol_abs ||
+                (tol_rel > 0.0 && *d_adamw_solver->norm_g() <= tol_rel)) {
+              const double tol = (tol_abs > tol_rel ? tol_abs : tol_rel);
+              printf("Converged: gnorm=%.17f <= max(tol_abs, rtol*g0)=%.17f\n",
+                     *d_adamw_solver->norm_g(), tol);
               *d_adamw_solver->inner_flag() = 1;
             }
           }
