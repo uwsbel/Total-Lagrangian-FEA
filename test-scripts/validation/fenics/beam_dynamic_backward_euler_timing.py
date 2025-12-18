@@ -216,7 +216,10 @@ problem = PointLoadProblem(
 # TIME STEPPING LOOP WITH TIMING
 # ============================================================================
 u_old.x.array[:] = 0.0
+u_old.x.scatter_forward()  # Sync ghost zones for parallel correctness
+
 v_old.x.array[:] = 0.0
+v_old.x.scatter_forward()  # Sync ghost zones for parallel correctness
 
 # Start timing
 start_time = time.perf_counter()
@@ -231,7 +234,10 @@ for n in range(n_steps):
     v_new = (u.x.array - u_old.x.array) / dt
     
     u_old.x.array[:] = u.x.array[:]
+    u_old.x.scatter_forward()  # Sync ghost zones for parallel correctness
+    
     v_old.x.array[:] = v_new[:]
+    v_old.x.scatter_forward()  # Sync ghost zones for parallel correctness
 
 # End timing
 end_time = time.perf_counter()

@@ -441,7 +441,10 @@ if rank == 0:
 
 # Initialize state variables (beam starts from rest)
 u_old.x.array[:] = 0.0
+u_old.x.scatter_forward()  # Sync ghost zones for parallel correctness
+
 v_old.x.array[:] = 0.0
+v_old.x.scatter_forward()  # Sync ghost zones for parallel correctness
 
 # History for tracked node (x, y, z positions)
 node_xyz_history = []
@@ -483,7 +486,10 @@ for n in range(n_steps):
     
     # Update old values for next time step
     u_old.x.array[:] = u.x.array[:]
+    u_old.x.scatter_forward()  # Sync ghost zones for parallel correctness
+    
     v_old.x.array[:] = v_new[:]
+    v_old.x.scatter_forward()  # Sync ghost zones for parallel correctness
     
     # Print progress
     if rank == 0 and (n % 10 == 0 or n < 5):
