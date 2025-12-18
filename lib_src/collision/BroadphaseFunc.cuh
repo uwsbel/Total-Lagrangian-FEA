@@ -55,6 +55,26 @@ __global__ void computeAABBKernel(Broadphase* bp, AABB* aabbs, int n_elems) {
   aabbs[elem_idx].objectId = elem_idx;
 }
 
+__global__ void countSameMeshPairsKernel(const CollisionPair* pairs,
+                                         int numPairs,
+                                         const int* elementMeshIds,
+                                         int* outCount) {
+  int idx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (idx >= numPairs) {
+    return;
+  }
+
+  int a = pairs[idx].idA;
+  int b = pairs[idx].idB;
+  if (a < 0 || b < 0) {
+    return;
+  }
+
+  if (elementMeshIds[a] == elementMeshIds[b]) {
+    atomicAdd(outCount, 1);
+  }
+}
+
 // Kernel to extract sort keys from AABBs
 __global__ void extractSortKeysKernel(const AABB* aabbs, double* keys,
                                       int* indices, int axis, int n) {
@@ -115,7 +135,9 @@ __device__ bool isNeighborPair(int idA, int idB,
 __global__ void countCollisionsKernel(const AABB* sortedAABBs,
                                       int* collisionCounts, int n,
                                       const long long* neighborHashes,
-                                      int numHashes) {
+                                      int numHashes,
+                                      const int* elementMeshIds,
+                                      int enableSelfCollision) {
   int i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i >= n)
     return;
@@ -134,6 +156,13 @@ __global__ void countCollisionsKernel(const AABB* sortedAABBs,
     bool overlapZ = (Ai.min.z <= Aj.max.z && Aj.min.z <= Ai.max.z);
 
     if (overlapX && overlapY && overlapZ) {
+      if (!enableSelfCollision && elementMeshIds != nullptr) {
+        int meshIdA = elementMeshIds[Ai.objectId];
+        int meshIdB = elementMeshIds[Aj.objectId];
+        if (meshIdA == meshIdB) {
+          continue;
+        }
+      }
       // Check if they are neighbors - skip if true
       if (!isNeighborPair(Ai.objectId, Aj.objectId, neighborHashes,
                           numHashes)) {
@@ -151,7 +180,9 @@ __global__ void generateCollisionPairsKernel(const AABB* sortedAABBs,
                                              CollisionPair* collisionPairs,
                                              int n,
                                              const long long* neighborHashes,
-                                             int numHashes) {
+                                             int numHashes,
+                                             const int* elementMeshIds,
+                                             int enableSelfCollision) {
   int i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i >= n)
     return;
@@ -170,6 +201,13 @@ __global__ void generateCollisionPairsKernel(const AABB* sortedAABBs,
     bool overlapZ = (Ai.min.z <= Aj.max.z && Aj.min.z <= Ai.max.z);
 
     if (overlapX && overlapY && overlapZ) {
+      if (!enableSelfCollision && elementMeshIds != nullptr) {
+        int meshIdA = elementMeshIds[Ai.objectId];
+        int meshIdB = elementMeshIds[Aj.objectId];
+        if (meshIdA == meshIdB) {
+          continue;
+        }
+      }
       // Check if they are neighbors - skip if true
       if (!isNeighborPair(Ai.objectId, Aj.objectId, neighborHashes,
                           numHashes)) {

@@ -151,24 +151,7 @@ TEST_F(TestCollision, NarrowphaseContactPatches) {
   const Eigen::VectorXd& pressure = mesh_manager.GetAllScalarFields();
   std::cout << "Scalar field size: " << pressure.size() << std::endl;
 
-  // ===== Broadphase =====
-  broadphase.Initialize(nodes, elements);
-  broadphase.CreateAABB();
-  broadphase.BuildNeighborMap();
-  broadphase.SortAABBs(0);
-  broadphase.DetectCollisions();
-
-  std::cout << "\nBroadphase found " << broadphase.numCollisions
-            << " potential collision pairs" << std::endl;
-
-  // Convert broadphase results to pair vector for narrowphase
-  std::vector<std::pair<int, int>> collisionPairs;
-  for (const auto& cp : broadphase.h_collisionPairs) {
-    collisionPairs.emplace_back(cp.idA, cp.idB);
-  }
-
-  // ===== Narrowphase =====
-  // Build element-to-mesh ID mapping
+  // Build element-to-mesh ID mapping (used by broadphase and narrowphase)
   Eigen::VectorXi elementMeshIds(mesh_manager.GetTotalElements());
   for (int i = 0; i < mesh_manager.GetNumMeshes(); ++i) {
     const auto& instance = mesh_manager.GetMeshInstance(i);
@@ -177,8 +160,20 @@ TEST_F(TestCollision, NarrowphaseContactPatches) {
     }
   }
 
+  // ===== Broadphase =====
+  broadphase.Initialize(mesh_manager);
+  broadphase.CreateAABB();
+  broadphase.BuildNeighborMap();
+  broadphase.SortAABBs(0);
+  broadphase.DetectCollisions();
+
+  std::cout << "\nBroadphase found " << broadphase.numCollisions
+            << " potential collision pairs" << std::endl;
+
+  // ===== Narrowphase =====
   narrowphase.Initialize(nodes, elements, pressure, elementMeshIds);
-  narrowphase.SetCollisionPairs(collisionPairs);
+  narrowphase.SetCollisionPairsDevice(broadphase.GetCollisionPairsDevicePtr(),
+                                      broadphase.numCollisions);
   narrowphase.ComputeContactPatches();
   narrowphase.RetrieveResults();
 
@@ -204,10 +199,6 @@ TEST_F(TestCollision, NarrowphaseContactPatches) {
   // Export contact patches to JSON (debugging)
   ANCFCPUUtils::VisualizationUtils::ExportContactPatchesToJSON(
       validPatches, "output/contact_patches.json");
-
-  // Export normal vectors as arrows
-  ANCFCPUUtils::VisualizationUtils::ExportNormalsAsArrows(
-      validPatches, 0.02, "output/contact_normals.vtp");
 
   // Export mesh with scalar field to VTU
   ANCFCPUUtils::VisualizationUtils::ExportMeshToVTU(
@@ -284,11 +275,6 @@ TEST_F(TestCollision, ExternalForcesFromContactPatches) {
   broadphase.SortAABBs(0);
   broadphase.DetectCollisions();
 
-  std::vector<std::pair<int, int>> collisionPairs;
-  for (const auto& cp : broadphase.h_collisionPairs) {
-    collisionPairs.emplace_back(cp.idA, cp.idB);
-  }
-
   Eigen::VectorXi elementMeshIds(mesh_manager.GetTotalElements());
   for (int i = 0; i < mesh_manager.GetNumMeshes(); ++i) {
     const auto& instance = mesh_manager.GetMeshInstance(i);
@@ -298,7 +284,8 @@ TEST_F(TestCollision, ExternalForcesFromContactPatches) {
   }
 
   narrowphase.Initialize(nodes, elements, pressure, elementMeshIds);
-  narrowphase.SetCollisionPairs(collisionPairs);
+  narrowphase.SetCollisionPairsDevice(broadphase.GetCollisionPairsDevicePtr(),
+                                      broadphase.numCollisions);
   narrowphase.ComputeContactPatches();
   narrowphase.RetrieveResults();
 
@@ -399,12 +386,6 @@ TEST_F(TestCollision, ThreeSpheresContactPatches) {
   std::cout << "\nBroadphase found " << broadphase.numCollisions
             << " potential collision pairs" << std::endl;
 
-  // Convert broadphase results to pair vector for narrowphase
-  std::vector<std::pair<int, int>> collisionPairs;
-  for (const auto& cp : broadphase.h_collisionPairs) {
-    collisionPairs.emplace_back(cp.idA, cp.idB);
-  }
-
   // ===== Narrowphase =====
   // Build element-to-mesh ID mapping
   Eigen::VectorXi elementMeshIds(mesh_manager.GetTotalElements());
@@ -416,7 +397,8 @@ TEST_F(TestCollision, ThreeSpheresContactPatches) {
   }
 
   narrowphase.Initialize(nodes, elements, pressure, elementMeshIds);
-  narrowphase.SetCollisionPairs(collisionPairs);
+  narrowphase.SetCollisionPairsDevice(broadphase.GetCollisionPairsDevicePtr(),
+                                      broadphase.numCollisions);
   narrowphase.ComputeContactPatches();
   narrowphase.RetrieveResults();
 

@@ -22,6 +22,8 @@
 #include "Broadphase.cuh"
 #include "BroadphaseFunc.cuh"
 
+#include "lib_utils/mesh_manager.h"
+
 // Constructor
 Broadphase::Broadphase()
     : numObjects(0),
@@ -29,6 +31,8 @@ Broadphase::Broadphase()
       d_aabbs(nullptr),
       d_nodes(nullptr),
       d_elements(nullptr),
+      d_elementMeshIds(nullptr),
+      enableSelfCollision(true),
       d_bp(nullptr),
       d_sortKeys(nullptr),
       d_sortIndices(nullptr),
@@ -38,6 +42,7 @@ Broadphase::Broadphase()
       d_tempStorage(nullptr),
       tempStorageBytes(0),
       d_collisionPairs(nullptr),
+      d_sameMeshPairsCount(nullptr),
       d_neighborPairHashes(nullptr),
       numNeighborPairs(0),
       n_nodes(0),
@@ -51,7 +56,8 @@ Broadphase::~Broadphase() {
 
 // Initialize GPU resources with mesh data
 void Broadphase::Initialize(const Eigen::MatrixXd& nodes,
-                            const Eigen::MatrixXi& elements) {
+                            const Eigen::MatrixXi& elements,
+                            const Eigen::VectorXi& elementMeshIds) {
   // Store mesh dimensions
   n_nodes         = nodes.rows();
   n_elems         = elements.rows();
@@ -92,12 +98,36 @@ void Broadphase::Initialize(const Eigen::MatrixXd& nodes,
   cudaMemcpy(d_elements, elements.data(),
              n_elems * nodesPerElement * sizeof(int), cudaMemcpyHostToDevice);
 
+  // Allocate and copy element mesh IDs
+  h_elementMeshIds.assign(n_elems, 0);
+  if (elementMeshIds.size() == n_elems) {
+    for (int i = 0; i < n_elems; ++i) {
+      h_elementMeshIds[i] = elementMeshIds(i);
+    }
+  }
+
+  cudaMalloc(&d_elementMeshIds, n_elems * sizeof(int));
+  cudaMemcpy(d_elementMeshIds, h_elementMeshIds.data(), n_elems * sizeof(int),
+             cudaMemcpyHostToDevice);
+
   // Allocate device copy of this struct and copy to device
   cudaMalloc(&d_bp, sizeof(Broadphase));
   cudaMemcpy(d_bp, this, sizeof(Broadphase), cudaMemcpyHostToDevice);
 
+  if (d_sameMeshPairsCount == nullptr) {
+    cudaMalloc(&d_sameMeshPairsCount, sizeof(int));
+  }
+
   std::cout << "Broadphase initialized with " << n_nodes << " nodes and "
             << n_elems << " elements" << std::endl;
+}
+
+void Broadphase::EnableSelfCollision(bool enable) {
+  enableSelfCollision = enable;
+
+  if (d_bp) {
+    cudaMemcpy(d_bp, this, sizeof(Broadphase), cudaMemcpyHostToDevice);
+  }
 }
 
 // Destroy/cleanup GPU resources
@@ -142,6 +172,11 @@ void Broadphase::Destroy() {
     d_collisionPairs = nullptr;
   }
 
+  if (d_sameMeshPairsCount) {
+    cudaFree(d_sameMeshPairsCount);
+    d_sameMeshPairsCount = nullptr;
+  }
+
   if (d_neighborPairHashes) {
     cudaFree(d_neighborPairHashes);
     d_neighborPairHashes = nullptr;
@@ -150,6 +185,11 @@ void Broadphase::Destroy() {
   if (d_nodes) {
     cudaFree(d_nodes);
     d_nodes = nullptr;
+  }
+
+  if (d_elementMeshIds) {
+    cudaFree(d_elementMeshIds);
+    d_elementMeshIds = nullptr;
   }
 
   if (d_elements) {
@@ -162,11 +202,29 @@ void Broadphase::Destroy() {
     d_bp = nullptr;
   }
 
+  h_elementMeshIds.clear();
+  enableSelfCollision = true;
+
   numObjects       = 0;
   numCollisions    = 0;
   numNeighborPairs = 0;
   n_nodes          = 0;
   n_elems          = 0;
+}
+
+void Broadphase::Initialize(const ANCFCPUUtils::MeshManager& mesh_manager) {
+  const Eigen::MatrixXd& nodes    = mesh_manager.GetAllNodes();
+  const Eigen::MatrixXi& elements = mesh_manager.GetAllElements();
+
+  Eigen::VectorXi elementMeshIds(mesh_manager.GetTotalElements());
+  for (int i = 0; i < mesh_manager.GetNumMeshes(); ++i) {
+    const auto& instance = mesh_manager.GetMeshInstance(i);
+    for (int e = 0; e < instance.num_elements; ++e) {
+      elementMeshIds(instance.element_offset + e) = i;
+    }
+  }
+
+  Initialize(nodes, elements, elementMeshIds);
 }
 
 // Update node positions on device without changing topology or neighbor data
@@ -318,13 +376,13 @@ void Broadphase::PrintSortedAABBs(int axis) {
                           : (axis == 1) ? aabb.min.y
                                         : aabb.min.z;
     if (fabs(expected_key - h_sortedKeys[i]) > 1e-12) {
-      std::cout << "  ⚠️  WARNING: Sort key mismatch! Expected " << expected_key
+      std::cout << "  WARNING: Sort key mismatch. Expected " << expected_key
                 << " but got " << h_sortedKeys[i] << std::endl;
     }
 
     // Check if sorted correctly (should be in ascending order)
     if (i > 0 && h_sortedKeys[i] < h_sortedKeys[i - 1]) {
-      std::cout << "  ❌ ERROR: Sort order violated! Key " << h_sortedKeys[i]
+      std::cout << "  ERROR: Sort order violated. Key " << h_sortedKeys[i]
                 << " < previous key " << h_sortedKeys[i - 1] << std::endl;
     }
 
@@ -343,10 +401,10 @@ void Broadphase::PrintSortedAABBs(int axis) {
   }
 
   if (is_sorted) {
-    std::cout << "✅ Sorting verification PASSED: AABBs are correctly sorted"
+    std::cout << "Sorting verification PASSED: AABBs are correctly sorted"
               << std::endl;
   } else {
-    std::cout << "❌ Sorting verification FAILED: AABBs are NOT correctly "
+    std::cout << "Sorting verification FAILED: AABBs are NOT correctly "
                  "sorted"
               << std::endl;
   }
@@ -414,7 +472,7 @@ void Broadphase::BuildNeighborMap() {
 }
 
 // Detect collisions using two-pass sweep and prune (with neighbor filtering)
-void Broadphase::DetectCollisions() {
+void Broadphase::DetectCollisions(bool copyPairsToHost) {
   if (numObjects == 0)
     return;
 
@@ -429,7 +487,7 @@ void Broadphase::DetectCollisions() {
 
   countCollisionsKernel<<<gridSize, blockSize>>>(
       d_sortedAABBs, d_collisionCounts, numObjects, d_neighborPairHashes,
-      numNeighborPairs);
+      numNeighborPairs, d_elementMeshIds, enableSelfCollision ? 1 : 0);
   cudaDeviceSynchronize();
 
   // Compute prefix sum (exclusive scan of numObjects elements)
@@ -472,13 +530,17 @@ void Broadphase::DetectCollisions() {
 
   generateCollisionPairsKernel<<<gridSize, blockSize>>>(
       d_sortedAABBs, d_collisionOffsets, d_collisionPairs, numObjects,
-      d_neighborPairHashes, numNeighborPairs);
+      d_neighborPairHashes, numNeighborPairs, d_elementMeshIds,
+      enableSelfCollision ? 1 : 0);
   cudaDeviceSynchronize();
 
-  // Copy results to host
-  h_collisionPairs.resize(numCollisions);
-  cudaMemcpy(h_collisionPairs.data(), d_collisionPairs,
-             numCollisions * sizeof(CollisionPair), cudaMemcpyDeviceToHost);
+  if (copyPairsToHost) {
+    h_collisionPairs.resize(numCollisions);
+    cudaMemcpy(h_collisionPairs.data(), d_collisionPairs,
+               numCollisions * sizeof(CollisionPair), cudaMemcpyDeviceToHost);
+  } else {
+    h_collisionPairs.clear();
+  }
 
   // Cleanup
   cudaFree(d_collisionCounts);
@@ -487,6 +549,26 @@ void Broadphase::DetectCollisions() {
 
   std::cout << "Detected " << numCollisions
             << " collision pairs (neighbors filtered)" << std::endl;
+}
+
+int Broadphase::CountSameMeshPairsDevice() const {
+  if (numCollisions == 0 || d_collisionPairs == nullptr || d_elementMeshIds == nullptr ||
+      d_sameMeshPairsCount == nullptr) {
+    return 0;
+  }
+
+  cudaMemset(d_sameMeshPairsCount, 0, sizeof(int));
+
+  int blockSize = 256;
+  int gridSize  = (numCollisions + blockSize - 1) / blockSize;
+
+  countSameMeshPairsKernel<<<gridSize, blockSize>>>(
+      d_collisionPairs, numCollisions, d_elementMeshIds, d_sameMeshPairsCount);
+  cudaDeviceSynchronize();
+
+  int count = 0;
+  cudaMemcpy(&count, d_sameMeshPairsCount, sizeof(int), cudaMemcpyDeviceToHost);
+  return count;
 }
 
 // Print collision pairs

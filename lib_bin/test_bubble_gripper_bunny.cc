@@ -81,6 +81,13 @@ int main(int argc, char** argv) {
   std::cout << "Bubble Gripper Bunny Simulation" << std::endl;
   std::cout << "========================================" << std::endl;
 
+  bool enable_self_collision = false;
+  if (argc > 1) {
+    enable_self_collision = (std::atoi(argv[1]) != 0);
+  }
+  std::cout << "Enable self collision: " << (enable_self_collision ? 1 : 0)
+            << std::endl;
+
   // Create output directory
   std::filesystem::create_directories("output/bubble_gripper");
 
@@ -354,12 +361,14 @@ int main(int argc, char** argv) {
     }
   }
 
-  broadphase.Initialize(initial_nodes, elements);
+  broadphase.Initialize(mesh_manager);
+  broadphase.EnableSelfCollision(enable_self_collision);
   broadphase.CreateAABB();
   broadphase.BuildNeighborMap();
   broadphase.SortAABBs(0);
 
   narrowphase.Initialize(initial_nodes, elements, pressure, elementMeshIds);
+  narrowphase.EnableSelfCollision(enable_self_collision);
 
   std::cout << "Collision detection initialized" << std::endl;
 
@@ -405,19 +414,14 @@ int main(int argc, char** argv) {
     broadphase.UpdateNodes(current_nodes);
     broadphase.CreateAABB();
     broadphase.SortAABBs(0);
-    broadphase.DetectCollisions();
+    broadphase.DetectCollisions(false);
 
     int num_collision_pairs = broadphase.numCollisions;
 
-    // Convert to pair vector
-    std::vector<std::pair<int, int>> collisionPairs;
-    for (const auto& cp : broadphase.h_collisionPairs) {
-      collisionPairs.emplace_back(cp.idA, cp.idB);
-    }
-
     // Run narrowphase with updated positions and current collision pairs
     narrowphase.UpdateNodes(current_nodes);
-    narrowphase.SetCollisionPairs(collisionPairs);
+    narrowphase.SetCollisionPairsDevice(broadphase.GetCollisionPairsDevicePtr(),
+                                        num_collision_pairs);
     narrowphase.ComputeContactPatches();
     narrowphase.RetrieveResults();
     int num_patches = narrowphase.numPatches;
