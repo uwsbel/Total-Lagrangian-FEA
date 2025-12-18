@@ -9,6 +9,7 @@
 
 #include <cuda_runtime.h>
 
+#include <chrono>
 #include <Eigen/Dense>
 #include <cstdlib>
 #include <filesystem>
@@ -50,14 +51,33 @@ int main(int argc, char** argv) {
 
   double contact_damping  = contact_damping_default;
   double contact_friction = contact_friction_default;
+  bool enable_self_collision = false;
+  int max_steps = num_steps;
+  int export_interval = 5;
   if (argc > 1) {
     contact_damping = std::atof(argv[1]);
   }
   if (argc > 2) {
     contact_friction = std::atof(argv[2]);
   }
+  if (argc > 3) {
+    enable_self_collision = (std::atoi(argv[3]) != 0);
+  }
+  if (argc > 4) {
+    int v = std::atoi(argv[4]);
+    if (v > 0) {
+      max_steps = v;
+    }
+  }
+  if (argc > 5) {
+    export_interval = std::atoi(argv[5]);
+  }
   std::cout << "Contact damping: " << contact_damping << std::endl;
   std::cout << "Contact friction: " << contact_friction << std::endl;
+  std::cout << "Enable self collision: " << (enable_self_collision ? 1 : 0)
+            << std::endl;
+  std::cout << "Max steps: " << max_steps << std::endl;
+  std::cout << "Export interval: " << export_interval << std::endl;
 
   // Create output directory
   std::filesystem::create_directories("output/sphere_drop");
@@ -224,12 +244,14 @@ int main(int argc, char** argv) {
   }
 
   // Initialize broadphase and narrowphase once with initial topology
-  broadphase.Initialize(initial_nodes, elements);
+  broadphase.Initialize(mesh_manager);
+  broadphase.EnableSelfCollision(enable_self_collision);
   broadphase.CreateAABB();
   broadphase.BuildNeighborMap();
   broadphase.SortAABBs(0);
 
   narrowphase.Initialize(initial_nodes, elements, pressure, elementMeshIds);
+  narrowphase.EnableSelfCollision(enable_self_collision);
 
   std::cout << "Collision detection initialized" << std::endl;
 
@@ -237,14 +259,24 @@ int main(int argc, char** argv) {
   // Simulation loop
   // =========================================================================
   std::cout << "\n========================================" << std::endl;
-  std::cout << "Starting simulation (" << num_steps << " steps)" << std::endl;
+  std::cout << "Starting simulation (" << max_steps << " steps)" << std::endl;
   std::cout << "========================================\n" << std::endl;
 
   // Track displacement for visualization
   Eigen::VectorXd displacement(n_nodes * 3);
   displacement.setZero();
 
-  for (int step = 0; step < num_steps; ++step) {
+  using Clock = std::chrono::high_resolution_clock;
+  double collision_ms_sum       = 0.0;
+  double broadphase_ms_sum      = 0.0;
+  double pair_marshaling_ms_sum = 0.0;
+  double narrowphase_ms_sum     = 0.0;
+  long long collision_pairs_sum = 0;
+  long long same_mesh_pairs_sum = 0;
+  long long patches_sum         = 0;
+  long long timing_steps        = 0;
+
+  for (int step = 0; step < max_steps; ++step) {
     // ---------------------------------------------------------------------
     // 1. Get current node positions
     // ---------------------------------------------------------------------
@@ -262,28 +294,49 @@ int main(int argc, char** argv) {
     // ---------------------------------------------------------------------
     // 2. Run collision detection (reuse topology, update positions only)
     // ---------------------------------------------------------------------
+    auto t_collision0 = Clock::now();
+    auto t_broad0     = t_collision0;
     broadphase.UpdateNodes(current_nodes);
     broadphase.CreateAABB();
     broadphase.SortAABBs(0);
-    broadphase.DetectCollisions();
+    broadphase.DetectCollisions(false);
+
+    auto t_broad1 = Clock::now();
 
     int num_collision_pairs = broadphase.numCollisions;
 
-    // Convert to pair vector
-    std::vector<std::pair<int, int>> collisionPairs;
-    for (const auto& cp : broadphase.h_collisionPairs) {
-      collisionPairs.emplace_back(cp.idA, cp.idB);
-    }
+    // Count same-mesh pairs on device (avoid copying all pairs to CPU)
+    auto t_pair0 = Clock::now();
+    int same_mesh_pairs = broadphase.CountSameMeshPairsDevice();
+    int cross_mesh_pairs = num_collision_pairs - same_mesh_pairs;
+    auto t_pair1 = Clock::now();
 
     // Run narrowphase with updated positions and current collision pairs
+    auto t_narrow0 = Clock::now();
     narrowphase.UpdateNodes(current_nodes);
-    narrowphase.SetCollisionPairs(collisionPairs);
+    narrowphase.SetCollisionPairsDevice(broadphase.GetCollisionPairsDevicePtr(),
+                                        num_collision_pairs);
     narrowphase.ComputeContactPatches();
 
     // Get patch count (without transferring all patch data to CPU)
     // We still need RetrieveResults for visualization export
     narrowphase.RetrieveResults();
     int num_patches = narrowphase.numPatches;
+
+    auto t_narrow1     = Clock::now();
+    auto t_collision1  = t_narrow1;
+    double broad_ms    = std::chrono::duration<double, std::milli>(t_broad1 - t_broad0).count();
+    double pair_ms     = std::chrono::duration<double, std::milli>(t_pair1 - t_pair0).count();
+    double narrow_ms   = std::chrono::duration<double, std::milli>(t_narrow1 - t_narrow0).count();
+    double collision_ms = std::chrono::duration<double, std::milli>(t_collision1 - t_collision0).count();
+    broadphase_ms_sum += broad_ms;
+    pair_marshaling_ms_sum += pair_ms;
+    narrowphase_ms_sum += narrow_ms;
+    collision_ms_sum += collision_ms;
+    collision_pairs_sum += num_collision_pairs;
+    same_mesh_pairs_sum += same_mesh_pairs;
+    patches_sum += num_patches;
+    timing_steps++;
 
     // ---------------------------------------------------------------------
     // 3. Compute external forces (contact + gravity)
@@ -337,9 +390,9 @@ int main(int argc, char** argv) {
     }
 
     // ---------------------------------------------------------------------
-    // 6. Export VTK every 5 steps
+    // 6. Export VTK
     // ---------------------------------------------------------------------
-    if (step % 5 == 0) {
+    if (export_interval > 0 && step % export_interval == 0) {
       std::ostringstream filename;
       filename << "output/sphere_drop/mesh_" << std::setfill('0')
                << std::setw(4) << step << ".vtu";
@@ -373,12 +426,45 @@ int main(int argc, char** argv) {
           std::abs(gravity_force_per_node * instance_top.num_nodes);
       std::cout << "Step " << std::setw(4) << step << ": "
                 << "pairs=" << std::setw(5) << num_collision_pairs << ", "
+                << "cross=" << std::setw(5) << cross_mesh_pairs << ", "
+                << "self=" << std::setw(5) << same_mesh_pairs << ", "
                 << "patches=" << std::setw(4) << num_patches << ", "
                 << "top_z=" << std::fixed << std::setprecision(5) << com_z
                 << ", |f_g|=" << std::scientific << std::setprecision(2)
                 << gravity_force_total << ", |f_c|=" << contact_force_mag
-                << std::endl;
+                << ", t_coll(ms)=" << std::fixed << std::setprecision(3)
+                << collision_ms << " (b=" << broad_ms << ", p=" << pair_ms
+                << ", n=" << narrow_ms << ")" << std::endl;
     }
+  }
+
+  if (timing_steps > 0) {
+    std::cout << "\n========== Collision Timing Summary =========="
+              << std::endl;
+    std::cout << "Steps: " << timing_steps << std::endl;
+    std::cout << "Avg pairs/step: "
+              << (double)collision_pairs_sum / (double)timing_steps
+              << std::endl;
+    std::cout << "Avg self-mesh pairs/step: "
+              << (double)same_mesh_pairs_sum / (double)timing_steps
+              << std::endl;
+    std::cout << "Avg cross-mesh pairs/step: "
+              << (double)(collision_pairs_sum - same_mesh_pairs_sum) /
+                     (double)timing_steps
+              << std::endl;
+    std::cout << "Avg patches/step: "
+              << (double)patches_sum / (double)timing_steps << std::endl;
+    std::cout << "Avg broadphase ms/step: "
+              << broadphase_ms_sum / (double)timing_steps << std::endl;
+    std::cout << "Avg pair marshaling ms/step: "
+              << pair_marshaling_ms_sum / (double)timing_steps << std::endl;
+    std::cout << "Avg narrowphase ms/step: "
+              << narrowphase_ms_sum / (double)timing_steps << std::endl;
+    std::cout << "Avg collision total ms/step: "
+              << collision_ms_sum / (double)timing_steps << std::endl;
+    std::cout << "============================================="
+              << "\n"
+              << std::endl;
   }
 
   // =========================================================================

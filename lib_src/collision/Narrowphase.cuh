@@ -9,6 +9,8 @@
 
 #include <cuda_runtime.h>
 
+#include "CollisionTypes.cuh"
+
 #include <Eigen/Dense>
 #include <vector>
 
@@ -115,9 +117,15 @@ struct Narrowphase {
   // higher)
   int* d_elementMeshIds;  // (n_elems) mesh ID for each element
 
+  // If false, same-mesh collision pairs are skipped in narrowphase.
+  // Broadphase is expected to do this filtering first; this is a safety guard.
+  bool enableSelfCollision;
+
   // Collision pair data (from broadphase)
-  int* d_collisionPairs;  // Flattened pairs: [tetA0, tetB0, tetA1, tetB1, ...]
+  CollisionPair* d_collisionPairs;
   int numCollisionPairs;
+
+  bool ownsCollisionPairs;
 
   // Device pointer to this struct for kernel access
   Narrowphase* d_np;
@@ -147,6 +155,8 @@ struct Narrowphase {
                   const Eigen::VectorXd& pressure,
                   const Eigen::VectorXi& elementMeshIds = Eigen::VectorXi());
 
+  void EnableSelfCollision(bool enable);
+
   // Update nodal positions on the device while reusing existing topology,
   // pressure field, and element-mesh IDs. Expects the same n_nodes and 3
   // columns as passed to Initialize.
@@ -158,6 +168,8 @@ struct Narrowphase {
    * @param pairs Vector of (tetA, tetB) collision pairs
    */
   void SetCollisionPairs(const std::vector<std::pair<int, int>>& pairs);
+
+  void SetCollisionPairsDevice(const CollisionPair* d_pairs, int numPairs);
 
   /**
    * Compute contact patches for all collision pairs.

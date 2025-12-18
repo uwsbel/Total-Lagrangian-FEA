@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Eigen/Dense>
+#include <cmath>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
@@ -38,11 +39,30 @@ class VisualizationUtils {
     // Count total vertices and polygons
     int totalVerts  = 0;
     int numPolygons = 0;
+    std::vector<double> forceMag;
+    forceMag.reserve(patches.size());
+    double maxForceMag = 0.0;
     for (const auto& patch : patches) {
       if (patch.isValid && patch.numVertices >= 3) {
         totalVerts += patch.numVertices;
         numPolygons++;
+
+        double f = std::abs(patch.p_equilibrium) * patch.area;
+        forceMag.push_back(f);
+        if (f > maxForceMag) {
+          maxForceMag = f;
+        }
       }
+    }
+
+    std::vector<double> normalLineLength;
+    normalLineLength.reserve(forceMag.size());
+    if (maxForceMag > 0.0) {
+      for (double f : forceMag) {
+        normalLineLength.push_back(0.5 * normalScale * (f / maxForceMag));
+      }
+    } else {
+      normalLineLength.assign(forceMag.size(), 0.0);
     }
 
     int numLines    = numPolygons;
@@ -104,13 +124,17 @@ class VisualizationUtils {
       }
     }
 
+    int arrowIdx = 0;
     for (const auto& patch : patches) {
       if (patch.isValid && patch.numVertices >= 3) {
-        file << "          " << patch.centroid.x << " " << patch.centroid.y
-             << " " << patch.centroid.z << "\n";
-        file << "          " << patch.centroid.x + normalScale * patch.normal.x
-             << " " << patch.centroid.y + normalScale * patch.normal.y << " "
-             << patch.centroid.z + normalScale * patch.normal.z << "\n";
+        double len = normalLineLength[arrowIdx];
+        file << "          " << patch.centroid.x - len * patch.normal.x
+             << " " << patch.centroid.y - len * patch.normal.y << " "
+             << patch.centroid.z - len * patch.normal.z << "\n";
+        file << "          " << patch.centroid.x + len * patch.normal.x
+             << " " << patch.centroid.y + len * patch.normal.y << " "
+             << patch.centroid.z + len * patch.normal.z << "\n";
+        arrowIdx++;
       }
     }
     file << "        </DataArray>\n";
@@ -120,11 +144,11 @@ class VisualizationUtils {
     file << "        <DataArray type=\"Int32\" Name=\"connectivity\" "
             "format=\"ascii\">\n";
     int linePointOffset = totalVerts;
-    int arrowIdx        = 0;
+    arrowIdx            = 0;
     for (const auto& patch : patches) {
       if (patch.isValid && patch.numVertices >= 3) {
-        file << "          " << linePointOffset + arrowIdx * 2 << " "
-             << linePointOffset + arrowIdx * 2 + 1 << "\n";
+        int base = linePointOffset + arrowIdx * 2;
+        file << "          " << base << " " << base + 1 << "\n";
         arrowIdx++;
       }
     }
@@ -172,6 +196,26 @@ class VisualizationUtils {
 
     // Cell data (per-polygon attributes)
     file << "      <CellData>\n";
+
+    file << "        <DataArray type=\"Float64\" Name=\"ForceMag\" "
+            "format=\"ascii\">\n";
+    for (double f : forceMag) {
+      file << "          " << f << "\n";
+    }
+    for (double f : forceMag) {
+      file << "          " << f << "\n";
+    }
+    file << "        </DataArray>\n";
+
+    file << "        <DataArray type=\"Float64\" Name=\"NormalLineLength\" "
+            "format=\"ascii\">\n";
+    for (double len : normalLineLength) {
+      file << "          " << len << "\n";
+    }
+    for (double len : normalLineLength) {
+      file << "          " << len << "\n";
+    }
+    file << "        </DataArray>\n";
 
     // Area
     file << "        <DataArray type=\"Float64\" Name=\"Area\" "

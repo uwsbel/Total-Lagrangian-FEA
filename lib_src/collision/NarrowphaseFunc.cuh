@@ -471,15 +471,15 @@ __device__ void computePolygonAreaAndCentroid(const ClipPolygon& poly,
 
 __global__ void computeContactPatchesKernel(Narrowphase* np,
                                             ContactPatch* patches,
-                                            const int* collisionPairs,
+                                            const CollisionPair* collisionPairs,
                                             int numPairs) {
   int idx = blockIdx.x * blockDim.x + threadIdx.x;
   if (idx >= numPairs)
     return;
 
   // Get tet pair indices
-  int tetA = collisionPairs[2 * idx];
-  int tetB = collisionPairs[2 * idx + 1];
+  int tetA = collisionPairs[idx].idA;
+  int tetB = collisionPairs[idx].idB;
 
   // Bounds check element indices
   if (tetA < 0 || tetA >= np->n_elems || tetB < 0 || tetB >= np->n_elems) {
@@ -490,6 +490,10 @@ __global__ void computeContactPatchesKernel(Narrowphase* np,
   // Normal direction: from lower mesh ID to higher mesh ID
   int meshIdA = np->d_elementMeshIds[tetA];
   int meshIdB = np->d_elementMeshIds[tetB];
+
+  if (!np->enableSelfCollision && meshIdA == meshIdB) {
+    return;
+  }
 
   // Swap if necessary: ensure tetA belongs to mesh with lower ID
   // This guarantees normal points from lower mesh ID to higher mesh ID
