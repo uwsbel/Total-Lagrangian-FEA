@@ -3,6 +3,7 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <cstdlib>
 #include <vector>
 
 #include <thrust/device_ptr.h>
@@ -539,24 +540,26 @@ void GPU_FEAT10_Data::ConvertTOCSRConstraintJac() {
   CHECK_CUSPARSE(cusparseDestroy(handle));
   HANDLE_ERROR(cudaFree(dBuffer));
 
-  // print h_csr_offsets, h_csr_columns, h_csr_values for debugging
-  std::cout << "Constraint Jacobian TRANSPOSE (J^T) CSR Offsets (ALL "
-            << (num_rows + 1) << " entries): ";
-  for (int i = 0; i < num_rows + 1; i++)
-    std::cout << h_csr_offsets[i] << " ";
-  std::cout << std::endl;
+  const bool print_constraint_csr = (std::getenv("PRINT_CONSTRAINT_CSR") != nullptr);
+  if (print_constraint_csr) {
+    std::cout << "Constraint Jacobian TRANSPOSE (J^T) CSR Offsets (ALL "
+              << (num_rows + 1) << " entries): ";
+    for (int i = 0; i < num_rows + 1; i++)
+      std::cout << h_csr_offsets[i] << " ";
+    std::cout << std::endl;
 
-  std::cout << "Constraint Jacobian TRANSPOSE (J^T) CSR Columns (ALL " << nnz
-            << " entries): ";
-  for (int i = 0; i < nnz; i++)
-    std::cout << h_csr_columns[i] << " ";
-  std::cout << std::endl;
+    std::cout << "Constraint Jacobian TRANSPOSE (J^T) CSR Columns (ALL " << nnz
+              << " entries): ";
+    for (int i = 0; i < nnz; i++)
+      std::cout << h_csr_columns[i] << " ";
+    std::cout << std::endl;
 
-  std::cout << "Constraint Jacobian TRANSPOSE (J^T) CSR Values (ALL " << nnz
-            << " entries): ";
-  for (int i = 0; i < nnz; i++)
-    std::cout << std::fixed << std::setprecision(6) << h_csr_values[i] << " ";
-  std::cout << std::endl;
+    std::cout << "Constraint Jacobian TRANSPOSE (J^T) CSR Values (ALL " << nnz
+              << " entries): ";
+    for (int i = 0; i < nnz; i++)
+      std::cout << std::fixed << std::setprecision(6) << h_csr_values[i] << " ";
+    std::cout << std::endl;
+  }
   delete[] h_csr_offsets;
   delete[] h_csr_columns;
   delete[] h_csr_values;

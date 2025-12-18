@@ -188,7 +188,7 @@ int main() {
   }
 
   SyncedAdamWParams params = {2e-4, 0.9,  0.999, 1e-8, 1e-4, 0.998, 1e-1,
-                              1e-6, 1e14, 5,     500,  1e-3, 10};
+                              1e-6, 1e14, 5,     500,  1e-3, 10, 0.0};
 
   // for now, n_constraints needs to be explicitly defined
   SyncedAdamWSolver solver(&gpu_3243_data, gpu_3243_data.get_n_constraint());

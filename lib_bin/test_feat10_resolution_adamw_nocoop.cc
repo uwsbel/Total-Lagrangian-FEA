@@ -14,11 +14,13 @@
 #include <cuda_runtime.h>
 
 #include <Eigen/Dense>
+#include <algorithm>
 #include <cmath>
 #include <cstdlib>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -35,57 +37,155 @@ enum MESH_RESOLUTION { RES_0, RES_2, RES_4, RES_8, RES_16 };
 
 enum MATERIAL_MODEL { MAT_SVK, MAT_MOONEY_RIVLIN };
 
-int main() {
+ static int pick_tip_node(const Eigen::MatrixXd &nodes) {
+   const int n = static_cast<int>(nodes.rows());
+   if (n <= 0) {
+     return 0;
+   }
+
+   double max_x = nodes(0, 0);
+   for (int i = 1; i < n; ++i) {
+     max_x = std::max(max_x, nodes(i, 0));
+   }
+
+   const double target_y = 1.0;
+   const double target_z = 0.5;
+   int best_idx = 0;
+   double best_cost = std::numeric_limits<double>::infinity();
+
+   for (int i = 0; i < n; ++i) {
+     if (std::abs(nodes(i, 0) - max_x) > 1e-8) {
+       continue;
+     }
+     const double dy = nodes(i, 1) - target_y;
+     const double dz = nodes(i, 2) - target_z;
+     const double cost = dy * dy + dz * dz;
+     if (cost < best_cost) {
+       best_cost = cost;
+       best_idx = i;
+     }
+   }
+   return best_idx;
+ }
+
+static MESH_RESOLUTION parse_resolution(int argc, char **argv) {
+  for (int i = 1; i < argc; ++i) {
+    const std::string arg(argv[i]);
+    if (arg == "--res=0" || arg == "--res=RES_0")
+      return RES_0;
+    if (arg == "--res=2" || arg == "--res=RES_2")
+      return RES_2;
+    if (arg == "--res=4" || arg == "--res=RES_4")
+      return RES_4;
+    if (arg == "--res=8" || arg == "--res=RES_8")
+      return RES_8;
+    if (arg == "--res=16" || arg == "--res=RES_16")
+      return RES_16;
+  }
+  return RES_0;
+}
+
+static int parse_steps(int argc, char **argv) {
+  for (int i = 1; i < argc; ++i) {
+    const std::string arg(argv[i]);
+    const std::string key = "--steps=";
+    if (arg.rfind(key, 0) == 0) {
+      return std::max(1, std::atoi(arg.substr(key.size()).c_str()));
+    }
+  }
+  return 10;
+}
+
+int main(int argc, char **argv) {
+  int device_count = 0;
+  cudaError_t dev_err = cudaGetDeviceCount(&device_count);
+  if (dev_err != cudaSuccess || device_count <= 0) {
+    std::cerr << "No CUDA device visible (cudaGetDeviceCount returned "
+              << device_count << ")" << std::endl;
+    return 1;
+  }
+  HANDLE_ERROR(cudaSetDevice(0));
+
+  cudaDeviceProp props;
+  HANDLE_ERROR(cudaGetDeviceProperties(&props, 0));
+  std::cout << "CUDA device 0: " << props.name << " (cc "
+            << props.major << "." << props.minor << ")" << std::endl;
+
+  std::string workspace_dir = ".";
+  if (const char *d = std::getenv("BUILD_WORKSPACE_DIRECTORY")) {
+    workspace_dir = d;
+  }
+
+  auto mesh_path = [&](const std::string &rel) {
+    if (!workspace_dir.empty() && workspace_dir.back() == '/') {
+      return workspace_dir + rel;
+    }
+    return workspace_dir + "/" + rel;
+  };
+
   // Read mesh data
   Eigen::MatrixXd nodes;
   Eigen::MatrixXi elements;
   int plot_target_node;
   int n_nodes, n_elems;
 
-  MESH_RESOLUTION resolution = RES_16;
+  const bool verbose_dump = false;
+  const int n_steps       = parse_steps(argc, argv);
+  MESH_RESOLUTION resolution = parse_resolution(argc, argv);
 
   MATERIAL_MODEL material = MAT_SVK;
 
   if (resolution == RES_0) {
-    n_nodes = ANCFCPUUtils::FEAT10_read_nodes(
-        "data/meshes/T10/resolution/beam_3x2x1_res0.1.node", nodes);
-    n_elems = ANCFCPUUtils::FEAT10_read_elements(
-        "data/meshes/T10/resolution/beam_3x2x1_res0.1.ele", elements);
+    const std::string node_file = mesh_path(
+        "data/meshes/T10/resolution/beam_3x2x1_res0.1.node");
+    const std::string elem_file = mesh_path(
+        "data/meshes/T10/resolution/beam_3x2x1_res0.1.ele");
+    n_nodes = ANCFCPUUtils::FEAT10_read_nodes(node_file.c_str(), nodes);
+    n_elems = ANCFCPUUtils::FEAT10_read_elements(elem_file.c_str(), elements);
     plot_target_node = 23;
   } else if (resolution == RES_2) {
-    n_nodes = ANCFCPUUtils::FEAT10_read_nodes(
-        "data/meshes/T10/resolution/beam_3x2x1_res2.1.node", nodes);
-    n_elems = ANCFCPUUtils::FEAT10_read_elements(
-        "data/meshes/T10/resolution/beam_3x2x1_res2.1.ele", elements);
+    const std::string node_file =
+        mesh_path("data/meshes/T10/resolution/beam_3x2x1_res2.1.node");
+    const std::string elem_file =
+        mesh_path("data/meshes/T10/resolution/beam_3x2x1_res2.1.ele");
+    n_nodes = ANCFCPUUtils::FEAT10_read_nodes(node_file.c_str(), nodes);
+    n_elems = ANCFCPUUtils::FEAT10_read_elements(elem_file.c_str(), elements);
     plot_target_node = 89;
   } else if (resolution == RES_4) {
-    n_nodes = ANCFCPUUtils::FEAT10_read_nodes(
-        "data/meshes/T10/resolution/beam_3x2x1_res4.1.node", nodes);
-    n_elems = ANCFCPUUtils::FEAT10_read_elements(
-        "data/meshes/T10/resolution/beam_3x2x1_res4.1.ele", elements);
+    const std::string node_file =
+        mesh_path("data/meshes/T10/resolution/beam_3x2x1_res4.1.node");
+    const std::string elem_file =
+        mesh_path("data/meshes/T10/resolution/beam_3x2x1_res4.1.ele");
+    n_nodes = ANCFCPUUtils::FEAT10_read_nodes(node_file.c_str(), nodes);
+    n_elems = ANCFCPUUtils::FEAT10_read_elements(elem_file.c_str(), elements);
     plot_target_node = 353;
   } else if (resolution == RES_8) {
-    n_nodes = ANCFCPUUtils::FEAT10_read_nodes(
-        "data/meshes/T10/resolution/beam_3x2x1_res8.1.node", nodes);
-    n_elems = ANCFCPUUtils::FEAT10_read_elements(
-        "data/meshes/T10/resolution/beam_3x2x1_res8.1.ele", elements);
+    const std::string node_file =
+        mesh_path("data/meshes/T10/resolution/beam_3x2x1_res8.1.node");
+    const std::string elem_file =
+        mesh_path("data/meshes/T10/resolution/beam_3x2x1_res8.1.ele");
+    n_nodes = ANCFCPUUtils::FEAT10_read_nodes(node_file.c_str(), nodes);
+    n_elems = ANCFCPUUtils::FEAT10_read_elements(elem_file.c_str(), elements);
     plot_target_node = 1408;
   } else if (resolution == RES_16) {
-    n_nodes = ANCFCPUUtils::FEAT10_read_nodes(
-        "data/meshes/T10/resolution/beam_3x2x1_res16.1.node", nodes);
-    n_elems = ANCFCPUUtils::FEAT10_read_elements(
-        "data/meshes/T10/resolution/beam_3x2x1_res16.1.ele", elements);
-    plot_target_node = 5630;
+    const std::string node_file =
+        mesh_path("data/meshes/T10/resolution/beam_3x2x1_res16.1.node");
+    const std::string elem_file =
+        mesh_path("data/meshes/T10/resolution/beam_3x2x1_res16.1.ele");
+    n_nodes = ANCFCPUUtils::FEAT10_read_nodes(node_file.c_str(), nodes);
+    n_elems = ANCFCPUUtils::FEAT10_read_elements(elem_file.c_str(), elements);
+    plot_target_node = pick_tip_node(nodes);
   }
 
   std::cout << "mesh read nodes: " << n_nodes << std::endl;
   std::cout << "mesh read elements: " << n_elems << std::endl;
 
-  // print nodes and elements matrix
-  std::cout << "nodes matrix:" << std::endl;
-  std::cout << nodes << std::endl;
-  std::cout << "elements matrix:" << std::endl;
-  std::cout << elements << std::endl;
+  if (verbose_dump) {
+    std::cout << "nodes matrix:" << std::endl;
+    std::cout << nodes << std::endl;
+    std::cout << "elements matrix:" << std::endl;
+    std::cout << elements << std::endl;
+  }
 
   GPU_FEAT10_Data gpu_t10_data(n_elems, n_nodes);
 
@@ -185,28 +285,29 @@ int main() {
 
   std::cout << "gpu_t10_data dndu pre complete" << std::endl;
 
-  // 2. Retrieve results
-  std::vector<std::vector<Eigen::MatrixXd>> ref_grads;
-  gpu_t10_data.RetrieveDnDuPreToCPU(ref_grads);
+  if (verbose_dump) {
+    std::vector<std::vector<Eigen::MatrixXd>> ref_grads;
+    gpu_t10_data.RetrieveDnDuPreToCPU(ref_grads);
 
-  std::cout << "ref_grads:" << std::endl;
-  for (size_t i = 0; i < ref_grads.size(); i++) {
-    for (size_t j = 0; j < ref_grads[i].size(); j++) {
-      std::cout << ref_grads[i][j] << std::endl;
+    std::cout << "ref_grads:" << std::endl;
+    for (size_t i = 0; i < ref_grads.size(); i++) {
+      for (size_t j = 0; j < ref_grads[i].size(); j++) {
+        std::cout << ref_grads[i][j] << std::endl;
+      }
     }
-  }
-  std::cout << "done retrieving ref_grads" << std::endl;
+    std::cout << "done retrieving ref_grads" << std::endl;
 
-  std::vector<std::vector<double>> detJ;
-  gpu_t10_data.RetrieveDetJToCPU(detJ);
+    std::vector<std::vector<double>> detJ;
+    gpu_t10_data.RetrieveDetJToCPU(detJ);
 
-  std::cout << "detJ:" << std::endl;
-  for (size_t i = 0; i < detJ.size(); i++) {
-    for (size_t j = 0; j < detJ[i].size(); j++) {
-      std::cout << detJ[i][j] << std::endl;
+    std::cout << "detJ:" << std::endl;
+    for (size_t i = 0; i < detJ.size(); i++) {
+      for (size_t j = 0; j < detJ[i].size(); j++) {
+        std::cout << detJ[i][j] << std::endl;
+      }
     }
+    std::cout << "done retrieving detJ" << std::endl;
   }
-  std::cout << "done retrieving detJ" << std::endl;
 
   gpu_t10_data.CalcMassMatrix();
 
@@ -218,39 +319,54 @@ int main() {
 
   std::cout << "done ConvertTOCSRConstraintJac" << std::endl;
 
-  // calculate p
-  gpu_t10_data.CalcP();
+  if (verbose_dump) {
+    gpu_t10_data.CalcP();
+    std::cout << "done CalcP" << std::endl;
 
-  std::cout << "done CalcP" << std::endl;
+    std::vector<std::vector<Eigen::MatrixXd>> p_from_F;
+    gpu_t10_data.RetrievePFromFToCPU(p_from_F);
 
-  // retrieve p
-  std::vector<std::vector<Eigen::MatrixXd>> p_from_F;
-  gpu_t10_data.RetrievePFromFToCPU(p_from_F);
-
-  std::cout << "P matrices (First Piola-Kirchhoff stress):" << std::endl;
-  for (size_t elem = 0; elem < p_from_F.size(); elem++) {
-    std::cout << "Element " << elem << ":" << std::endl;
-    for (size_t qp = 0; qp < p_from_F[elem].size(); qp++) {
-      std::cout << "  Quadrature Point " << qp << ":" << std::endl;
-      std::cout << p_from_F[elem][qp] << std::endl;
+    std::cout << "P matrices (First Piola-Kirchhoff stress):" << std::endl;
+    for (size_t elem = 0; elem < p_from_F.size(); elem++) {
+      std::cout << "Element " << elem << ":" << std::endl;
+      for (size_t qp = 0; qp < p_from_F[elem].size(); qp++) {
+        std::cout << "  Quadrature Point " << qp << ":" << std::endl;
+        std::cout << p_from_F[elem][qp] << std::endl;
+      }
     }
+    std::cout << "done retrieving P matrices" << std::endl;
+
+    gpu_t10_data.CalcInternalForce();
+    std::cout << "done CalcInternalForce" << std::endl;
+
+    Eigen::VectorXd f_int;
+    gpu_t10_data.RetrieveInternalForceToCPU(f_int);
+    std::cout << "Internal force vector (size: " << f_int.size() << "):"
+              << std::endl;
+    std::cout << f_int.transpose() << std::endl;
+    std::cout << "done retrieving internal force vector" << std::endl;
   }
-  std::cout << "done retrieving P matrices" << std::endl;
 
-  // calculate internal force
-  gpu_t10_data.CalcInternalForce();
-  std::cout << "done CalcInternalForce" << std::endl;
-
-  // retrieve internal force
-  Eigen::VectorXd f_int;
-  gpu_t10_data.RetrieveInternalForceToCPU(f_int);
-  std::cout << "Internal force vector (size: " << f_int.size()
-            << "):" << std::endl;
-  std::cout << f_int.transpose() << std::endl;
-  std::cout << "done retrieving internal force vector" << std::endl;
-
-  SyncedAdamWNocoopParams params = {2e-4, 0.9,  0.999, 1e-8, 1e-4, 0.995, 1e-1,
-                                    1e-6, 1e14, 5,     800,  1e-3, 20};
+  SyncedAdamWNocoopParams params;
+  if (resolution == RES_0) {
+    params = {2e-4, 0.9, 0.999, 1e-8, 1e-4, 0.995,
+              1e-1, 1e-6, 1e14, 5, 800, 1e-3, 20, 1e-4};
+  } else if (resolution == RES_2) {
+    params = {2e-4, 0.9, 0.999, 1e-8, 1e-4, 0.995,
+              1e-1, 1e-6, 1e14, 5, 800, 1e-3, 20, 1e-4};
+  } else if (resolution == RES_4) {
+    params = {2e-4, 0.9, 0.999, 1e-8, 1e-4, 0.995,
+              1e-1, 1e-6, 1e14, 5, 800, 1e-3, 20, 1e-4};
+  } else if (resolution == RES_8) {
+    params = {2.5e-4, 0.9, 0.999, 1e-8, 1e-4, 0.998,
+              1e-1, 1e-6, 1e14, 5, 800, 1e-3, 20, 1e-4};
+  } else if (resolution == RES_16) {
+    params = {2.5e-4, 0.9, 0.999, 1e-8, 1e-4, 0.998,
+              1e-1, 1e-6, 1e14, 5, 800, 1e-3, 20, 1e-4};
+  } else {
+    std::cerr << "Unsupported resolution" << std::endl;
+    return 1;
+  }
   SyncedAdamWNocoopSolver solver(&gpu_t10_data,
                                  gpu_t10_data.get_n_constraint());
   solver.Setup();
@@ -271,7 +387,7 @@ int main() {
   csv_file << std::fixed << std::setprecision(17);
   csv_file << "step,x_position\n";
 
-  for (int i = 0; i < 50; i++) {
+  for (int i = 0; i < n_steps; i++) {
     solver.Solve();
 
     // Retrieve current positions
@@ -292,32 +408,33 @@ int main() {
   std::cout << "Wrote node " << plot_target_node << " x-position history to "
             << csv_path << std::endl;
 
-  // // Set highest precision for cout
-  std::cout << std::fixed << std::setprecision(17);
+  if (verbose_dump) {
+    std::cout << std::fixed << std::setprecision(17);
 
-  Eigen::VectorXd x12, y12, z12;
-  gpu_t10_data.RetrievePositionToCPU(x12, y12, z12);
+    Eigen::VectorXd x12, y12, z12;
+    gpu_t10_data.RetrievePositionToCPU(x12, y12, z12);
 
-  std::cout << "x12:" << std::endl;
-  for (int i = 0; i < x12.size(); i++) {
-    std::cout << x12(i) << " ";
+    std::cout << "x12:" << std::endl;
+    for (int i = 0; i < x12.size(); i++) {
+      std::cout << x12(i) << " ";
+    }
+
+    std::cout << std::endl;
+
+    std::cout << "y12:" << std::endl;
+    for (int i = 0; i < y12.size(); i++) {
+      std::cout << y12(i) << " ";
+    }
+
+    std::cout << std::endl;
+
+    std::cout << "z12:" << std::endl;
+    for (int i = 0; i < z12.size(); i++) {
+      std::cout << z12(i) << " ";
+    }
+
+    std::cout << std::endl;
   }
-
-  std::cout << std::endl;
-
-  std::cout << "y12:" << std::endl;
-  for (int i = 0; i < y12.size(); i++) {
-    std::cout << y12(i) << " ";
-  }
-
-  std::cout << std::endl;
-
-  std::cout << "z12:" << std::endl;
-  for (int i = 0; i < z12.size(); i++) {
-    std::cout << z12(i) << " ";
-  }
-
-  std::cout << std::endl;
 
   gpu_t10_data.Destroy();
 

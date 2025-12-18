@@ -293,6 +293,7 @@ void SyncedAdamWNocoopSolver::OneStepAdamWNocoop() {
 
   double lr0 = 0.0, lr_decay = 1.0;
   double inner_tol = 0.0, outer_tol = 0.0;
+  double inner_rtol = 0.0;
   double beta1_h = 0.0, beta2_h = 0.0;
   int max_outer = 0, max_inner = 0, conv_check_interval = 1;
 
@@ -304,6 +305,8 @@ void SyncedAdamWNocoopSolver::OneStepAdamWNocoop() {
   HANDLE_ERROR(
       cudaMemcpy(&beta2_h, d_beta2_, sizeof(double), cudaMemcpyDeviceToHost));
   HANDLE_ERROR(cudaMemcpy(&inner_tol, d_inner_tol_, sizeof(double),
+                          cudaMemcpyDeviceToHost));
+  HANDLE_ERROR(cudaMemcpy(&inner_rtol, d_inner_rtol_, sizeof(double),
                           cudaMemcpyDeviceToHost));
   HANDLE_ERROR(cudaMemcpy(&outer_tol, d_outer_tol_, sizeof(double),
                           cudaMemcpyDeviceToHost));
@@ -345,10 +348,14 @@ void SyncedAdamWNocoopSolver::OneStepAdamWNocoop() {
       HANDLE_ERROR(cudaMemsetAsync(d_v_adam_, 0, n_dof * sizeof(double)));
 
       int inner_flag_h = 0;
+      double norm_g0   = -1.0;
+      int last_inner_iter = -1;
       for (int inner_iter = 0; inner_iter < max_inner; inner_iter++) {
         if (inner_flag_h != 0) {
           break;
         }
+
+        last_inner_iter = inner_iter;
 
         double lr_current = lr0 * pow(lr_decay, inner_iter + 1);
         double t_current  = static_cast<double>(inner_iter + 2);
@@ -382,21 +389,52 @@ void SyncedAdamWNocoopSolver::OneStepAdamWNocoop() {
           double norm_g = compute_l2_norm_cublas(d_g_, n_dof);
           double norm_v_curr = compute_l2_norm_cublas(d_v_guess_, n_dof);
 
+          if (norm_g0 < 0.0) {
+            norm_g0 = norm_g;
+          }
+
+          const double tol_abs  = inner_tol * (1.0 + norm_v_curr);
+          const double tol_rel  = (inner_rtol > 0.0 && norm_g0 > 0.0)
+                                     ? (inner_rtol * norm_g0)
+                                     : 0.0;
+          const double g_ratio  = (norm_g0 > 0.0) ? (norm_g / norm_g0) : 0.0;
+
+          const bool abs_ok = (norm_g <= tol_abs);
+          const bool rel_ok = (tol_rel > 0.0 && norm_g <= tol_rel);
+
           std::cout << "outer iter: " << outer_iter
                     << ", inner iter: " << inner_iter << std::endl;
-          std::cout << "norm_g: " << std::fixed << std::setprecision(17)
-                    << norm_g << ", norm_v_curr: " << norm_v_curr
+          std::cout << "lr: " << std::scientific << std::setprecision(6)
+                    << lr_current << std::fixed << std::setprecision(17)
+                    << ", norm_g: " << norm_g
+                    << ", norm_v: " << norm_v_curr
+                    << ", atol*(1+||v||): " << tol_abs
+                    << ", rtol*g0: " << tol_rel
+                    << ", g/g0: " << g_ratio
                     << std::endl;
 
-          if (norm_g <= inner_tol * (1.0 + norm_v_curr)) {
+          if (abs_ok || rel_ok) {
             std::cout << "Converged: gnorm=" << std::fixed
                       << std::setprecision(17) << norm_g
-                      << " <= tol*(1+||v||)=" << inner_tol * (1.0 + norm_v_curr)
+                      << " <= max(tol_abs, rtol*g0)="
+                      << std::max(tol_abs, tol_rel)
                       << std::endl;
             inner_flag_h = 1;
             HANDLE_ERROR(cudaMemcpy(d_inner_flag_, &inner_flag_h, sizeof(int),
                                     cudaMemcpyHostToDevice));
           }
+        }
+      }
+
+      if (last_inner_iter >= 0) {
+        if (inner_flag_h != 0) {
+          std::cout << "Outer iter " << outer_iter
+                    << ": inner loop converged in " << (last_inner_iter + 1)
+                    << " iterations" << std::endl;
+        } else {
+          std::cout << "Outer iter " << outer_iter
+                    << ": inner loop hit max_inner=" << max_inner
+                    << std::endl;
         }
       }
 
@@ -426,11 +464,16 @@ void SyncedAdamWNocoopSolver::OneStepAdamWNocoop() {
                   << norm_constraint << std::endl;
 
         if (norm_constraint < outer_tol) {
-          std::cout << "Converged constraint: " << std::fixed
-                    << std::setprecision(17) << norm_constraint << std::endl;
-          outer_flag_h = 1;
-          HANDLE_ERROR(cudaMemcpy(d_outer_flag_, &outer_flag_h, sizeof(int),
-                                  cudaMemcpyHostToDevice));
+          if (inner_flag_h != 0) {
+            std::cout << "Converged constraint: " << std::fixed
+                      << std::setprecision(17) << norm_constraint << std::endl;
+            outer_flag_h = 1;
+            HANDLE_ERROR(cudaMemcpy(d_outer_flag_, &outer_flag_h, sizeof(int),
+                                    cudaMemcpyHostToDevice));
+          } else {
+            std::cout << "Constraint below tol, but inner did not converge"
+                      << std::endl;
+          }
         }
       }
     }
