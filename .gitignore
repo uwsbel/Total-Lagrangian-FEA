@@ -3,3 +3,4 @@ bazel-*
 __pycache__/
 *.py[cod]
 test-scripts/hydropatch_proto/.venv
+temp/*
