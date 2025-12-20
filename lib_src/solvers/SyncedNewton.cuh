@@ -46,7 +46,8 @@ class SyncedNewtonSolver : public SolverBase {
         d_col_bitset_(nullptr),
         d_nnz_per_row_(nullptr),
         fixed_sparsity_pattern_(false),
-        analysis_done_(false) {
+        analysis_done_(false),
+        factorization_done_(false) {
     // Type-based casting to get the correct d_data from derived class
     if (data->type == TYPE_3243) {
       type_            = TYPE_3243;
@@ -393,4 +394,5 @@ class SyncedNewtonSolver : public SolverBase {
   // Analysis reuse flags
   bool fixed_sparsity_pattern_;  // User-set flag: if true, matrix structure is fixed
   bool analysis_done_;           // Internal state: tracks if analysis has been performed
+  bool factorization_done_;      // Internal state: tracks if factorization has been performed (needed for refactorization)
 };

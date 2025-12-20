@@ -900,13 +900,22 @@ void SyncedNewtonSolver::OneStepNewtonCuDSS() {
     CUDSS_OK(cudssCreate(&cudss_handle_));
     CUDSS_OK(cudssConfigCreate(&cudss_config_));
     CUDSS_OK(cudssDataCreate(cudss_handle_, &cudss_data_));
+
+    // CuDSS Solver Setup
+    cudssAlgType_t reorder = CUDSS_ALG_DEFAULT;
+    CUDSS_OK(cudssConfigSet(cudss_config_, CUDSS_CONFIG_REORDERING_ALG, &reorder, sizeof(reorder)));
+    
+    // Disable iterative refinement for faster solves
+    int ir_n_steps = 0;
+    CUDSS_OK(cudssConfigSet(cudss_config_, CUDSS_CONFIG_IR_N_STEPS, &ir_n_steps, sizeof(int)));
+    
   }
 
   cudssMatrix_t dssA, dssB, dssX;
   CUDSS_OK(cudssMatrixCreateCsr(
       &dssA, n_dofs, n_dofs, h_nnz_, d_csr_row_offsets_, nullptr,
       d_csr_col_indices_, d_csr_values_, CUDA_R_32I, CUDA_R_64F,
-      CUDSS_MTYPE_SPD, CUDSS_MVIEW_FULL, CUDSS_BASE_ZERO));
+      CUDSS_MTYPE_SPD, CUDSS_MVIEW_UPPER, CUDSS_BASE_ZERO));
   CUDSS_OK(cudssMatrixCreateDn(&dssB, n_dofs, 1, n_dofs, d_r_, CUDA_R_64F,
                                CUDSS_LAYOUT_COL_MAJOR));
   CUDSS_OK(cudssMatrixCreateDn(&dssX, n_dofs, 1, n_dofs, d_delta_v_, CUDA_R_64F,
@@ -919,6 +928,7 @@ void SyncedNewtonSolver::OneStepNewtonCuDSS() {
     CUDSS_OK(cudssExecute(cudss_handle_, CUDSS_PHASE_ANALYSIS, cudss_config_,
                           cudss_data_, dssA, dssX, dssB));
     analysis_done_ = true;
+    factorization_done_ = false;  // Reset factorization flag when analysis is redone
   }
 
   // Dispatch based on element type
@@ -992,8 +1002,14 @@ void SyncedNewtonSolver::OneStepNewtonCuDSS() {
 
         HANDLE_ERROR(cudaDeviceSynchronize());
 
-        CUDSS_OK(cudssExecute(cudss_handle_, CUDSS_PHASE_FACTORIZATION,
+        // Use refactorization if sparsity pattern is fixed and factorization has been done before
+        // Otherwise use full factorization
+        cudssPhase_t factor_phase = (fixed_sparsity_pattern_ && factorization_done_) 
+                                    ? CUDSS_PHASE_REFACTORIZATION 
+                                    : CUDSS_PHASE_FACTORIZATION;
+        CUDSS_OK(cudssExecute(cudss_handle_, factor_phase,
                               cudss_config_, cudss_data_, dssA, dssX, dssB));
+        factorization_done_ = true;  // Mark that factorization has been performed
 
         HANDLE_ERROR(cudaMemset(d_delta_v_, 0, n_dofs * sizeof(double)));
         CUDSS_OK(cudssExecute(cudss_handle_, CUDSS_PHASE_SOLVE, cudss_config_,
@@ -1100,8 +1116,14 @@ void SyncedNewtonSolver::OneStepNewtonCuDSS() {
 
         HANDLE_ERROR(cudaDeviceSynchronize());
 
-        CUDSS_OK(cudssExecute(cudss_handle_, CUDSS_PHASE_FACTORIZATION,
+        // Use refactorization if sparsity pattern is fixed and factorization has been done before
+        // Otherwise use full factorization
+        cudssPhase_t factor_phase = (fixed_sparsity_pattern_ && factorization_done_) 
+                                    ? CUDSS_PHASE_REFACTORIZATION 
+                                    : CUDSS_PHASE_FACTORIZATION;
+        CUDSS_OK(cudssExecute(cudss_handle_, factor_phase,
                               cudss_config_, cudss_data_, dssA, dssX, dssB));
+        factorization_done_ = true;  // Mark that factorization has been performed
 
         HANDLE_ERROR(cudaMemset(d_delta_v_, 0, n_dofs * sizeof(double)));
         CUDSS_OK(cudssExecute(cudss_handle_, CUDSS_PHASE_SOLVE, cudss_config_,
@@ -1210,8 +1232,14 @@ void SyncedNewtonSolver::OneStepNewtonCuDSS() {
 
         HANDLE_ERROR(cudaDeviceSynchronize());
 
-        CUDSS_OK(cudssExecute(cudss_handle_, CUDSS_PHASE_FACTORIZATION,
+        // Use refactorization if sparsity pattern is fixed and factorization has been done before
+        // Otherwise use full factorization
+        cudssPhase_t factor_phase = (fixed_sparsity_pattern_ && factorization_done_) 
+                                    ? CUDSS_PHASE_REFACTORIZATION 
+                                    : CUDSS_PHASE_FACTORIZATION;
+        CUDSS_OK(cudssExecute(cudss_handle_, factor_phase,
                               cudss_config_, cudss_data_, dssA, dssX, dssB));
+        factorization_done_ = true;  // Mark that factorization has been performed
 
         HANDLE_ERROR(cudaMemset(d_delta_v_, 0, n_dofs * sizeof(double)));
         CUDSS_OK(cudssExecute(cudss_handle_, CUDSS_PHASE_SOLVE, cudss_config_,
