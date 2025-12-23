@@ -339,10 +339,10 @@ struct GPU_FEAT10_Data : public ElementBase {
     ConvertToCSR_ConstraintJacT();
   }
 
-  void ConvertToCSR_Jac();
+  void ConvertToCSR_ConstraintJac();
   
   void BuildConstraintJacobianCSR() {
-    ConvertToCSR_Jac();
+    ConvertToCSR_ConstraintJac();
   }
 
   void CalcInternalForce() override;

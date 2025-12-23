@@ -330,6 +330,7 @@ int main(int argc, char** argv) {
   gpu_t10_data.CalcMassMatrix();
   gpu_t10_data.CalcConstraintData();
   gpu_t10_data.ConvertToCSR_ConstraintJacT();
+  gpu_t10_data.BuildConstraintJacobianCSR();
 
   std::cout << "GPU element data initialized" << std::endl;
 

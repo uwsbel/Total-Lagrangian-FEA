@@ -432,7 +432,7 @@ void GPU_FEAT10_Data::BuildMassCSRPattern() {
 
 // This function converts the Constraint Jacobian matrix J to CSR format
 // (Rows = Constraints, Cols = DOFs)
-void GPU_FEAT10_Data::ConvertToCSR_Jac() {
+void GPU_FEAT10_Data::ConvertToCSR_ConstraintJac() {
   // Direct conversion of J (n_constraint x n_coef*3) to CSR
   int num_rows = n_constraint;
   int num_cols = n_coef * 3;
