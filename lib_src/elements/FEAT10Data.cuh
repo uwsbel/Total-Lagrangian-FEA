@@ -296,8 +296,6 @@ struct GPU_FEAT10_Data : public ElementBase {
     return d_cj_csr_values;
   }
 
-  // J (Constraint Jacobian) in CSR format
-  // ToDo: update cj_csr to cjt_csr
   __device__ int *j_csr_offsets() {
     return d_j_csr_offsets;
   }
@@ -335,14 +333,12 @@ struct GPU_FEAT10_Data : public ElementBase {
 
   void BuildMassCSRPattern();
 
-  void ConvertTOCSRConstraintJac();
+  void ConvertToCSR_ConstraintJacT();
 
   void BuildConstraintJacobianTransposeCSR() {
-    ConvertTOCSRConstraintJac();
+    ConvertToCSR_ConstraintJacT();
   }
 
-  // Convert the constraint Jacobian matrix to CSR format
-  // ToDo: Update ConverTOCSRConstraintJac to ConvertToCSR_JacT
   void ConvertToCSR_Jac();
   
   void BuildConstraintJacobianCSR() {
@@ -697,7 +693,7 @@ struct GPU_FEAT10_Data : public ElementBase {
    * Update fixed nodes for dynamic constraint changes (e.g., moving grippers).
    * This reuses existing constraint buffers if the number of fixed nodes matches,
    * otherwise reallocates. After calling this, you must call CalcConstraintData()
-   * and ConvertTOCSRConstraintJac() to update the constraint Jacobian.
+   * and ConvertToCSR_ConstraintJacT() to update the constraint Jacobian.
    */
   void UpdateNodalFixed(const Eigen::VectorXi &fixed_nodes);
 
@@ -823,12 +819,12 @@ struct GPU_FEAT10_Data : public ElementBase {
   // Constraint data
   double *d_constraint, *d_constraint_jac;
   int *d_fixed_nodes;
-  // Constraint jac in CSR format
+  // Constraint Jacobian J^T in CSR format
   int *d_cj_csr_offsets, *d_cj_csr_columns;
   double *d_cj_csr_values;
   int *d_cj_nnz;
 
-  // J (Constraint Jacobian) in CSR format (rows = constraints)
+  // Constraint Jacobian J in CSR format
   int *d_j_csr_offsets, *d_j_csr_columns;
   double *d_j_csr_values;
   int *d_j_nnz;

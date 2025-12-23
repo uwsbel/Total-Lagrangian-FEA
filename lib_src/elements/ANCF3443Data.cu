@@ -403,7 +403,7 @@ void GPU_ANCF3443_Data::BuildMassCSRPattern() {
 
 // This function converts the TRANSPOSE of the constraint Jacobian matrix to CSR
 // format
-void GPU_ANCF3443_Data::ConvertTOCSRConstraintJac() {
+void GPU_ANCF3443_Data::ConvertToCSR_ConstraintJacT() {
   // TRANSPOSE: rows become columns, columns become rows
   int num_rows = n_coef * 3;    // J^T has (n_coef*3) rows (was columns in J)
   int num_cols = n_constraint;  // J^T has n_constraint cols (was rows in J)

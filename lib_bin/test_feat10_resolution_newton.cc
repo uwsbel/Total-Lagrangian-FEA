@@ -210,9 +210,9 @@ int main() {
 
   std::cout << "done CalcConstraintData" << std::endl;
 
-  gpu_t10_data.ConvertTOCSRConstraintJac();
+  gpu_t10_data.ConvertToCSR_ConstraintJacT();
 
-  std::cout << "done ConvertTOCSRConstraintJac" << std::endl;
+  std::cout << "done ConvertToCSR_ConstraintJacT" << std::endl;
 
   gpu_t10_data.BuildConstraintJacobianCSR();
 

@@ -787,10 +787,10 @@ struct GPU_ANCF3243_Data : public ElementBase {
 
   void BuildMassCSRPattern();
 
-  void ConvertTOCSRConstraintJac();
+  void ConvertToCSR_ConstraintJacT();
 
   void BuildConstraintJacobianTransposeCSR() {
-    ConvertTOCSRConstraintJac();
+    ConvertToCSR_ConstraintJacT();
   }
 
   void CalcP();
@@ -865,6 +865,7 @@ struct GPU_ANCF3243_Data : public ElementBase {
   double *d_constraint, *d_constraint_jac;
   int *d_fixed_nodes;
 
+  // Constraint Jacobian J^T in CSR format
   int *d_cj_csr_offsets, *d_cj_csr_columns;
   double *d_cj_csr_values;
   int *d_cj_nnz;
