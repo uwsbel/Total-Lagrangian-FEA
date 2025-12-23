@@ -542,6 +542,75 @@ __global__ void assemble_sparse_hessian_constraints(
   }
 }
 
+// Assemble Constraint Contribution: (h^2 * rho * J^T * J) into sparse H
+// Legacy path using J^T only (ANCF).
+template <typename ElementType>
+__global__ void assemble_sparse_hessian_constraints_cjt(
+    ElementType *d_data, SyncedNewtonSolver *d_solver, int *d_csr_row_offsets,
+    int *d_csr_col_indices, double *d_csr_values) {
+  int tid           = blockIdx.x * blockDim.x + threadIdx.x;
+  int n_constraints = d_solver->gpu_n_constraints();
+
+  if (tid >= n_constraints)
+    return;
+
+  const double h      = d_solver->solver_time_step();
+  const double rho    = *d_solver->solver_rho();
+  const double factor = h * h * rho;
+
+  int c_idx  = tid;
+  int n_dofs = 3 * d_solver->get_n_coef();
+
+  const int *cjT_offsets   = d_data->cj_csr_offsets();
+  const int *cjT_columns   = d_data->cj_csr_columns();
+  const double *cjT_values = d_data->cj_csr_values();
+
+  for (int dof_i = 0; dof_i < n_dofs; dof_i++) {
+    int col_start_i = cjT_offsets[dof_i];
+    int col_end_i   = cjT_offsets[dof_i + 1];
+
+    double J_ic  = 0.0;
+    bool found_i = false;
+
+    for (int idx = col_start_i; idx < col_end_i; idx++) {
+      if (cjT_columns[idx] == c_idx) {
+        J_ic    = cjT_values[idx];
+        found_i = true;
+        break;
+      }
+    }
+
+    if (!found_i)
+      continue;
+
+    for (int dof_j = 0; dof_j < n_dofs; dof_j++) {
+      int col_start_j = cjT_offsets[dof_j];
+      int col_end_j   = cjT_offsets[dof_j + 1];
+
+      double J_jc = 0.0;
+
+      for (int idx = col_start_j; idx < col_end_j; idx++) {
+        if (cjT_columns[idx] == c_idx) {
+          J_jc = cjT_values[idx];
+          break;
+        }
+      }
+
+      if (J_jc != 0.0) {
+        int row_begin  = d_csr_row_offsets[dof_i];
+        int row_length = d_csr_row_offsets[dof_i + 1] - row_begin;
+
+        int pos = binary_search_column(&d_csr_col_indices[row_begin],
+                                       row_length, dof_j);
+
+        if (pos >= 0) {
+          atomicAdd(&d_csr_values[row_begin + pos], factor * J_ic * J_jc);
+        }
+      }
+    }
+  }
+}
+
 template <typename ElementType>
 __device__ double solver_grad_L(int tid, ElementType *data,
                                 SyncedNewtonSolver *d_solver) {
@@ -1092,8 +1161,8 @@ void SyncedNewtonSolver::OneStepNewtonCuDSS() {
             d_csr_col_indices_, d_csr_values_);
 
         if (n_constraints_ > 0) {
-          assemble_sparse_hessian_constraints<<<numBlocks_sparse_constraint,
-                                                threadsPerBlock>>>(
+          assemble_sparse_hessian_constraints_cjt<<<numBlocks_sparse_constraint,
+                                                    threadsPerBlock>>>(
               typed_data, d_newton_solver_, d_csr_row_offsets_,
               d_csr_col_indices_, d_csr_values_);
         }
@@ -1208,8 +1277,8 @@ void SyncedNewtonSolver::OneStepNewtonCuDSS() {
             d_csr_col_indices_, d_csr_values_);
 
         if (n_constraints_ > 0) {
-          assemble_sparse_hessian_constraints<<<numBlocks_sparse_constraint,
-                                                threadsPerBlock>>>(
+          assemble_sparse_hessian_constraints_cjt<<<numBlocks_sparse_constraint,
+                                                    threadsPerBlock>>>(
               typed_data, d_newton_solver_, d_csr_row_offsets_,
               d_csr_col_indices_, d_csr_values_);
         }
