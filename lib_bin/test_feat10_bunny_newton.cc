@@ -199,7 +199,7 @@ int main() {
             << "):" << std::endl;
   std::cout << f_int.transpose() << std::endl;
   std::cout << "done retrieving internal force vector" << std::endl;
-  SyncedNewtonParams params = {1e-4, 1e-4, 1e-4, 1e14, 5, 10, 1e-3};
+  SyncedNewtonParams params = {1e-4, 1e-6, 1e-4, 1e14, 5, 10, 1e-3};
   SyncedNewtonSolver solver(&gpu_t10_data, gpu_t10_data.get_n_constraint());
   solver.Setup();
   solver.SetParameters(&params);

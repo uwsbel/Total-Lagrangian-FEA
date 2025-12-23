@@ -132,7 +132,7 @@ TEST_F(TestSparseMass, FEA_T10_SparseMassMatrix) {
 
   gpu_t10_data.CalcConstraintData();
 
-  gpu_t10_data.ConvertTOCSRConstraintJac();
+  gpu_t10_data.ConvertToCSR_ConstraintJac();
 }
 
 TEST_F(TestSparseMass, ANCF_3443_SparseMassMatrix) {
@@ -238,7 +238,7 @@ TEST_F(TestSparseMass, ANCF_3443_SparseMassMatrix) {
 
   gpu_3443_data.CalcConstraintData();
 
-  gpu_3443_data.ConvertTOCSRConstraintJac();
+  gpu_3443_data.ConvertToCSR_ConstraintJacT();
 }
 
 TEST_F(TestSparseMass, ANCF_3243_SparseMassMatrix) {
@@ -338,5 +338,5 @@ TEST_F(TestSparseMass, ANCF_3243_SparseMassMatrix) {
 
   gpu_3243_data.CalcConstraintData();
 
-  gpu_3243_data.ConvertTOCSRConstraintJac();
+  gpu_3243_data.ConvertToCSR_ConstraintJacT();
 }
