@@ -296,6 +296,20 @@ struct GPU_FEAT10_Data : public ElementBase {
     return d_cj_csr_values;
   }
 
+  // J (Constraint Jacobian) in CSR format
+  // ToDo: update cj_csr to cjt_csr
+  __device__ int *j_csr_offsets() {
+    return d_j_csr_offsets;
+  }
+
+  __device__ int *j_csr_columns() {
+    return d_j_csr_columns;
+  }
+
+  __device__ double *j_csr_values() {
+    return d_j_csr_values;
+  }
+
   __device__ int nnz() {
     return *d_nnz;
   }
@@ -325,6 +339,14 @@ struct GPU_FEAT10_Data : public ElementBase {
 
   void BuildConstraintJacobianTransposeCSR() {
     ConvertTOCSRConstraintJac();
+  }
+
+  // Convert the constraint Jacobian matrix to CSR format
+  // ToDo: Update ConverTOCSRConstraintJac to ConvertToCSR_JacT
+  void ConvertToCSR_Jac();
+  
+  void BuildConstraintJacobianCSR() {
+    ConvertToCSR_Jac();
   }
 
   void CalcInternalForce() override;
@@ -705,6 +727,13 @@ struct GPU_FEAT10_Data : public ElementBase {
       HANDLE_ERROR(cudaFree(d_cj_nnz));
     }
 
+    if (is_j_csr_setup) {
+      HANDLE_ERROR(cudaFree(d_j_csr_offsets));
+      HANDLE_ERROR(cudaFree(d_j_csr_columns));
+      HANDLE_ERROR(cudaFree(d_j_csr_values));
+      HANDLE_ERROR(cudaFree(d_j_nnz));
+    }
+
     HANDLE_ERROR(cudaFree(d_tet5pt_x));
     HANDLE_ERROR(cudaFree(d_tet5pt_y));
     HANDLE_ERROR(cudaFree(d_tet5pt_z));
@@ -799,6 +828,11 @@ struct GPU_FEAT10_Data : public ElementBase {
   double *d_cj_csr_values;
   int *d_cj_nnz;
 
+  // J (Constraint Jacobian) in CSR format (rows = constraints)
+  int *d_j_csr_offsets, *d_j_csr_columns;
+  double *d_j_csr_values;
+  int *d_j_nnz;
+
   // Force vectors
   double *d_f_int, *d_f_ext;  // (n_nodes*3)
 
@@ -806,4 +840,5 @@ struct GPU_FEAT10_Data : public ElementBase {
   bool is_constraints_setup = false;
   bool is_csr_setup         = false;
   bool is_cj_csr_setup      = false;
+  bool is_j_csr_setup       = false;
 };

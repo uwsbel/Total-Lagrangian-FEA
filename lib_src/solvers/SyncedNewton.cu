@@ -508,51 +508,35 @@ __global__ void assemble_sparse_hessian_constraints(
   int c_idx  = tid;
   int n_dofs = 3 * d_solver->get_n_coef();
 
-  const int *cjT_offsets   = d_data->cj_csr_offsets();
-  const int *cjT_columns   = d_data->cj_csr_columns();
-  const double *cjT_values = d_data->cj_csr_values();
+  // Access J matrix in CSR format (rows = constraints)
+  // Each thread handles one constraint c_idx
+  const int *j_offsets   = d_data->j_csr_offsets();
+  const int *j_columns   = d_data->j_csr_columns();
+  const double *j_values = d_data->j_csr_values();
 
-  for (int dof_i = 0; dof_i < n_dofs; dof_i++) {
-    int col_start_i = cjT_offsets[dof_i];
-    int col_end_i   = cjT_offsets[dof_i + 1];
+  int row_start = j_offsets[c_idx];
+  int row_end   = j_offsets[c_idx + 1];
 
-    double J_ic  = 0.0;
-    bool found_i = false;
+  // Loop over non-zero columns in J (DOFs connected to this constraint)
+  for (int idx_i = row_start; idx_i < row_end; idx_i++) {
+    int dof_i    = j_columns[idx_i];
+    double J_ic  = j_values[idx_i];
 
-    for (int idx = col_start_i; idx < col_end_i; idx++) {
-      if (cjT_columns[idx] == c_idx) {
-        J_ic    = cjT_values[idx];
-        found_i = true;
-        break;
-      }
-    }
+    // Inner loop over the same set of DOFs
+    for (int idx_j = row_start; idx_j < row_end; idx_j++) {
+      int dof_j   = j_columns[idx_j];
+      double J_jc = j_values[idx_j];
 
-    if (!found_i)
-      continue;
+      // We need to add (factor * J_ic * J_jc) to H(dof_i, dof_j)
+      // H is sparse CSR (rows=DOFs)
+      int row_begin  = d_csr_row_offsets[dof_i];
+      int row_length = d_csr_row_offsets[dof_i + 1] - row_begin;
 
-    for (int dof_j = 0; dof_j < n_dofs; dof_j++) {
-      int col_start_j = cjT_offsets[dof_j];
-      int col_end_j   = cjT_offsets[dof_j + 1];
+      int pos = binary_search_column(&d_csr_col_indices[row_begin],
+                                     row_length, dof_j);
 
-      double J_jc = 0.0;
-
-      for (int idx = col_start_j; idx < col_end_j; idx++) {
-        if (cjT_columns[idx] == c_idx) {
-          J_jc = cjT_values[idx];
-          break;
-        }
-      }
-
-      if (J_jc != 0.0) {
-        int row_begin  = d_csr_row_offsets[dof_i];
-        int row_length = d_csr_row_offsets[dof_i + 1] - row_begin;
-
-        int pos = binary_search_column(&d_csr_col_indices[row_begin],
-                                       row_length, dof_j);
-
-        if (pos >= 0) {
-          atomicAdd(&d_csr_values[row_begin + pos], factor * J_ic * J_jc);
-        }
+      if (pos >= 0) {
+        atomicAdd(&d_csr_values[row_begin + pos], factor * J_ic * J_jc);
       }
     }
   }

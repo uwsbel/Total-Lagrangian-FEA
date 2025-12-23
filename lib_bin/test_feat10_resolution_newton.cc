@@ -214,6 +214,10 @@ int main() {
 
   std::cout << "done ConvertTOCSRConstraintJac" << std::endl;
 
+  gpu_t10_data.BuildConstraintJacobianCSR();
+
+  std::cout << "done BuildConstraintJacobianCSR" << std::endl;
+
   // calculate p
   gpu_t10_data.CalcP();
 

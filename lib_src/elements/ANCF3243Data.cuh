@@ -361,6 +361,19 @@ struct GPU_ANCF3243_Data : public ElementBase {
     return d_cj_csr_values;
   }
 
+  // --- Add J CSR Accessors (even if unused for now) ---
+  __device__ int *j_csr_offsets() {
+    return nullptr; // Not implemented for ANCF3243
+  }
+
+  __device__ int *j_csr_columns() {
+    return nullptr; // Not implemented for ANCF3243
+  }
+
+  __device__ double *j_csr_values() {
+    return nullptr; // Not implemented for ANCF3243
+  }
+
   __device__ int nnz() {
     return *d_nnz;
   }
