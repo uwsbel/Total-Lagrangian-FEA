@@ -9,12 +9,14 @@ cuda_library(
     hdrs = [
         "lib_src/collision/Broadphase.cuh",
         "lib_src/collision/BroadphaseFunc.cuh",
+        "lib_src/collision/CollisionTypes.cuh",
     ],
     copts = ["--std=c++17", "-O3", "--use_fast_math", "--extra-device-vectorization"],
     linkopts = ["-lcudart"],
     deps = [
         ":cpu_utils",
         ":cuda_utils",
+        ":mesh_manager",
         "@eigen//:eigen",
     ],
     visibility = ["//visibility:public"],
@@ -24,6 +26,7 @@ cuda_library(
     name = "collision_narrowphase",
     srcs = ["lib_src/collision/Narrowphase.cu"],
     hdrs = [
+        "lib_src/collision/CollisionTypes.cuh",
         "lib_src/collision/Narrowphase.cuh",
         "lib_src/collision/NarrowphaseFunc.cuh",
     ],
