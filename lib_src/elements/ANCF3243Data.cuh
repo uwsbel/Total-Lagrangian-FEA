@@ -866,16 +866,16 @@ struct GPU_ANCF3243_Data : public ElementBase {
   int *d_fixed_nodes;
 
   // Constraint Jacobian J^T in CSR format
-  int *d_cj_csr_offsets = nullptr;
-  int *d_cj_csr_columns = nullptr;
-  double *d_cj_csr_values = nullptr;
-  int *d_cj_nnz           = nullptr;
+  int *d_cj_csr_offsets;
+  int *d_cj_csr_columns;
+  double *d_cj_csr_values;
+  int *d_cj_nnz;
 
   // Constraint Jacobian J in CSR format
-  int *d_j_csr_offsets = nullptr;
-  int *d_j_csr_columns = nullptr;
-  double *d_j_csr_values = nullptr;
-  int *d_j_nnz           = nullptr;
+  int *d_j_csr_offsets;
+  int *d_j_csr_columns;
+  double *d_j_csr_values;
+  int *d_j_nnz;
 
   // force related parameters
   double *d_f_int, *d_f_ext;

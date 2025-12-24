@@ -919,12 +919,12 @@ void SyncedNewtonSolver::OneStepNewtonCuDSS() {
 
     // CuDSS Solver Setup
     cudssAlgType_t reorder = CUDSS_ALG_DEFAULT;
-    CUDSS_OK(cudssConfigSet(cudss_config_, CUDSS_CONFIG_REORDERING_ALG, &reorder, sizeof(reorder)));
-    
+    CUDSS_OK(cudssConfigSet(cudss_config_, CUDSS_CONFIG_REORDERING_ALG, &reorder,
+                            sizeof(reorder)));
     // Disable iterative refinement for faster solves
     int ir_n_steps = 0;
-    CUDSS_OK(cudssConfigSet(cudss_config_, CUDSS_CONFIG_IR_N_STEPS, &ir_n_steps, sizeof(int)));
-    
+    CUDSS_OK(cudssConfigSet(cudss_config_, CUDSS_CONFIG_IR_N_STEPS, &ir_n_steps,
+                            sizeof(int)));
   }
 
   cudssMatrix_t dssA, dssB, dssX;
@@ -937,8 +937,8 @@ void SyncedNewtonSolver::OneStepNewtonCuDSS() {
   CUDSS_OK(cudssMatrixCreateDn(&dssX, n_dofs, 1, n_dofs, d_delta_v_, CUDA_R_64F,
                                CUDSS_LAYOUT_COL_MAJOR));
 
-  HANDLE_ERROR(cudaEventRecord(start)); 
-  
+  HANDLE_ERROR(cudaEventRecord(start));
+
   // Only run analysis if needed
   if (!analysis_done_ || !fixed_sparsity_pattern_) {
     CUDSS_OK(cudssExecute(cudss_handle_, CUDSS_PHASE_ANALYSIS, cudss_config_,
@@ -1020,8 +1020,8 @@ void SyncedNewtonSolver::OneStepNewtonCuDSS() {
 
         // Use refactorization if sparsity pattern is fixed and factorization has been done before
         // Otherwise use full factorization
-        cudssPhase_t factor_phase = (fixed_sparsity_pattern_ && factorization_done_) 
-                                    ? CUDSS_PHASE_REFACTORIZATION 
+        cudssPhase_t factor_phase = (fixed_sparsity_pattern_ && factorization_done_)
+                                        ? CUDSS_PHASE_REFACTORIZATION
                                     : CUDSS_PHASE_FACTORIZATION;
         CUDSS_OK(cudssExecute(cudss_handle_, factor_phase,
                               cudss_config_, cudss_data_, dssA, dssX, dssB));
@@ -1134,8 +1134,8 @@ void SyncedNewtonSolver::OneStepNewtonCuDSS() {
 
         // Use refactorization if sparsity pattern is fixed and factorization has been done before
         // Otherwise use full factorization
-        cudssPhase_t factor_phase = (fixed_sparsity_pattern_ && factorization_done_) 
-                                    ? CUDSS_PHASE_REFACTORIZATION 
+        cudssPhase_t factor_phase = (fixed_sparsity_pattern_ && factorization_done_)
+                                        ? CUDSS_PHASE_REFACTORIZATION
                                     : CUDSS_PHASE_FACTORIZATION;
         CUDSS_OK(cudssExecute(cudss_handle_, factor_phase,
                               cudss_config_, cudss_data_, dssA, dssX, dssB));
@@ -1250,8 +1250,8 @@ void SyncedNewtonSolver::OneStepNewtonCuDSS() {
 
         // Use refactorization if sparsity pattern is fixed and factorization has been done before
         // Otherwise use full factorization
-        cudssPhase_t factor_phase = (fixed_sparsity_pattern_ && factorization_done_) 
-                                    ? CUDSS_PHASE_REFACTORIZATION 
+        cudssPhase_t factor_phase = (fixed_sparsity_pattern_ && factorization_done_)
+                                        ? CUDSS_PHASE_REFACTORIZATION
                                     : CUDSS_PHASE_FACTORIZATION;
         CUDSS_OK(cudssExecute(cudss_handle_, factor_phase,
                               cudss_config_, cudss_data_, dssA, dssX, dssB));
