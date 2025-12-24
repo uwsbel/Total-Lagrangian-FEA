@@ -506,6 +506,100 @@ void GPU_ANCF3243_Data::ConvertToCSR_ConstraintJacT() {
   is_cj_csr_setup = true;
 }
 
+// This function converts the Constraint Jacobian matrix J to CSR format
+// (Rows = Constraints, Cols = DOFs)
+void GPU_ANCF3243_Data::ConvertToCSR_ConstraintJac() {
+  int num_rows = n_constraint;
+  int num_cols = n_coef * 3;
+  int ld       = num_rows;
+
+  int *d_j_csr_offsets_temp;
+  int *d_j_csr_columns_temp;
+  double *d_j_csr_values_temp;
+  int *d_j_nnz_temp;
+
+  double *d_dense = d_constraint_jac;
+
+  HANDLE_ERROR(
+      cudaMalloc((void **)&d_j_csr_offsets_temp, (num_rows + 1) * sizeof(int)));
+
+  cusparseHandle_t handle = NULL;
+  cusparseSpMatDescr_t matB;
+  cusparseDnMatDescr_t matA;
+  void *dBuffer     = NULL;
+  size_t bufferSize = 0;
+
+  CHECK_CUSPARSE(cusparseCreate(&handle));
+
+  CHECK_CUSPARSE(cusparseCreateDnMat(&matA, num_rows, num_cols, ld, d_dense,
+                                     CUDA_R_64F, CUSPARSE_ORDER_COL));
+
+  CHECK_CUSPARSE(cusparseCreateCsr(&matB, num_rows, num_cols, 0,
+                                   d_j_csr_offsets_temp, NULL, NULL,
+                                   CUSPARSE_INDEX_32I, CUSPARSE_INDEX_32I,
+                                   CUSPARSE_INDEX_BASE_ZERO, CUDA_R_64F));
+
+  CHECK_CUSPARSE(cusparseDenseToSparse_bufferSize(
+      handle, matA, matB, CUSPARSE_DENSETOSPARSE_ALG_DEFAULT, &bufferSize));
+  HANDLE_ERROR(cudaMalloc(&dBuffer, bufferSize));
+
+  CHECK_CUSPARSE(cusparseDenseToSparse_analysis(
+      handle, matA, matB, CUSPARSE_DENSETOSPARSE_ALG_DEFAULT, dBuffer));
+
+  int64_t num_rows_tmp, num_cols_tmp, nnz_tmp;
+  CHECK_CUSPARSE(
+      cusparseSpMatGetSize(matB, &num_rows_tmp, &num_cols_tmp, &nnz_tmp));
+
+  HANDLE_ERROR(
+      cudaMalloc((void **)&d_j_csr_columns_temp, nnz_tmp * sizeof(int)));
+  HANDLE_ERROR(
+      cudaMalloc((void **)&d_j_csr_values_temp, nnz_tmp * sizeof(double)));
+  HANDLE_ERROR(cudaMalloc((void **)&d_j_nnz_temp, sizeof(int)));
+
+  int nnz_int = static_cast<int>(nnz_tmp);
+  HANDLE_ERROR(cudaMemcpy(d_j_nnz_temp, &nnz_int, sizeof(int),
+                          cudaMemcpyHostToDevice));
+
+  CHECK_CUSPARSE(cusparseCsrSetPointers(matB, d_j_csr_offsets_temp,
+                                        d_j_csr_columns_temp,
+                                        d_j_csr_values_temp));
+
+  CHECK_CUSPARSE(cusparseDenseToSparse_convert(
+      handle, matA, matB, CUSPARSE_DENSETOSPARSE_ALG_DEFAULT, dBuffer));
+
+  CHECK_CUSPARSE(cusparseDestroyDnMat(matA));
+  CHECK_CUSPARSE(cusparseDestroySpMat(matB));
+  CHECK_CUSPARSE(cusparseDestroy(handle));
+  HANDLE_ERROR(cudaFree(dBuffer));
+
+  if (is_j_csr_setup) {
+    HANDLE_ERROR(cudaFree(d_j_csr_offsets));
+    HANDLE_ERROR(cudaFree(d_j_csr_columns));
+    HANDLE_ERROR(cudaFree(d_j_csr_values));
+    HANDLE_ERROR(cudaFree(d_j_nnz));
+  }
+
+  d_j_csr_offsets = d_j_csr_offsets_temp;
+  d_j_csr_columns = d_j_csr_columns_temp;
+  d_j_csr_values  = d_j_csr_values_temp;
+  d_j_nnz         = d_j_nnz_temp;
+
+  is_j_csr_setup = true;
+
+  GPU_ANCF3243_Data *h_data_flash =
+      (GPU_ANCF3243_Data *)malloc(sizeof(GPU_ANCF3243_Data));
+  HANDLE_ERROR(cudaMemcpy(h_data_flash, d_data, sizeof(GPU_ANCF3243_Data),
+                          cudaMemcpyDeviceToHost));
+  h_data_flash->d_j_csr_offsets = d_j_csr_offsets;
+  h_data_flash->d_j_csr_columns = d_j_csr_columns;
+  h_data_flash->d_j_csr_values  = d_j_csr_values;
+  h_data_flash->d_j_nnz         = d_j_nnz;
+  h_data_flash->is_j_csr_setup  = true;
+  HANDLE_ERROR(cudaMemcpy(d_data, h_data_flash, sizeof(GPU_ANCF3243_Data),
+                          cudaMemcpyHostToDevice));
+  free(h_data_flash);
+}
+
 void GPU_ANCF3243_Data::RetrieveMassCSRToCPU(std::vector<int> &offsets,
                                             std::vector<int> &columns,
                                             std::vector<double> &values) {
@@ -630,6 +724,11 @@ __global__ void compute_constraint_data_kernel(GPU_ANCF3243_Data *d_data) {
 }
 
 void GPU_ANCF3243_Data::CalcConstraintData() {
+  if (!is_constraints_setup) {
+    std::cerr << "constraint is not set up" << std::endl;
+    return;
+  }
+
   int threads = 128;
   int blocks  = (n_beam * Quadrature::N_SHAPE_3243 + threads - 1) / threads;
   compute_constraint_data_kernel<<<blocks, threads>>>(d_data);

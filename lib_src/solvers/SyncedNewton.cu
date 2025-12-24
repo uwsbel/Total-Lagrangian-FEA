@@ -257,25 +257,57 @@ __global__ void analyze_hessian_sparsity_bitset(ElementType *d_data,
   // ===== Contribution 3: Constraint Jacobian (J^T * J) =====
   int n_constraints = d_solver->gpu_n_constraints();
   if (n_constraints > 0) {
-    const int *cjT_offsets = d_data->cj_csr_offsets();
-    const int *cjT_columns = d_data->cj_csr_columns();
+    if constexpr (std::is_same_v<ElementType, GPU_FEAT10_Data>) {
+      const int *cjT_offsets = d_data->cj_csr_offsets();
+      const int *cjT_columns = d_data->cj_csr_columns();
 
-    int col_start = cjT_offsets[row_dof];
-    int col_end   = cjT_offsets[row_dof + 1];
+      if (cjT_offsets != nullptr && cjT_columns != nullptr) {
+        int col_start = cjT_offsets[row_dof];
+        int col_end   = cjT_offsets[row_dof + 1];
 
-    for (int idx1 = col_start; idx1 < col_end; idx1++) {
-      int c_idx = cjT_columns[idx1];
+        for (int idx1 = col_start; idx1 < col_end; idx1++) {
+          int c_idx = cjT_columns[idx1];
 
-      for (int other_dof = 0; other_dof < n_dofs; other_dof++) {
-        int other_start = cjT_offsets[other_dof];
-        int other_end   = cjT_offsets[other_dof + 1];
+          for (int other_dof = 0; other_dof < n_dofs; other_dof++) {
+            int other_start = cjT_offsets[other_dof];
+            int other_end   = cjT_offsets[other_dof + 1];
 
-        for (int idx2 = other_start; idx2 < other_end; idx2++) {
-          if (cjT_columns[idx2] == c_idx) {
-            int word_idx = other_dof / 32;
-            int bit_idx  = other_dof % 32;
+            for (int idx2 = other_start; idx2 < other_end; idx2++) {
+              if (cjT_columns[idx2] == c_idx) {
+                int word_idx = other_dof / 32;
+                int bit_idx  = other_dof % 32;
+                atomicOr(&my_bitset[word_idx], 1u << bit_idx);
+                break;
+              }
+            }
+          }
+        }
+      }
+    } else {
+      const int *j_offsets = d_data->j_csr_offsets();
+      const int *j_columns = d_data->j_csr_columns();
+
+      if (j_offsets != nullptr && j_columns != nullptr) {
+        for (int c_idx = 0; c_idx < n_constraints; c_idx++) {
+          int row_start = j_offsets[c_idx];
+          int row_end   = j_offsets[c_idx + 1];
+
+          bool row_in_constraint = false;
+          for (int idx = row_start; idx < row_end; idx++) {
+            if (j_columns[idx] == row_dof) {
+              row_in_constraint = true;
+              break;
+            }
+          }
+
+          if (!row_in_constraint)
+            continue;
+
+          for (int idx = row_start; idx < row_end; idx++) {
+            int other_dof = j_columns[idx];
+            int word_idx  = other_dof / 32;
+            int bit_idx   = other_dof % 32;
             atomicOr(&my_bitset[word_idx], 1u << bit_idx);
-            break;
           }
         }
       }
@@ -537,75 +569,6 @@ __global__ void assemble_sparse_hessian_constraints(
 
       if (pos >= 0) {
         atomicAdd(&d_csr_values[row_begin + pos], factor * J_ic * J_jc);
-      }
-    }
-  }
-}
-
-// Assemble Constraint Contribution: (h^2 * rho * J^T * J) into sparse H
-// Legacy path using J^T only (ANCF).
-template <typename ElementType>
-__global__ void assemble_sparse_hessian_constraints_cjt(
-    ElementType *d_data, SyncedNewtonSolver *d_solver, int *d_csr_row_offsets,
-    int *d_csr_col_indices, double *d_csr_values) {
-  int tid           = blockIdx.x * blockDim.x + threadIdx.x;
-  int n_constraints = d_solver->gpu_n_constraints();
-
-  if (tid >= n_constraints)
-    return;
-
-  const double h      = d_solver->solver_time_step();
-  const double rho    = *d_solver->solver_rho();
-  const double factor = h * h * rho;
-
-  int c_idx  = tid;
-  int n_dofs = 3 * d_solver->get_n_coef();
-
-  const int *cjT_offsets   = d_data->cj_csr_offsets();
-  const int *cjT_columns   = d_data->cj_csr_columns();
-  const double *cjT_values = d_data->cj_csr_values();
-
-  for (int dof_i = 0; dof_i < n_dofs; dof_i++) {
-    int col_start_i = cjT_offsets[dof_i];
-    int col_end_i   = cjT_offsets[dof_i + 1];
-
-    double J_ic  = 0.0;
-    bool found_i = false;
-
-    for (int idx = col_start_i; idx < col_end_i; idx++) {
-      if (cjT_columns[idx] == c_idx) {
-        J_ic    = cjT_values[idx];
-        found_i = true;
-        break;
-      }
-    }
-
-    if (!found_i)
-      continue;
-
-    for (int dof_j = 0; dof_j < n_dofs; dof_j++) {
-      int col_start_j = cjT_offsets[dof_j];
-      int col_end_j   = cjT_offsets[dof_j + 1];
-
-      double J_jc = 0.0;
-
-      for (int idx = col_start_j; idx < col_end_j; idx++) {
-        if (cjT_columns[idx] == c_idx) {
-          J_jc = cjT_values[idx];
-          break;
-        }
-      }
-
-      if (J_jc != 0.0) {
-        int row_begin  = d_csr_row_offsets[dof_i];
-        int row_length = d_csr_row_offsets[dof_i + 1] - row_begin;
-
-        int pos = binary_search_column(&d_csr_col_indices[row_begin],
-                                       row_length, dof_j);
-
-        if (pos >= 0) {
-          atomicAdd(&d_csr_values[row_begin + pos], factor * J_ic * J_jc);
-        }
       }
     }
   }
@@ -1161,8 +1124,8 @@ void SyncedNewtonSolver::OneStepNewtonCuDSS() {
             d_csr_col_indices_, d_csr_values_);
 
         if (n_constraints_ > 0) {
-          assemble_sparse_hessian_constraints_cjt<<<numBlocks_sparse_constraint,
-                                                    threadsPerBlock>>>(
+          assemble_sparse_hessian_constraints<<<numBlocks_sparse_constraint,
+                                                threadsPerBlock>>>(
               typed_data, d_newton_solver_, d_csr_row_offsets_,
               d_csr_col_indices_, d_csr_values_);
         }
@@ -1277,8 +1240,8 @@ void SyncedNewtonSolver::OneStepNewtonCuDSS() {
             d_csr_col_indices_, d_csr_values_);
 
         if (n_constraints_ > 0) {
-          assemble_sparse_hessian_constraints_cjt<<<numBlocks_sparse_constraint,
-                                                    threadsPerBlock>>>(
+          assemble_sparse_hessian_constraints<<<numBlocks_sparse_constraint,
+                                                threadsPerBlock>>>(
               typed_data, d_newton_solver_, d_csr_row_offsets_,
               d_csr_col_indices_, d_csr_values_);
         }

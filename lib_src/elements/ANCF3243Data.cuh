@@ -349,17 +349,17 @@ struct GPU_ANCF3243_Data : public ElementBase {
     return d_csr_values;
   }
 
-  __device__ int *cj_csr_offsets() {
-    return d_cj_csr_offsets;
-  }
+  __device__ int *cj_csr_offsets() { return d_cj_csr_offsets; }
 
-  __device__ int *cj_csr_columns() {
-    return d_cj_csr_columns;
-  }
+  __device__ int *cj_csr_columns() { return d_cj_csr_columns; }
 
-  __device__ double *cj_csr_values() {
-    return d_cj_csr_values;
-  }
+  __device__ double *cj_csr_values() { return d_cj_csr_values; }
+
+  __device__ int *j_csr_offsets() { return d_j_csr_offsets; }
+
+  __device__ int *j_csr_columns() { return d_j_csr_columns; }
+
+  __device__ double *j_csr_values() { return d_j_csr_values; }
 
   __device__ int nnz() {
     return *d_nnz;
@@ -738,6 +738,15 @@ struct GPU_ANCF3243_Data : public ElementBase {
       HANDLE_ERROR(cudaFree(d_cj_csr_columns));
       HANDLE_ERROR(cudaFree(d_cj_csr_values));
       HANDLE_ERROR(cudaFree(d_cj_nnz));
+      is_cj_csr_setup = false;
+    }
+
+    if (is_j_csr_setup) {
+      HANDLE_ERROR(cudaFree(d_j_csr_offsets));
+      HANDLE_ERROR(cudaFree(d_j_csr_columns));
+      HANDLE_ERROR(cudaFree(d_j_csr_values));
+      HANDLE_ERROR(cudaFree(d_j_nnz));
+      is_j_csr_setup = false;
     }
 
     HANDLE_ERROR(cudaFree(d_F));
@@ -779,6 +788,10 @@ struct GPU_ANCF3243_Data : public ElementBase {
   void BuildConstraintJacobianTransposeCSR() {
     ConvertToCSR_ConstraintJacT();
   }
+
+  void ConvertToCSR_ConstraintJac();
+
+  void BuildConstraintJacobianCSR() { ConvertToCSR_ConstraintJac(); }
 
   void CalcP();
 
@@ -853,9 +866,16 @@ struct GPU_ANCF3243_Data : public ElementBase {
   int *d_fixed_nodes;
 
   // Constraint Jacobian J^T in CSR format
-  int *d_cj_csr_offsets, *d_cj_csr_columns;
-  double *d_cj_csr_values;
-  int *d_cj_nnz;
+  int *d_cj_csr_offsets = nullptr;
+  int *d_cj_csr_columns = nullptr;
+  double *d_cj_csr_values = nullptr;
+  int *d_cj_nnz           = nullptr;
+
+  // Constraint Jacobian J in CSR format
+  int *d_j_csr_offsets = nullptr;
+  int *d_j_csr_columns = nullptr;
+  double *d_j_csr_values = nullptr;
+  int *d_j_nnz           = nullptr;
 
   // force related parameters
   double *d_f_int, *d_f_ext;
@@ -864,4 +884,5 @@ struct GPU_ANCF3243_Data : public ElementBase {
   bool is_constraints_setup = false;
   bool is_csr_setup         = false;
   bool is_cj_csr_setup      = false;
+  bool is_j_csr_setup       = false;
 };
