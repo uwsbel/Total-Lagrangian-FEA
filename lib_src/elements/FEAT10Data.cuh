@@ -296,6 +296,18 @@ struct GPU_FEAT10_Data : public ElementBase {
     return d_cj_csr_values;
   }
 
+  __device__ int *j_csr_offsets() {
+    return d_j_csr_offsets;
+  }
+
+  __device__ int *j_csr_columns() {
+    return d_j_csr_columns;
+  }
+
+  __device__ double *j_csr_values() {
+    return d_j_csr_values;
+  }
+
   __device__ int nnz() {
     return *d_nnz;
   }
@@ -321,10 +333,16 @@ struct GPU_FEAT10_Data : public ElementBase {
 
   void BuildMassCSRPattern();
 
-  void ConvertTOCSRConstraintJac();
+  void ConvertToCSR_ConstraintJacT();
 
   void BuildConstraintJacobianTransposeCSR() {
-    ConvertTOCSRConstraintJac();
+    ConvertToCSR_ConstraintJacT();
+  }
+
+  void ConvertToCSR_ConstraintJac();
+  
+  void BuildConstraintJacobianCSR() {
+    ConvertToCSR_ConstraintJac();
   }
 
   void CalcInternalForce() override;
@@ -675,7 +693,7 @@ struct GPU_FEAT10_Data : public ElementBase {
    * Update fixed nodes for dynamic constraint changes (e.g., moving grippers).
    * This reuses existing constraint buffers if the number of fixed nodes matches,
    * otherwise reallocates. After calling this, you must call CalcConstraintData()
-   * and ConvertTOCSRConstraintJac() to update the constraint Jacobian.
+   * and ConvertToCSR_ConstraintJacT() to update the constraint Jacobian.
    */
   void UpdateNodalFixed(const Eigen::VectorXi &fixed_nodes);
 
@@ -703,6 +721,13 @@ struct GPU_FEAT10_Data : public ElementBase {
       HANDLE_ERROR(cudaFree(d_cj_csr_columns));
       HANDLE_ERROR(cudaFree(d_cj_csr_values));
       HANDLE_ERROR(cudaFree(d_cj_nnz));
+    }
+
+    if (is_j_csr_setup) {
+      HANDLE_ERROR(cudaFree(d_j_csr_offsets));
+      HANDLE_ERROR(cudaFree(d_j_csr_columns));
+      HANDLE_ERROR(cudaFree(d_j_csr_values));
+      HANDLE_ERROR(cudaFree(d_j_nnz));
     }
 
     HANDLE_ERROR(cudaFree(d_tet5pt_x));
@@ -794,10 +819,15 @@ struct GPU_FEAT10_Data : public ElementBase {
   // Constraint data
   double *d_constraint, *d_constraint_jac;
   int *d_fixed_nodes;
-  // Constraint jac in CSR format
+  // Constraint Jacobian J^T in CSR format
   int *d_cj_csr_offsets, *d_cj_csr_columns;
   double *d_cj_csr_values;
   int *d_cj_nnz;
+
+  // Constraint Jacobian J in CSR format
+  int *d_j_csr_offsets, *d_j_csr_columns;
+  double *d_j_csr_values;
+  int *d_j_nnz;
 
   // Force vectors
   double *d_f_int, *d_f_ext;  // (n_nodes*3)
@@ -806,4 +836,5 @@ struct GPU_FEAT10_Data : public ElementBase {
   bool is_constraints_setup = false;
   bool is_csr_setup         = false;
   bool is_cj_csr_setup      = false;
+  bool is_j_csr_setup       = false;
 };

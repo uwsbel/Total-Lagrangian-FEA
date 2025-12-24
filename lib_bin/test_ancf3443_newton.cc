@@ -134,9 +134,13 @@ int main() {
 
   std::cout << "done CalcConstraintData" << std::endl;
 
-  gpu_3443_data.ConvertTOCSRConstraintJac();
+  gpu_3443_data.ConvertToCSR_ConstraintJacT();
 
-  std::cout << "done ConvertTOCSRConstraintJac" << std::endl;
+  std::cout << "done ConvertToCSR_ConstraintJacT" << std::endl;
+
+  gpu_3443_data.BuildConstraintJacobianCSR();
+
+  std::cout << "done BuildConstraintJacobianCSR" << std::endl;
 
   // // Set highest precision for cout
   std::cout << std::fixed << std::setprecision(17);

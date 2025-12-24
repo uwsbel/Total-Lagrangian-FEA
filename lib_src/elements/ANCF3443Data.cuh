@@ -352,21 +352,19 @@ struct GPU_ANCF3443_Data : public ElementBase {
     return d_csr_values;
   }
 
-  __device__ int *cj_csr_offsets() {
-    return d_cj_csr_offsets;
-  }
+  __device__ int *cj_csr_offsets() { return d_cj_csr_offsets; }
 
-  __device__ int *cj_csr_columns() {
-    return d_cj_csr_columns;
-  }
+  __device__ int *cj_csr_columns() { return d_cj_csr_columns; }
 
-  __device__ double *cj_csr_values() {
-    return d_cj_csr_values;
-  }
+  __device__ double *cj_csr_values() { return d_cj_csr_values; }
 
-  __device__ int nnz() {
-    return *d_nnz;
-  }
+  __device__ int *j_csr_offsets() { return d_j_csr_offsets; }
+
+  __device__ int *j_csr_columns() { return d_j_csr_columns; }
+
+  __device__ double *j_csr_values() { return d_j_csr_values; }
+
+  __device__ int nnz() { return *d_nnz; }
 
   __device__ int gpu_n_beam() const {
     return n_beam;
@@ -776,6 +774,15 @@ struct GPU_ANCF3443_Data : public ElementBase {
       HANDLE_ERROR(cudaFree(d_cj_csr_columns));
       HANDLE_ERROR(cudaFree(d_cj_csr_values));
       HANDLE_ERROR(cudaFree(d_cj_nnz));
+      is_cj_csr_setup = false;
+    }
+
+    if (is_j_csr_setup) {
+      HANDLE_ERROR(cudaFree(d_j_csr_offsets));
+      HANDLE_ERROR(cudaFree(d_j_csr_columns));
+      HANDLE_ERROR(cudaFree(d_j_csr_values));
+      HANDLE_ERROR(cudaFree(d_j_nnz));
+      is_j_csr_setup = false;
     }
 
     HANDLE_ERROR(cudaFree(d_F));
@@ -816,11 +823,15 @@ struct GPU_ANCF3443_Data : public ElementBase {
 
   void BuildMassCSRPattern();
 
-  void ConvertTOCSRConstraintJac();
+  void ConvertToCSR_ConstraintJacT();
 
   void BuildConstraintJacobianTransposeCSR() {
-    ConvertTOCSRConstraintJac();
+    ConvertToCSR_ConstraintJacT();
   }
+
+  void ConvertToCSR_ConstraintJac();
+
+  void BuildConstraintJacobianCSR() { ConvertToCSR_ConstraintJac(); }
 
   void CalcP();
 
@@ -893,10 +904,15 @@ struct GPU_ANCF3443_Data : public ElementBase {
   double *d_constraint, *d_constraint_jac;
   int *d_fixed_nodes;
 
-  // Constraint jac in CSR format
+  // Constraint Jacobian J^T in CSR format
   int *d_cj_csr_offsets, *d_cj_csr_columns;
   double *d_cj_csr_values;
   int *d_cj_nnz;
+
+  // Constraint Jacobian J in CSR format
+  int *d_j_csr_offsets, *d_j_csr_columns;
+  double *d_j_csr_values;
+  int *d_j_nnz;
 
   // force related parameters
   double *d_f_int, *d_f_ext;
@@ -905,4 +921,5 @@ struct GPU_ANCF3443_Data : public ElementBase {
   bool is_constraints_setup = false;
   bool is_csr_setup         = false;
   bool is_cj_csr_setup      = false;
+  bool is_j_csr_setup       = false;
 };

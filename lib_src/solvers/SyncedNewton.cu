@@ -257,25 +257,57 @@ __global__ void analyze_hessian_sparsity_bitset(ElementType *d_data,
   // ===== Contribution 3: Constraint Jacobian (J^T * J) =====
   int n_constraints = d_solver->gpu_n_constraints();
   if (n_constraints > 0) {
-    const int *cjT_offsets = d_data->cj_csr_offsets();
-    const int *cjT_columns = d_data->cj_csr_columns();
+    if constexpr (std::is_same_v<ElementType, GPU_FEAT10_Data>) {
+      const int *cjT_offsets = d_data->cj_csr_offsets();
+      const int *cjT_columns = d_data->cj_csr_columns();
 
-    int col_start = cjT_offsets[row_dof];
-    int col_end   = cjT_offsets[row_dof + 1];
+      if (cjT_offsets != nullptr && cjT_columns != nullptr) {
+        int col_start = cjT_offsets[row_dof];
+        int col_end   = cjT_offsets[row_dof + 1];
 
-    for (int idx1 = col_start; idx1 < col_end; idx1++) {
-      int c_idx = cjT_columns[idx1];
+        for (int idx1 = col_start; idx1 < col_end; idx1++) {
+          int c_idx = cjT_columns[idx1];
 
-      for (int other_dof = 0; other_dof < n_dofs; other_dof++) {
-        int other_start = cjT_offsets[other_dof];
-        int other_end   = cjT_offsets[other_dof + 1];
+          for (int other_dof = 0; other_dof < n_dofs; other_dof++) {
+            int other_start = cjT_offsets[other_dof];
+            int other_end   = cjT_offsets[other_dof + 1];
 
-        for (int idx2 = other_start; idx2 < other_end; idx2++) {
-          if (cjT_columns[idx2] == c_idx) {
-            int word_idx = other_dof / 32;
-            int bit_idx  = other_dof % 32;
+            for (int idx2 = other_start; idx2 < other_end; idx2++) {
+              if (cjT_columns[idx2] == c_idx) {
+                int word_idx = other_dof / 32;
+                int bit_idx  = other_dof % 32;
+                atomicOr(&my_bitset[word_idx], 1u << bit_idx);
+                break;
+              }
+            }
+          }
+        }
+      }
+    } else {
+      const int *j_offsets = d_data->j_csr_offsets();
+      const int *j_columns = d_data->j_csr_columns();
+
+      if (j_offsets != nullptr && j_columns != nullptr) {
+        for (int c_idx = 0; c_idx < n_constraints; c_idx++) {
+          int row_start = j_offsets[c_idx];
+          int row_end   = j_offsets[c_idx + 1];
+
+          bool row_in_constraint = false;
+          for (int idx = row_start; idx < row_end; idx++) {
+            if (j_columns[idx] == row_dof) {
+              row_in_constraint = true;
+              break;
+            }
+          }
+
+          if (!row_in_constraint)
+            continue;
+
+          for (int idx = row_start; idx < row_end; idx++) {
+            int other_dof = j_columns[idx];
+            int word_idx  = other_dof / 32;
+            int bit_idx   = other_dof % 32;
             atomicOr(&my_bitset[word_idx], 1u << bit_idx);
-            break;
           }
         }
       }
@@ -508,51 +540,35 @@ __global__ void assemble_sparse_hessian_constraints(
   int c_idx  = tid;
   int n_dofs = 3 * d_solver->get_n_coef();
 
-  const int *cjT_offsets   = d_data->cj_csr_offsets();
-  const int *cjT_columns   = d_data->cj_csr_columns();
-  const double *cjT_values = d_data->cj_csr_values();
+  // Access J matrix in CSR format (rows = constraints)
+  // Each thread handles one constraint c_idx
+  const int *j_offsets   = d_data->j_csr_offsets();
+  const int *j_columns   = d_data->j_csr_columns();
+  const double *j_values = d_data->j_csr_values();
 
-  for (int dof_i = 0; dof_i < n_dofs; dof_i++) {
-    int col_start_i = cjT_offsets[dof_i];
-    int col_end_i   = cjT_offsets[dof_i + 1];
+  int row_start = j_offsets[c_idx];
+  int row_end   = j_offsets[c_idx + 1];
 
-    double J_ic  = 0.0;
-    bool found_i = false;
+  // Loop over non-zero columns in J (DOFs connected to this constraint)
+  for (int idx_i = row_start; idx_i < row_end; idx_i++) {
+    int dof_i    = j_columns[idx_i];
+    double J_ic  = j_values[idx_i];
 
-    for (int idx = col_start_i; idx < col_end_i; idx++) {
-      if (cjT_columns[idx] == c_idx) {
-        J_ic    = cjT_values[idx];
-        found_i = true;
-        break;
-      }
-    }
+    // Inner loop over the same set of DOFs
+    for (int idx_j = row_start; idx_j < row_end; idx_j++) {
+      int dof_j   = j_columns[idx_j];
+      double J_jc = j_values[idx_j];
 
-    if (!found_i)
-      continue;
+      // We need to add (factor * J_ic * J_jc) to H(dof_i, dof_j)
+      // H is sparse CSR (rows=DOFs)
+      int row_begin  = d_csr_row_offsets[dof_i];
+      int row_length = d_csr_row_offsets[dof_i + 1] - row_begin;
 
-    for (int dof_j = 0; dof_j < n_dofs; dof_j++) {
-      int col_start_j = cjT_offsets[dof_j];
-      int col_end_j   = cjT_offsets[dof_j + 1];
+      int pos = binary_search_column(&d_csr_col_indices[row_begin],
+                                     row_length, dof_j);
 
-      double J_jc = 0.0;
-
-      for (int idx = col_start_j; idx < col_end_j; idx++) {
-        if (cjT_columns[idx] == c_idx) {
-          J_jc = cjT_values[idx];
-          break;
-        }
-      }
-
-      if (J_jc != 0.0) {
-        int row_begin  = d_csr_row_offsets[dof_i];
-        int row_length = d_csr_row_offsets[dof_i + 1] - row_begin;
-
-        int pos = binary_search_column(&d_csr_col_indices[row_begin],
-                                       row_length, dof_j);
-
-        if (pos >= 0) {
-          atomicAdd(&d_csr_values[row_begin + pos], factor * J_ic * J_jc);
-        }
+      if (pos >= 0) {
+        atomicAdd(&d_csr_values[row_begin + pos], factor * J_ic * J_jc);
       }
     }
   }
@@ -900,25 +916,35 @@ void SyncedNewtonSolver::OneStepNewtonCuDSS() {
     CUDSS_OK(cudssCreate(&cudss_handle_));
     CUDSS_OK(cudssConfigCreate(&cudss_config_));
     CUDSS_OK(cudssDataCreate(cudss_handle_, &cudss_data_));
+
+    // CuDSS Solver Setup
+    cudssAlgType_t reorder = CUDSS_ALG_DEFAULT;
+    CUDSS_OK(cudssConfigSet(cudss_config_, CUDSS_CONFIG_REORDERING_ALG, &reorder,
+                            sizeof(reorder)));
+    // Disable iterative refinement for faster solves
+    int ir_n_steps = 0;
+    CUDSS_OK(cudssConfigSet(cudss_config_, CUDSS_CONFIG_IR_N_STEPS, &ir_n_steps,
+                            sizeof(int)));
   }
 
   cudssMatrix_t dssA, dssB, dssX;
   CUDSS_OK(cudssMatrixCreateCsr(
       &dssA, n_dofs, n_dofs, h_nnz_, d_csr_row_offsets_, nullptr,
       d_csr_col_indices_, d_csr_values_, CUDA_R_32I, CUDA_R_64F,
-      CUDSS_MTYPE_SPD, CUDSS_MVIEW_FULL, CUDSS_BASE_ZERO));
+      CUDSS_MTYPE_SPD, CUDSS_MVIEW_UPPER, CUDSS_BASE_ZERO));
   CUDSS_OK(cudssMatrixCreateDn(&dssB, n_dofs, 1, n_dofs, d_r_, CUDA_R_64F,
                                CUDSS_LAYOUT_COL_MAJOR));
   CUDSS_OK(cudssMatrixCreateDn(&dssX, n_dofs, 1, n_dofs, d_delta_v_, CUDA_R_64F,
                                CUDSS_LAYOUT_COL_MAJOR));
 
-  HANDLE_ERROR(cudaEventRecord(start)); 
-  
+  HANDLE_ERROR(cudaEventRecord(start));
+
   // Only run analysis if needed
   if (!analysis_done_ || !fixed_sparsity_pattern_) {
     CUDSS_OK(cudssExecute(cudss_handle_, CUDSS_PHASE_ANALYSIS, cudss_config_,
                           cudss_data_, dssA, dssX, dssB));
     analysis_done_ = true;
+    factorization_done_ = false;  // Reset factorization flag when analysis is redone
   }
 
   // Dispatch based on element type
@@ -992,8 +1018,14 @@ void SyncedNewtonSolver::OneStepNewtonCuDSS() {
 
         HANDLE_ERROR(cudaDeviceSynchronize());
 
-        CUDSS_OK(cudssExecute(cudss_handle_, CUDSS_PHASE_FACTORIZATION,
+        // Use refactorization if sparsity pattern is fixed and factorization has been done before
+        // Otherwise use full factorization
+        cudssPhase_t factor_phase = (fixed_sparsity_pattern_ && factorization_done_)
+                                        ? CUDSS_PHASE_REFACTORIZATION
+                                    : CUDSS_PHASE_FACTORIZATION;
+        CUDSS_OK(cudssExecute(cudss_handle_, factor_phase,
                               cudss_config_, cudss_data_, dssA, dssX, dssB));
+        factorization_done_ = true;  // Mark that factorization has been performed
 
         HANDLE_ERROR(cudaMemset(d_delta_v_, 0, n_dofs * sizeof(double)));
         CUDSS_OK(cudssExecute(cudss_handle_, CUDSS_PHASE_SOLVE, cudss_config_,
@@ -1100,8 +1132,14 @@ void SyncedNewtonSolver::OneStepNewtonCuDSS() {
 
         HANDLE_ERROR(cudaDeviceSynchronize());
 
-        CUDSS_OK(cudssExecute(cudss_handle_, CUDSS_PHASE_FACTORIZATION,
+        // Use refactorization if sparsity pattern is fixed and factorization has been done before
+        // Otherwise use full factorization
+        cudssPhase_t factor_phase = (fixed_sparsity_pattern_ && factorization_done_)
+                                        ? CUDSS_PHASE_REFACTORIZATION
+                                    : CUDSS_PHASE_FACTORIZATION;
+        CUDSS_OK(cudssExecute(cudss_handle_, factor_phase,
                               cudss_config_, cudss_data_, dssA, dssX, dssB));
+        factorization_done_ = true;  // Mark that factorization has been performed
 
         HANDLE_ERROR(cudaMemset(d_delta_v_, 0, n_dofs * sizeof(double)));
         CUDSS_OK(cudssExecute(cudss_handle_, CUDSS_PHASE_SOLVE, cudss_config_,
@@ -1210,8 +1248,14 @@ void SyncedNewtonSolver::OneStepNewtonCuDSS() {
 
         HANDLE_ERROR(cudaDeviceSynchronize());
 
-        CUDSS_OK(cudssExecute(cudss_handle_, CUDSS_PHASE_FACTORIZATION,
+        // Use refactorization if sparsity pattern is fixed and factorization has been done before
+        // Otherwise use full factorization
+        cudssPhase_t factor_phase = (fixed_sparsity_pattern_ && factorization_done_)
+                                        ? CUDSS_PHASE_REFACTORIZATION
+                                    : CUDSS_PHASE_FACTORIZATION;
+        CUDSS_OK(cudssExecute(cudss_handle_, factor_phase,
                               cudss_config_, cudss_data_, dssA, dssX, dssB));
+        factorization_done_ = true;  // Mark that factorization has been performed
 
         HANDLE_ERROR(cudaMemset(d_delta_v_, 0, n_dofs * sizeof(double)));
         CUDSS_OK(cudssExecute(cudss_handle_, CUDSS_PHASE_SOLVE, cudss_config_,

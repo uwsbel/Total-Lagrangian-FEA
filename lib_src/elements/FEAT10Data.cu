@@ -430,9 +430,114 @@ void GPU_FEAT10_Data::BuildMassCSRPattern() {
                           cudaMemcpyHostToDevice));
 }
 
+// This function converts the Constraint Jacobian matrix J to CSR format
+// (Rows = Constraints, Cols = DOFs)
+void GPU_FEAT10_Data::ConvertToCSR_ConstraintJac() {
+  // Direct conversion of J (n_constraint x n_coef*3) to CSR
+  int num_rows = n_constraint;
+  int num_cols = n_coef * 3;
+  int ld       = num_rows;      // Original J is column-major on GPU
+
+  int *d_j_csr_offsets_temp;
+  int *d_j_csr_columns_temp;
+  double *d_j_csr_values_temp;
+  int *d_j_nnz_temp;
+
+  // Device memory management
+  double *d_dense = d_constraint_jac;  // Original J matrix (n_constraint × n_coef*3, column-major)
+  
+  // Allocate offsets array (num_rows + 1)
+  HANDLE_ERROR(cudaMalloc((void **)&d_j_csr_offsets_temp,
+                          (num_rows + 1) * sizeof(int)));
+
+  cusparseHandle_t handle = NULL;
+  cusparseSpMatDescr_t matB;
+  cusparseDnMatDescr_t matA;
+  void *dBuffer     = NULL;
+  size_t bufferSize = 0;
+  CHECK_CUSPARSE(cusparseCreate(&handle));
+
+  // Create dense matrix A descriptor
+  // Important: d_constraint_jac is stored in Column-Major order by default (Eigen/CUDA convention often matches)
+  // Assuming d_constraint_jac was filled as (rows=n_constraint, cols=n_coef*3) in column-major
+  CHECK_CUSPARSE(cusparseCreateDnMat(&matA, num_rows, num_cols, ld, d_dense,
+                                     CUDA_R_64F, CUSPARSE_ORDER_COL));
+
+  // Create sparse matrix B descriptor in CSR format
+  CHECK_CUSPARSE(cusparseCreateCsr(&matB, num_rows, num_cols, 0,
+                                   d_j_csr_offsets_temp, NULL, NULL,
+                                   CUSPARSE_INDEX_32I, CUSPARSE_INDEX_32I,
+                                   CUSPARSE_INDEX_BASE_ZERO, CUDA_R_64F));
+
+  // allocate an external buffer if needed
+  CHECK_CUSPARSE(cusparseDenseToSparse_bufferSize(
+      handle, matA, matB, CUSPARSE_DENSETOSPARSE_ALG_DEFAULT, &bufferSize));
+  HANDLE_ERROR(cudaMalloc(&dBuffer, bufferSize));
+
+  // execute Dense to Sparse conversion analysis
+  CHECK_CUSPARSE(cusparseDenseToSparse_analysis(
+      handle, matA, matB, CUSPARSE_DENSETOSPARSE_ALG_DEFAULT, dBuffer));
+
+  // get number of non-zero elements
+  int64_t num_rows_tmp, num_cols_tmp, nnz_tmp;
+  CHECK_CUSPARSE(cusparseSpMatGetSize(matB, &num_rows_tmp, &num_cols_tmp,
+                                      &nnz_tmp));
+
+  // allocate CSR column indices and values
+  HANDLE_ERROR(cudaMalloc((void **)&d_j_csr_columns_temp, nnz_tmp * sizeof(int)));
+  HANDLE_ERROR(cudaMalloc((void **)&d_j_csr_values_temp, nnz_tmp * sizeof(double)));
+  HANDLE_ERROR(cudaMalloc((void **)&d_j_nnz_temp, sizeof(int)));
+  
+  int nnz_int = (int)nnz_tmp;
+  HANDLE_ERROR(cudaMemcpy(d_j_nnz_temp, &nnz_int, sizeof(int), cudaMemcpyHostToDevice));
+
+  // reset pointers in matB
+  CHECK_CUSPARSE(cusparseCsrSetPointers(matB, d_j_csr_offsets_temp,
+                                        d_j_csr_columns_temp,
+                                        d_j_csr_values_temp));
+
+  // execute Dense to Sparse conversion
+  CHECK_CUSPARSE(cusparseDenseToSparse_convert(
+      handle, matA, matB, CUSPARSE_DENSETOSPARSE_ALG_DEFAULT, dBuffer));
+
+  // destroy matrix/vector descriptors
+  CHECK_CUSPARSE(cusparseDestroyDnMat(matA));
+  CHECK_CUSPARSE(cusparseDestroySpMat(matB));
+  CHECK_CUSPARSE(cusparseDestroy(handle));
+  HANDLE_ERROR(cudaFree(dBuffer));
+
+  // Update member variables
+  if (is_j_csr_setup) {
+    HANDLE_ERROR(cudaFree(d_j_csr_offsets));
+    HANDLE_ERROR(cudaFree(d_j_csr_columns));
+    HANDLE_ERROR(cudaFree(d_j_csr_values));
+    HANDLE_ERROR(cudaFree(d_j_nnz));
+  }
+  d_j_csr_offsets = d_j_csr_offsets_temp;
+  d_j_csr_columns = d_j_csr_columns_temp;
+  d_j_csr_values  = d_j_csr_values_temp;
+  d_j_nnz         = d_j_nnz_temp;
+
+  is_j_csr_setup = true;
+
+  // Update the device copy of this struct so kernel can see new pointers
+  GPU_FEAT10_Data *h_data_flash =
+      (GPU_FEAT10_Data *)malloc(sizeof(GPU_FEAT10_Data));
+  HANDLE_ERROR(cudaMemcpy(h_data_flash, d_data, sizeof(GPU_FEAT10_Data),
+                          cudaMemcpyDeviceToHost));
+  h_data_flash->d_j_csr_offsets = d_j_csr_offsets;
+  h_data_flash->d_j_csr_columns = d_j_csr_columns;
+  h_data_flash->d_j_csr_values  = d_j_csr_values;
+  h_data_flash->d_j_nnz         = d_j_nnz;
+  h_data_flash->is_j_csr_setup  = true;
+  HANDLE_ERROR(cudaMemcpy(d_data, h_data_flash, sizeof(GPU_FEAT10_Data),
+                          cudaMemcpyHostToDevice));
+  free(h_data_flash);
+}
+
 // This function converts the TRANSPOSE of the constraint Jacobian matrix to CSR
 // format
-void GPU_FEAT10_Data::ConvertTOCSRConstraintJac() {
+void GPU_FEAT10_Data::ConvertToCSR_ConstraintJacT() {
   // TRANSPOSE: rows become columns, columns become rows
   int num_rows = n_coef * 3;    // J^T has (n_coef*3) rows (was columns in J)
   int num_cols = n_constraint;  // J^T has n_constraint cols (was rows in J)
@@ -758,6 +863,14 @@ void GPU_FEAT10_Data::UpdateNodalFixed(const Eigen::VectorXi &fixed_nodes) {
       HANDLE_ERROR(cudaFree(d_cj_csr_values));
       HANDLE_ERROR(cudaFree(d_cj_nnz));
       is_cj_csr_setup = false;
+    }
+
+    if (is_j_csr_setup) {
+      HANDLE_ERROR(cudaFree(d_j_csr_offsets));
+      HANDLE_ERROR(cudaFree(d_j_csr_columns));
+      HANDLE_ERROR(cudaFree(d_j_csr_values));
+      HANDLE_ERROR(cudaFree(d_j_nnz));
+      is_j_csr_setup = false;
     }
 
     n_constraint = new_n_constraint;

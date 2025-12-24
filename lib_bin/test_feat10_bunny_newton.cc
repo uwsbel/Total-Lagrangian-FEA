@@ -160,9 +160,14 @@ int main() {
 
   std::cout << "done CalcConstraintData" << std::endl;
 
-  gpu_t10_data.ConvertTOCSRConstraintJac();
+  gpu_t10_data.ConvertToCSR_ConstraintJacT();
 
-  std::cout << "done ConvertTOCSRConstraintJac" << std::endl;
+  std::cout << "done ConvertToCSR_ConstraintJacT" << std::endl;
+
+  gpu_t10_data.BuildConstraintJacobianCSR();
+
+  std::cout << "done BuildConstraintJacobianCSR" << std::endl;
+
 
   // calculate p
   gpu_t10_data.CalcP();
@@ -194,7 +199,7 @@ int main() {
             << "):" << std::endl;
   std::cout << f_int.transpose() << std::endl;
   std::cout << "done retrieving internal force vector" << std::endl;
-  SyncedNewtonParams params = {1e-4, 1e-4, 1e-4, 1e14, 5, 10, 1e-3};
+  SyncedNewtonParams params = {1e-4, 1e-6, 1e-4, 1e14, 5, 10, 1e-3};
   SyncedNewtonSolver solver(&gpu_t10_data, gpu_t10_data.get_n_constraint());
   solver.Setup();
   solver.SetParameters(&params);
