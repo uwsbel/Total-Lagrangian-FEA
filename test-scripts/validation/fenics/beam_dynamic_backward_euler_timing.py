@@ -26,7 +26,7 @@ RES = 4
 
 # Construct mesh file paths
 script_dir = os.path.dirname(os.path.abspath(__file__))
-# Project root is two levels up from test-scripts/, so go up three from here.
+# Project root is three levels up from test-scripts/validation/fenics/, so go up three from here.
 project_root = os.path.normpath(os.path.join(script_dir, os.pardir, os.pardir, os.pardir))
 mesh_dir = os.path.join(project_root, "data", "meshes", "T10", "resolution")
 
@@ -114,20 +114,20 @@ v_old = fem.Function(V)
 d = len(u)
 I = ufl.Identity(d)
 F = ufl.variable(I + ufl.grad(u))
+C = F.T * F
 
 if MATERIAL_MODEL == "SVK":
     # St. Venant-Kirchhoff model
     mu_svk = fem.Constant(domain, E / (2 * (1 + nu)))
     lmbda_svk = fem.Constant(domain, E * nu / ((1 + nu) * (1 - 2 * nu)))
 
-    C = F.T * F
     trFtF = ufl.tr(C)
     FFt = F * F.T
     FFtF = FFt * F
 
     lambda_factor = lmbda_svk * (0.5 * trFtF - 1.5)
     P = lambda_factor * F + mu_svk * (FFtF - F)
-else:   
+else:
     # Compressible Mooney-Rivlin model
     mu_val = E_val / (2.0 * (1.0 + nu_val))
     K_val = E_val / (3.0 * (1.0 - 2.0 * nu_val))
@@ -140,10 +140,9 @@ else:
     C2 = fem.Constant(domain, default_scalar_type(c2_val))
     kappa = fem.Constant(domain, default_scalar_type(kappa_val))
 
-    C = F.T * F
     I1 = ufl.tr(C)
-    C2_tens = C * C
-    trC2 = ufl.tr(C2_tens)
+    C_squared = C * C
+    trC2 = ufl.tr(C_squared)
     I2 = 0.5 * (I1**2 - trC2)
 
     J = ufl.det(F)
@@ -246,4 +245,3 @@ elapsed_time = end_time - start_time
 if rank == 0:
     print(f"Solver execution time (s): {elapsed_time:.6f}")
     print(f"Average time per step (ms): {(elapsed_time / n_steps) * 1000:.3f}")
-

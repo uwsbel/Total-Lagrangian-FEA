@@ -275,10 +275,6 @@ rho = fem.Constant(domain, 2700.0)  # Density: 2700 kg/m³
 E = default_scalar_type(E_val)
 nu = default_scalar_type(nu_val)
 
-# SVK parameters
-mu_svk = fem.Constant(domain, E / (2 * (1 + nu)))  # Shear modulus
-lmbda_svk = fem.Constant(domain, E * nu / ((1 + nu) * (1 - 2 * nu)))  # Lamé's first parameter
-
 # Function space setup for dynamics
 v = ufl.TestFunction(V)
 u = fem.Function(V)  # displacement field (unknown)
@@ -295,12 +291,17 @@ I = ufl.Identity(d)  # Identity tensor
 # Wrap F in ufl.variable so we can differentiate psi w.r.t. F
 F = ufl.variable(I + ufl.grad(u))  # Deformation gradient
 C = F.T * F  # Right Cauchy-Green tensor
-trFtF = ufl.tr(C)  # Trace of C = F^T * F
-FFt = F * F.T  # F * F^T
-FFtF = FFt * F  # F * F^T * F
 
 # Material model selection
 if MATERIAL_MODEL == "SVK":
+    # SVK parameters
+    mu_svk = fem.Constant(domain, E / (2 * (1 + nu)))  # Shear modulus
+    lmbda_svk = fem.Constant(domain, E * nu / ((1 + nu) * (1 - 2 * nu)))  # Lamé's first parameter
+
+    trFtF = ufl.tr(C)  # Trace of C = F^T * F
+    FFt = F * F.T  # F * F^T
+    FFtF = FFt * F  # F * F^T * F
+
     # St. Venant-Kirchhoff:
     # P = λ*(0.5*tr(F^T*F) - 1.5)*F + μ*(F*F^T*F - F)
     lambda_factor = lmbda_svk * (0.5 * trFtF - 1.5)
@@ -329,8 +330,8 @@ else:
 
     # Invariants and isochoric invariants (built from variable F)
     I1 = ufl.tr(C)
-    C2_tens = C * C
-    trC2 = ufl.tr(C2_tens)
+    C_squared = C * C
+    trC2 = ufl.tr(C_squared)
     I2 = 0.5 * (I1**2 - trC2)
 
     J = ufl.det(F)
