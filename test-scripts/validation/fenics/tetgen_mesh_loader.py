@@ -71,6 +71,7 @@ def load_tetgen_mesh_from_files(node_file, ele_file):
     """Load TetGen mesh from .node and .ele files.
     
     Automatically detects and handles both 0-based and 1-based indexing in mesh files.
+    Properly handles parallel MPI execution by reading files only on rank 0.
     
     Args:
         node_file: Path to .node file (absolute or relative)
@@ -88,21 +89,30 @@ def load_tetgen_mesh_from_files(node_file, ele_file):
             "data/meshes/T10/bunny_ascii_26.1.ele"
         )
     """
-    # Validate that both mesh files exist before attempting to load
-    if not os.path.exists(node_file):
-        raise FileNotFoundError(f"Node file not found: {node_file}")
-    if not os.path.exists(ele_file):
-        raise FileNotFoundError(f"Element file not found: {ele_file}")
+    comm = MPI.COMM_WORLD
+    rank = comm.Get_rank()
     
-    # Read nodes and detect indexing offset (0 or 1)
-    x_nodes, index_offset = read_tetgen_node_file(node_file, return_offset=True)
-    
-    # Read elements using the detected offset
-    cells = read_tetgen_ele_file(ele_file, node_index_offset=index_offset)
+    # Only rank 0 reads files and validates they exist
+    if rank == 0:
+        if not os.path.exists(node_file):
+            raise FileNotFoundError(f"Node file not found: {node_file}")
+        if not os.path.exists(ele_file):
+            raise FileNotFoundError(f"Element file not found: {ele_file}")
+        
+        # Read nodes and detect indexing offset (0 or 1)
+        x_nodes, index_offset = read_tetgen_node_file(node_file, return_offset=True)
+        
+        # Read elements using the detected offset
+        cells = read_tetgen_ele_file(ele_file, node_index_offset=index_offset)
+    else:
+        # Other ranks receive empty arrays - DOLFINx will distribute the mesh
+        x_nodes = np.empty((0, 3), dtype=np.float64)
+        cells = np.empty((0, 10), dtype=np.int64)
     
     # Create DOLFINx mesh with P2 tetrahedral elements
-    element = basix.ufl.element("Lagrange", "tetrahedron", 2, shape=(3,), dtype=x_nodes.dtype)
-    msh = mesh.create_mesh(MPI.COMM_WORLD, cells, element, x_nodes)
+    # DOLFINx automatically distributes the mesh across all ranks
+    element = basix.ufl.element("Lagrange", "tetrahedron", 2, shape=(3,), dtype=np.float64)
+    msh = mesh.create_mesh(comm, cells, element, x_nodes)
     
     return msh, x_nodes
 
