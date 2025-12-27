@@ -439,6 +439,9 @@ void GPU_ANCF3243_Data::ConvertToCSR_ConstraintJacT() {
   if (is_cj_csr_setup) {
     return;
   }
+  if (!is_constraints_setup || n_constraint == 0) {
+    return;
+  }
 
   const int num_rows = n_coef * 3;
   const int nnz      = n_constraint;
@@ -498,6 +501,9 @@ void GPU_ANCF3243_Data::ConvertToCSR_ConstraintJacT() {
 // (Rows = Constraints, Cols = DOFs)
 void GPU_ANCF3243_Data::ConvertToCSR_ConstraintJac() {
   if (is_j_csr_setup) {
+    return;
+  }
+  if (!is_constraints_setup || n_constraint == 0) {
     return;
   }
 

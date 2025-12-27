@@ -335,6 +335,9 @@ void GPU_FEAT10_Data::CalcConstraintData() {
     std::cerr << "constraint is not set up" << std::endl;
     return;
   }
+  if (n_constraint == 0) {
+    return;
+  }
   int total_threads     = n_constraint / 3;
   int threads_per_block = 128;
   int blocks = (total_threads + threads_per_block - 1) / threads_per_block;
@@ -493,6 +496,9 @@ void GPU_FEAT10_Data::ConvertToCSR_ConstraintJac() {
   if (is_j_csr_setup) {
     return;
   }
+  if (!is_constraints_setup || n_constraint == 0) {
+    return;
+  }
 
   const int nnz = n_constraint;
 
@@ -525,6 +531,9 @@ void GPU_FEAT10_Data::ConvertToCSR_ConstraintJac() {
 // format
 void GPU_FEAT10_Data::ConvertToCSR_ConstraintJacT() {
   if (is_cj_csr_setup) {
+    return;
+  }
+  if (!is_constraints_setup || n_constraint == 0) {
     return;
   }
 
