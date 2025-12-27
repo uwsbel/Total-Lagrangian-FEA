@@ -199,16 +199,6 @@ struct GPU_FEAT10_Data : public ElementBase {
     return Eigen::Map<Eigen::VectorXd>(d_constraint, n_constraint);
   }
 
-  __device__ Eigen::Map<Eigen::MatrixXd> constraint_jac() {
-    return Eigen::Map<Eigen::MatrixXd>(d_constraint_jac, n_constraint,
-                                       n_coef * 3);
-  }
-
-  __device__ const Eigen::Map<Eigen::MatrixXd> constraint_jac() const {
-    return Eigen::Map<Eigen::MatrixXd>(d_constraint_jac, n_constraint,
-                                       n_coef * 3);
-  }
-
   __device__ Eigen::Map<Eigen::VectorXi> fixed_nodes() {
     return Eigen::Map<Eigen::VectorXi>(d_fixed_nodes, n_constraint / 3);
   }
@@ -693,7 +683,7 @@ struct GPU_FEAT10_Data : public ElementBase {
    * Update fixed nodes for dynamic constraint changes (e.g., moving grippers).
    * This reuses existing constraint buffers if the number of fixed nodes matches,
    * otherwise reallocates. After calling this, you must call CalcConstraintData()
-   * and ConvertToCSR_ConstraintJacT() to update the constraint Jacobian.
+   * and rebuild constraint Jacobians (CSR) if needed.
    */
   void UpdateNodalFixed(const Eigen::VectorXi &fixed_nodes);
 
@@ -761,7 +751,6 @@ struct GPU_FEAT10_Data : public ElementBase {
 
     if (is_constraints_setup) {
       HANDLE_ERROR(cudaFree(d_constraint));
-      HANDLE_ERROR(cudaFree(d_constraint_jac));
       HANDLE_ERROR(cudaFree(d_fixed_nodes));
     }
   }
@@ -817,7 +806,7 @@ struct GPU_FEAT10_Data : public ElementBase {
   double *d_eta_damp, *d_lambda_damp;
 
   // Constraint data
-  double *d_constraint, *d_constraint_jac;
+  double *d_constraint;
   int *d_fixed_nodes;
   // Constraint Jacobian J^T in CSR format
   int *d_cj_csr_offsets, *d_cj_csr_columns;

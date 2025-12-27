@@ -266,16 +266,6 @@ struct GPU_ANCF3443_Data : public ElementBase {
     return Eigen::Map<Eigen::VectorXd>(d_constraint, n_constraint);
   }
 
-  __device__ Eigen::Map<Eigen::MatrixXd> constraint_jac() {
-    return Eigen::Map<Eigen::MatrixXd>(d_constraint_jac, n_constraint,
-                                       n_coef * 3);
-  }
-
-  __device__ const Eigen::Map<Eigen::MatrixXd> constraint_jac() const {
-    return Eigen::Map<Eigen::MatrixXd>(d_constraint_jac, n_constraint,
-                                       n_coef * 3);
-  }
-
   __device__ Eigen::Map<Eigen::VectorXi> fixed_nodes() {
     return Eigen::Map<Eigen::VectorXi>(d_fixed_nodes, n_constraint / 3);
   }
@@ -721,18 +711,18 @@ struct GPU_ANCF3443_Data : public ElementBase {
     n_constraint = fixed_nodes.size() * 3;
 
     HANDLE_ERROR(cudaMalloc(&d_constraint, n_constraint * sizeof(double)));
-    HANDLE_ERROR(cudaMalloc(&d_constraint_jac,
-                            n_constraint * (n_coef * 3) * sizeof(double)));
     HANDLE_ERROR(cudaMalloc(&d_fixed_nodes, fixed_nodes.size() * sizeof(int)));
 
     HANDLE_ERROR(cudaMemset(d_constraint, 0, n_constraint * sizeof(double)));
-    HANDLE_ERROR(cudaMemset(d_constraint_jac, 0,
-                            n_constraint * (n_coef * 3) * sizeof(double)));
     HANDLE_ERROR(cudaMemcpy(d_fixed_nodes, fixed_nodes.data(),
                             fixed_nodes.size() * sizeof(int),
                             cudaMemcpyHostToDevice));
 
     is_constraints_setup = true;
+    if (d_data) {
+      HANDLE_ERROR(cudaMemcpy(d_data, this, sizeof(GPU_ANCF3443_Data),
+                              cudaMemcpyHostToDevice));
+    }
   }
 
   // Free memory
@@ -812,7 +802,6 @@ struct GPU_ANCF3443_Data : public ElementBase {
 
     if (is_constraints_setup) {
       HANDLE_ERROR(cudaFree(d_constraint));
-      HANDLE_ERROR(cudaFree(d_constraint_jac));
       HANDLE_ERROR(cudaFree(d_fixed_nodes));
     }
   }
@@ -901,7 +890,7 @@ struct GPU_ANCF3443_Data : public ElementBase {
   int *d_material_model;
   double *d_mu10, *d_mu01, *d_kappa;
 
-  double *d_constraint, *d_constraint_jac;
+  double *d_constraint;
   int *d_fixed_nodes;
 
   // Constraint Jacobian J^T in CSR format

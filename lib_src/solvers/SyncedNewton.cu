@@ -193,7 +193,7 @@ __global__ void analyze_hessian_sparsity_bitset(ElementType *d_data,
     if constexpr (std::is_same_v<ElementType, GPU_FEAT10_Data>) {
       for (int local_node = 0; local_node < Traits::N_NODES; local_node++) {
         int global_node = Traits::get_global_node(d_data, elem, local_node);
-        if (global_node == coef_i) {  // FIXED: changed node_i to coef_i
+        if (global_node == coef_i) {
           node_in_elem = true;
           break;
         }
@@ -214,7 +214,7 @@ __global__ void analyze_hessian_sparsity_bitset(ElementType *d_data,
       // For ANCF, check if any coefficient of this node is in the element
       for (int shape_idx = 0; shape_idx < Traits::N_SHAPE; shape_idx++) {
         int coef_idx = Traits::shape_to_coef(d_data, elem, shape_idx);
-        if (coef_idx == coef_i) {  // FIXED: changed node_i to coef_i
+        if (coef_idx == coef_i) {
           node_in_elem = true;
           break;
         }
@@ -363,80 +363,6 @@ __global__ void extract_columns_from_bitset(unsigned int *d_col_bitset,
   }
 }
 
-__global__ void debug_check_sparsity_pattern(int *d_csr_row_offsets,
-                                             int *d_csr_col_indices,
-                                             int n_dofs) {
-  int row = blockIdx.x * blockDim.x + threadIdx.x;
-  if (row >= min(n_dofs, 10))
-    return;
-
-  int row_start = d_csr_row_offsets[row];
-  int row_end   = d_csr_row_offsets[row + 1];
-
-  printf("Row %d: nnz=%d, cols=[", row, row_end - row_start);
-  for (int idx = row_start; idx < min(row_end, row_start + 10); idx++) {
-    printf("%d ", d_csr_col_indices[idx]);
-  }
-  printf("...]\n");
-
-  for (int idx = row_start; idx < row_end - 1; idx++) {
-    if (d_csr_col_indices[idx] >= d_csr_col_indices[idx + 1]) {
-      printf("ERROR: Row %d NOT SORTED at idx %d: %d >= %d\n", row,
-             idx - row_start, d_csr_col_indices[idx],
-             d_csr_col_indices[idx + 1]);
-    }
-  }
-}
-
-__global__ void debug_mass_assembly_lookups(GPU_FEAT10_Data *d_data,
-                                            SyncedNewtonSolver *d_solver,
-                                            int *d_csr_row_offsets,
-                                            int *d_csr_col_indices) {
-  int tid = blockIdx.x * blockDim.x + threadIdx.x;
-  if (tid >= min(d_solver->get_n_coef(), 5))
-    return;
-
-  int node_i = tid;
-
-  const int *mass_offsets = d_data->csr_offsets();
-  const int *mass_columns = d_data->csr_columns();
-
-  int row_start = mass_offsets[node_i];
-  int row_end   = mass_offsets[node_i + 1];
-
-  printf("\nNode %d has %d mass connections:\n", node_i, row_end - row_start);
-
-  for (int idx = row_start; idx < row_end; idx++) {
-    int node_j = mass_columns[idx];
-
-    for (int dof_i = 0; dof_i < 3; dof_i++) {
-      for (int dof_j = 0; dof_j < 3; dof_j++) {
-        if (dof_i == dof_j) {
-          int row_dof = node_i * 3 + dof_i;
-          int col_dof = node_j * 3 + dof_j;
-
-          int row_begin  = d_csr_row_offsets[row_dof];
-          int row_length = d_csr_row_offsets[row_dof + 1] - row_begin;
-
-          int pos = binary_search_column(&d_csr_col_indices[row_begin],
-                                         row_length, col_dof);
-
-          if (pos < 0) {
-            printf(
-                "  MISSING: row_dof=%d wants col_dof=%d (node_i=%d dof=%d -> "
-                "node_j=%d dof=%d)\n",
-                row_dof, col_dof, node_i, dof_i, node_j, dof_j);
-            printf("    Row %d has cols: ", row_dof);
-            for (int p = 0; p < min(row_length, 20); p++) {
-              printf("%d ", d_csr_col_indices[row_begin + p]);
-            }
-            printf("\n");
-          }
-        }
-      }
-    }
-  }
-}
 
 // =====================================================
 // SPARSE HESSIAN: Assembly Kernels
@@ -767,10 +693,8 @@ __global__ void cudss_solve_update_v_prev(SyncedNewtonSolver *d_newton_solver) {
   }
 }
 
-// Replace lines 744-767 with this optimized version using member handles:
 double SyncedNewtonSolver::compute_l2_norm_cublas(double *d_vec, int n_dofs) {
-  // Reuse persistent cublas_handle_ and d_norm_temp_ (no
-  // create/destroy/malloc/free!)
+  // Reuse persistent cublas_handle_ and d_norm_temp_.
   cublasDnrm2(cublas_handle_, n_dofs, d_vec, 1, d_norm_temp_);
 
   double h_norm;
@@ -784,6 +708,22 @@ void SyncedNewtonSolver::AnalyzeHessianSparsity() {
     return;
 
   std::cout << "Analyzing Hessian sparsity pattern..." << std::endl;
+
+  if (n_constraints_ > 0) {
+    if (type_ == TYPE_T10) {
+      auto *typed_data = static_cast<GPU_FEAT10_Data *>(h_data_);
+      typed_data->BuildConstraintJacobianTransposeCSR();
+      typed_data->BuildConstraintJacobianCSR();
+    } else if (type_ == TYPE_3243) {
+      auto *typed_data = static_cast<GPU_ANCF3243_Data *>(h_data_);
+      typed_data->BuildConstraintJacobianTransposeCSR();
+      typed_data->BuildConstraintJacobianCSR();
+    } else if (type_ == TYPE_3443) {
+      auto *typed_data = static_cast<GPU_ANCF3443_Data *>(h_data_);
+      typed_data->BuildConstraintJacobianTransposeCSR();
+      typed_data->BuildConstraintJacobianCSR();
+    }
+  }
 
   int n_dofs      = 3 * n_coef_;
   int bitset_size = (n_dofs + 31) / 32;
@@ -876,6 +816,22 @@ void SyncedNewtonSolver::OneStepNewtonCuDSS() {
   } else {
     std::cerr << "Unsupported element type!" << std::endl;
     return;
+  }
+
+  if (n_constraints_ > 0) {
+    if (type_ == TYPE_T10) {
+      auto *typed_data = static_cast<GPU_FEAT10_Data *>(h_data_);
+      typed_data->BuildConstraintJacobianTransposeCSR();
+      typed_data->BuildConstraintJacobianCSR();
+    } else if (type_ == TYPE_3243) {
+      auto *typed_data = static_cast<GPU_ANCF3243_Data *>(h_data_);
+      typed_data->BuildConstraintJacobianTransposeCSR();
+      typed_data->BuildConstraintJacobianCSR();
+    } else if (type_ == TYPE_3443) {
+      auto *typed_data = static_cast<GPU_ANCF3443_Data *>(h_data_);
+      typed_data->BuildConstraintJacobianTransposeCSR();
+      typed_data->BuildConstraintJacobianCSR();
+    }
   }
 
   cudaEvent_t start, stop;

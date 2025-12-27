@@ -406,13 +406,6 @@ __device__ __forceinline__ void compute_constraint_data(
     d_data->constraint()[thread_idx * 3 + 2] =
         d_data->z12()(d_data->fixed_nodes()[thread_idx]) -
         d_data->z12_jac()(d_data->fixed_nodes()[thread_idx]);
-
-    d_data->constraint_jac()(thread_idx * 3,
-                             d_data->fixed_nodes()[thread_idx] * 3)     = 1.0;
-    d_data->constraint_jac()(thread_idx * 3 + 1,
-                             d_data->fixed_nodes()[thread_idx] * 3 + 1) = 1.0;
-    d_data->constraint_jac()(thread_idx * 3 + 2,
-                             d_data->fixed_nodes()[thread_idx] * 3 + 2) = 1.0;
   }
 }
 
