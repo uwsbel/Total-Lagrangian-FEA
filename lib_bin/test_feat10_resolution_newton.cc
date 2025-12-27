@@ -27,7 +27,7 @@ const double E    = 7e8;   // Young's modulus
 const double nu   = 0.33;  // Poisson's ratio
 const double rho0 = 2700;  // Density
 
-enum MESH_RESOLUTION { RES_0, RES_2, RES_4, RES_8, RES_16 };
+enum MESH_RESOLUTION { RES_0, RES_2, RES_4, RES_8, RES_16, RES_32 };
 
 enum MATERIAL_MODEL { MAT_SVK, MAT_MOONEY_RIVLIN };
 
@@ -38,7 +38,7 @@ int main() {
   int plot_target_node;
   int n_nodes, n_elems;
 
-  MESH_RESOLUTION resolution = RES_8;
+  MESH_RESOLUTION resolution = RES_16;
 
   MATERIAL_MODEL material = MAT_SVK;
 
@@ -72,6 +72,12 @@ int main() {
     n_elems = ANCFCPUUtils::FEAT10_read_elements(
         "data/meshes/T10/resolution/beam_3x2x1_res16.1.ele", elements);
     plot_target_node = 5630;
+  } else if (resolution == RES_32) {
+    n_nodes = ANCFCPUUtils::FEAT10_read_nodes(
+        "data/meshes/T10/resolution/beam_3x2x1_res32.1.node", nodes);
+    n_elems = ANCFCPUUtils::FEAT10_read_elements(
+        "data/meshes/T10/resolution/beam_3x2x1_res32.1.ele", elements);
+    plot_target_node = 22529;
   }
 
   std::cout << "mesh read nodes: " << n_nodes << std::endl;
@@ -182,27 +188,27 @@ int main() {
   std::cout << "gpu_t10_data dndu pre complete" << std::endl;
 
   // 2. Retrieve results
-  std::vector<std::vector<Eigen::MatrixXd>> ref_grads;
-  gpu_t10_data.RetrieveDnDuPreToCPU(ref_grads);
+  // std::vector<std::vector<Eigen::MatrixXd>> ref_grads;
+  // gpu_t10_data.RetrieveDnDuPreToCPU(ref_grads);
 
-  std::cout << "ref_grads:" << std::endl;
-  for (size_t i = 0; i < ref_grads.size(); i++) {
-    for (size_t j = 0; j < ref_grads[i].size(); j++) {
-      std::cout << ref_grads[i][j] << std::endl;
-    }
-  }
-  std::cout << "done retrieving ref_grads" << std::endl;
+  // std::cout << "ref_grads:" << std::endl;
+  // for (size_t i = 0; i < ref_grads.size(); i++) {
+  //   for (size_t j = 0; j < ref_grads[i].size(); j++) {
+  //     std::cout << ref_grads[i][j] << std::endl;
+  //   }
+  // }
+  // std::cout << "done retrieving ref_grads" << std::endl;
 
-  std::vector<std::vector<double>> detJ;
-  gpu_t10_data.RetrieveDetJToCPU(detJ);
+  // std::vector<std::vector<double>> detJ;
+  // gpu_t10_data.RetrieveDetJToCPU(detJ);
 
-  std::cout << "detJ:" << std::endl;
-  for (size_t i = 0; i < detJ.size(); i++) {
-    for (size_t j = 0; j < detJ[i].size(); j++) {
-      std::cout << detJ[i][j] << std::endl;
-    }
-  }
-  std::cout << "done retrieving detJ" << std::endl;
+  // std::cout << "detJ:" << std::endl;
+  // for (size_t i = 0; i < detJ.size(); i++) {
+  //   for (size_t j = 0; j < detJ[i].size(); j++) {
+  //     std::cout << detJ[i][j] << std::endl;
+  //   }
+  // }
+  // std::cout << "done retrieving detJ" << std::endl;
 
   gpu_t10_data.CalcMassMatrix();
 
@@ -224,30 +230,30 @@ int main() {
   std::cout << "done CalcP" << std::endl;
 
   // retrieve p
-  std::vector<std::vector<Eigen::MatrixXd>> p_from_F;
-  gpu_t10_data.RetrievePFromFToCPU(p_from_F);
+  // std::vector<std::vector<Eigen::MatrixXd>> p_from_F;
+  // gpu_t10_data.RetrievePFromFToCPU(p_from_F);
 
-  std::cout << "P matrices (First Piola-Kirchhoff stress):" << std::endl;
-  for (size_t elem = 0; elem < p_from_F.size(); elem++) {
-    std::cout << "Element " << elem << ":" << std::endl;
-    for (size_t qp = 0; qp < p_from_F[elem].size(); qp++) {
-      std::cout << "  Quadrature Point " << qp << ":" << std::endl;
-      std::cout << p_from_F[elem][qp] << std::endl;
-    }
-  }
-  std::cout << "done retrieving P matrices" << std::endl;
+  // std::cout << "P matrices (First Piola-Kirchhoff stress):" << std::endl;
+  // for (size_t elem = 0; elem < p_from_F.size(); elem++) {
+  //   std::cout << "Element " << elem << ":" << std::endl;
+  //   for (size_t qp = 0; qp < p_from_F[elem].size(); qp++) {
+  //     std::cout << "  Quadrature Point " << qp << ":" << std::endl;
+  //     std::cout << p_from_F[elem][qp] << std::endl;
+  //   }
+  // }
+  // std::cout << "done retrieving P matrices" << std::endl;
 
   // calculate internal force
   gpu_t10_data.CalcInternalForce();
   std::cout << "done CalcInternalForce" << std::endl;
 
   // retrieve internal force
-  Eigen::VectorXd f_int;
-  gpu_t10_data.RetrieveInternalForceToCPU(f_int);
-  std::cout << "Internal force vector (size: " << f_int.size()
-            << "):" << std::endl;
-  std::cout << f_int.transpose() << std::endl;
-  std::cout << "done retrieving internal force vector" << std::endl;
+  // Eigen::VectorXd f_int;
+  // gpu_t10_data.RetrieveInternalForceToCPU(f_int);
+  // std::cout << "Internal force vector (size: " << f_int.size()
+  //           << "):" << std::endl;
+  // std::cout << f_int.transpose() << std::endl;
+  // std::cout << "done retrieving internal force vector" << std::endl;
 
   SyncedNewtonParams params = {1e-4, 1e-4, 1e-4, 1e14, 5, 10, 1e-3};
   SyncedNewtonSolver solver(&gpu_t10_data, gpu_t10_data.get_n_constraint());
