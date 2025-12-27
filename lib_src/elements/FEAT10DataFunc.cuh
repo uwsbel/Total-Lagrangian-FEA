@@ -91,7 +91,7 @@ __device__ __forceinline__ void compute_p(int elem_idx, int qp_idx,
   // Get precomputed shape function gradients for this element and QP
   // grad_N[a][i] = ∂N_a/∂x_i (physical coordinates)
   double grad_N[10][3];
-  #pragma unroll
+  #pragma unroll 1
   for (int a = 0; a < 10; a++) {
     grad_N[a][0] = d_data->grad_N_ref(elem_idx, qp_idx)(a, 0);  // ∂N_a/∂x
     grad_N[a][1] = d_data->grad_N_ref(elem_idx, qp_idx)(a, 1);  // ∂N_a/∂y
@@ -103,7 +103,7 @@ __device__ __forceinline__ void compute_p(int elem_idx, int qp_idx,
 
   // Compute F = sum_a (x_a ⊗ grad_N[a]), where x_a is current nodal position.
   // F[i][j] = sum_a (x_a[i] * grad_N[a][j])
-  #pragma unroll
+  #pragma unroll 1
   for (int a = 0; a < 10; a++) {
     const int global_node_idx = d_data->element_connectivity()(elem_idx, a);
     const double x0 = d_data->x12()(global_node_idx);
@@ -128,7 +128,7 @@ __device__ __forceinline__ void compute_p(int elem_idx, int qp_idx,
   if (do_damp) {
     // Compute Fdot = sum_a (v_nodes[a] ⊗ grad_N[a])
     double Fdot[3][3] = {{0.0}};
-    #pragma unroll
+    #pragma unroll 1
     for (int a = 0; a < 10; a++) {
       const int global_node_idx = d_data->element_connectivity()(elem_idx, a);
       const double v0 = v_guess[global_node_idx * 3 + 0];
@@ -220,7 +220,7 @@ __device__ __forceinline__ void compute_p(int elem_idx, int qp_idx,
   // Compute trace(F^T * F)
   double trFtF = FtF[0][0] + FtF[1][1] + FtF[2][2];
 
-  // Compute FFtF = F * (F^T * F) = F * C.
+  // Compute FFtF = F * (F^T * F) = F * FtF.
   double FFtF[3][3] = {{0.0}};
   #pragma unroll
   for (int i = 0; i < 3; i++) {
