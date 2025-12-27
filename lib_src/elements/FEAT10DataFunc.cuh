@@ -148,42 +148,24 @@ __device__ __forceinline__ void compute_p(int elem_idx, int qp_idx,
     // Compute viscous Piola: P_vis = F * S_vis, where
     // S_vis = 2*eta*Edot + lambda_damp*tr(Edot)*I
     double Edot[3][3] = {{0.0}};
-    // Edot = 0.5*(Fdot^T * F + F^T * Fdot)
-    double Ft[3][3];
-    #pragma unroll
-    for (int i = 0; i < 3; i++) {
-      for (int j = 0; j < 3; j++) {
-        Ft[i][j] = F[j][i];
-      }
-    }
-    // compute Fdot^T * F
-    double FdotT_F[3][3] = {{0.0}};
-    #pragma unroll
-    for (int i = 0; i < 3; i++) {
-      for (int j = 0; j < 3; j++) {
-        for (int k = 0; k < 3; k++) {
-          FdotT_F[i][j] += Fdot[k][i] * F[k][j];
-        }
-      }
-    }
-    // compute F^T * Fdot
+    // Edot = 0.5 * (F^T * Fdot + (F^T * Fdot)^T).
     double Ft_Fdot[3][3] = {{0.0}};
     #pragma unroll
     for (int i = 0; i < 3; i++) {
       for (int j = 0; j < 3; j++) {
         for (int k = 0; k < 3; k++) {
-          Ft_Fdot[i][j] += Ft[i][k] * Fdot[k][j];
+          Ft_Fdot[i][j] += F[k][i] * Fdot[k][j];
         }
       }
     }
     #pragma unroll
     for (int i = 0; i < 3; i++) {
       for (int j = 0; j < 3; j++) {
-        Edot[i][j] = 0.5 * (FdotT_F[i][j] + Ft_Fdot[i][j]);
+        Edot[i][j] = 0.5 * (Ft_Fdot[i][j] + Ft_Fdot[j][i]);
       }
     }
 
-    double trEdot = Edot[0][0] + Edot[1][1] + Edot[2][2];
+    double trEdot = Ft_Fdot[0][0] + Ft_Fdot[1][1] + Ft_Fdot[2][2];
 
     double S_vis[3][3] = {{0.0}};
     #pragma unroll
