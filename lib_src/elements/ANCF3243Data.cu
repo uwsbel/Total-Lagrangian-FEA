@@ -374,230 +374,164 @@ void GPU_ANCF3243_Data::BuildMassCSRPattern() {
                           cudaMemcpyHostToDevice));
 }
 
+namespace {
+__global__ void build_constraint_j_csr_3243_kernel(int n_constraint,
+                                                   const int* fixed_nodes,
+                                                   int* j_offsets,
+                                                   int* j_columns,
+                                                   double* j_values) {
+  int tid = blockIdx.x * blockDim.x + threadIdx.x;
+  if (tid >= n_constraint) {
+    return;
+  }
+
+  j_offsets[tid] = tid;
+
+  int fixed_idx = tid / 3;
+  int dof       = tid % 3;
+  int node      = fixed_nodes[fixed_idx];
+  j_columns[tid] = node * 3 + dof;
+  j_values[tid]  = 1.0;
+}
+
+__global__ void build_constraint_jt_row_counts_3243_kernel(int n_constraint,
+                                                           const int* fixed_nodes,
+                                                           int* row_counts) {
+  int tid = blockIdx.x * blockDim.x + threadIdx.x;
+  if (tid >= n_constraint) {
+    return;
+  }
+
+  int fixed_idx = tid / 3;
+  int dof       = tid % 3;
+  int node      = fixed_nodes[fixed_idx];
+  int row       = node * 3 + dof;
+  atomicAdd(&row_counts[row], 1);
+}
+
+__global__ void build_constraint_jt_fill_3243_kernel(int n_constraint,
+                                                     const int* fixed_nodes,
+                                                     const int* offsets,
+                                                     int* row_positions,
+                                                     int* columns,
+                                                     double* values) {
+  int tid = blockIdx.x * blockDim.x + threadIdx.x;
+  if (tid >= n_constraint) {
+    return;
+  }
+
+  int fixed_idx = tid / 3;
+  int dof       = tid % 3;
+  int node      = fixed_nodes[fixed_idx];
+  int row       = node * 3 + dof;
+
+  int pos = atomicAdd(&row_positions[row], 1);
+  int out = offsets[row] + pos;
+
+  columns[out] = tid;
+  values[out]  = 1.0;
+}
+}  // namespace
+
 // This function converts the TRANSPOSE of the constraint Jacobian matrix to CSR
 // format
 void GPU_ANCF3243_Data::ConvertToCSR_ConstraintJacT() {
-  // TRANSPOSE: rows become columns, columns become rows
-  int num_rows = n_coef * 3;    // J^T has (n_coef*3) rows (was columns in J)
-  int num_cols = n_constraint;  // J^T has n_constraint cols (was rows in J)
-  int ld       = num_cols;      // Leading dimension for row-major
+  if (is_cj_csr_setup) {
+    return;
+  }
+  if (!is_constraints_setup || n_constraint == 0) {
+    return;
+  }
 
-  int *d_cj_csr_offsets_temp;
-  int *d_cj_csr_columns_temp;
-  double *d_cj_csr_values_temp;
-  int *d_cj_nnz_temp;
+  const int num_rows = n_coef * 3;
+  const int nnz      = n_constraint;
 
-  // Device memory management
-  double *d_dense =
-      d_constraint_jac;  // Original J matrix (n_constraint × n_coef*3)
-  HANDLE_ERROR(cudaMalloc((void **)&d_cj_csr_offsets_temp,
-                          (num_rows + 1) * sizeof(int)));
+  HANDLE_ERROR(cudaMalloc((void**)&d_cj_csr_offsets,
+                          static_cast<size_t>(num_rows + 1) * sizeof(int)));
+  HANDLE_ERROR(cudaMalloc((void**)&d_cj_csr_columns,
+                          static_cast<size_t>(nnz) * sizeof(int)));
+  HANDLE_ERROR(cudaMalloc((void**)&d_cj_csr_values,
+                          static_cast<size_t>(nnz) * sizeof(double)));
+  HANDLE_ERROR(cudaMalloc((void**)&d_cj_nnz, sizeof(int)));
 
-  cusparseHandle_t handle = NULL;
-  cusparseSpMatDescr_t matB;
-  cusparseDnMatDescr_t matA;
-  void *dBuffer     = NULL;
-  size_t bufferSize = 0;
-  CHECK_CUSPARSE(cusparseCreate(&handle));
+  int* d_row_counts    = nullptr;
+  int* d_row_positions = nullptr;
+  HANDLE_ERROR(cudaMalloc(&d_row_counts, static_cast<size_t>(num_rows) * sizeof(int)));
+  HANDLE_ERROR(cudaMalloc(&d_row_positions, static_cast<size_t>(num_rows) * sizeof(int)));
+  HANDLE_ERROR(cudaMemset(d_row_counts, 0, static_cast<size_t>(num_rows) * sizeof(int)));
 
-  // Create dense matrix A as TRANSPOSE of J
-  // Original J is column-major (n_constraint × n_coef*3)
-  // We want J^T which is row-major (n_coef*3 × n_constraint)
-  // So we swap dimensions and use ROW order
-  CHECK_CUSPARSE(cusparseCreateDnMat(&matA, num_rows, num_cols, ld, d_dense,
-                                     CUDA_R_64F, CUSPARSE_ORDER_ROW));
+  {
+    constexpr int threads = 256;
+    const int blocks      = (n_constraint + threads - 1) / threads;
+    build_constraint_jt_row_counts_3243_kernel<<<blocks, threads>>>(
+        n_constraint, d_fixed_nodes, d_row_counts);
+    HANDLE_ERROR(cudaDeviceSynchronize());
+  }
 
-  // Create sparse matrix B in CSR format (for J^T)
-  CHECK_CUSPARSE(cusparseCreateCsr(&matB, num_rows, num_cols, 0,
-                                   d_cj_csr_offsets_temp, NULL, NULL,
-                                   CUSPARSE_INDEX_32I, CUSPARSE_INDEX_32I,
-                                   CUSPARSE_INDEX_BASE_ZERO, CUDA_R_64F));
+  thrust::device_ptr<int> counts_begin(d_row_counts);
+  thrust::device_ptr<int> offsets_begin(d_cj_csr_offsets);
+  thrust::exclusive_scan(thrust::device, counts_begin,
+                         counts_begin + num_rows, offsets_begin);
 
-  // allocate an external buffer if needed
-  CHECK_CUSPARSE(cusparseDenseToSparse_bufferSize(
-      handle, matA, matB, CUSPARSE_DENSETOSPARSE_ALG_DEFAULT, &bufferSize));
-  HANDLE_ERROR(cudaMalloc(&dBuffer, bufferSize));
+  set_last_offset_3243_kernel<<<1, 1>>>(d_cj_csr_offsets, num_rows, nnz);
+  HANDLE_ERROR(cudaDeviceSynchronize());
 
-  // execute Dense to Sparse conversion
-  CHECK_CUSPARSE(cusparseDenseToSparse_analysis(
-      handle, matA, matB, CUSPARSE_DENSETOSPARSE_ALG_DEFAULT, dBuffer));
+  HANDLE_ERROR(cudaMemset(d_row_positions, 0,
+                          static_cast<size_t>(num_rows) * sizeof(int)));
 
-  // get number of non-zero elements
-  int64_t num_rows_tmp, num_cols_tmp, nnz;
-  CHECK_CUSPARSE(
-      cusparseSpMatGetSize(matB, &num_rows_tmp, &num_cols_tmp, &nnz));
+  {
+    constexpr int threads = 256;
+    const int blocks      = (n_constraint + threads - 1) / threads;
+    build_constraint_jt_fill_3243_kernel<<<blocks, threads>>>(
+        n_constraint, d_fixed_nodes, d_cj_csr_offsets, d_row_positions,
+        d_cj_csr_columns, d_cj_csr_values);
+    HANDLE_ERROR(cudaDeviceSynchronize());
+  }
 
-  // copy over nnz
-  HANDLE_ERROR(cudaMalloc((void **)&d_cj_nnz_temp, sizeof(int)));
-  HANDLE_ERROR(
-      cudaMemcpy(d_cj_nnz_temp, &nnz, sizeof(int), cudaMemcpyHostToDevice));
+  HANDLE_ERROR(cudaFree(d_row_counts));
+  HANDLE_ERROR(cudaFree(d_row_positions));
 
-  int *h_csr_offsets   = new int[num_rows + 1];
-  int *h_csr_columns   = new int[nnz];
-  double *h_csr_values = new double[nnz];
-
-  // allocate CSR column indices and values
-  HANDLE_ERROR(cudaMalloc((void **)&d_cj_csr_columns_temp, nnz * sizeof(int)));
-  HANDLE_ERROR(
-      cudaMalloc((void **)&d_cj_csr_values_temp, nnz * sizeof(double)));
-
-  // reset offsets, column indices, and values pointers
-  CHECK_CUSPARSE(cusparseCsrSetPointers(matB, d_cj_csr_offsets_temp,
-                                        d_cj_csr_columns_temp,
-                                        d_cj_csr_values_temp));
-  CHECK_CUSPARSE(cusparseDenseToSparse_convert(
-      handle, matA, matB, CUSPARSE_DENSETOSPARSE_ALG_DEFAULT, dBuffer));
-
-  HANDLE_ERROR(cudaMemcpy(h_csr_offsets, d_cj_csr_offsets_temp,
-                          (num_rows + 1) * sizeof(int),
-                          cudaMemcpyDeviceToHost));
-  HANDLE_ERROR(cudaMemcpy(h_csr_columns, d_cj_csr_columns_temp,
-                          nnz * sizeof(int), cudaMemcpyDeviceToHost));
-  HANDLE_ERROR(cudaMemcpy(h_csr_values, d_cj_csr_values_temp,
-                          nnz * sizeof(double), cudaMemcpyDeviceToHost));
-
-  // copy all temp arrays to class members
-  HANDLE_ERROR(cudaMalloc((void **)&d_cj_csr_columns, nnz * sizeof(int)));
-  HANDLE_ERROR(cudaMalloc((void **)&d_cj_csr_values, nnz * sizeof(double)));
-  HANDLE_ERROR(
-      cudaMalloc((void **)&d_cj_csr_offsets, (num_rows + 1) * sizeof(int)));
-  HANDLE_ERROR(cudaMalloc((void **)&d_cj_nnz, sizeof(int)));
-
-  HANDLE_ERROR(cudaMemcpy(d_cj_csr_offsets, d_cj_csr_offsets_temp,
-                          (num_rows + 1) * sizeof(int),
-                          cudaMemcpyDeviceToDevice));
-  HANDLE_ERROR(cudaMemcpy(d_cj_csr_columns, d_cj_csr_columns_temp,
-                          nnz * sizeof(int), cudaMemcpyDeviceToDevice));
-  HANDLE_ERROR(cudaMemcpy(d_cj_csr_values, d_cj_csr_values_temp,
-                          nnz * sizeof(double), cudaMemcpyDeviceToDevice));
-  HANDLE_ERROR(cudaMemcpy(d_cj_nnz, d_cj_nnz_temp, sizeof(int),
-                          cudaMemcpyDeviceToDevice));
-
-  // destroy matrix/vector descriptors
-  CHECK_CUSPARSE(cusparseDestroyDnMat(matA));
-  CHECK_CUSPARSE(cusparseDestroySpMat(matB));
-  CHECK_CUSPARSE(cusparseDestroy(handle));
-  HANDLE_ERROR(cudaFree(dBuffer));
-
-  delete[] h_csr_offsets;
-  delete[] h_csr_columns;
-  delete[] h_csr_values;
-
-  // Free temporary allocations
-  HANDLE_ERROR(cudaFree(d_cj_csr_offsets_temp));
-  HANDLE_ERROR(cudaFree(d_cj_csr_columns_temp));
-  HANDLE_ERROR(cudaFree(d_cj_csr_values_temp));
-  HANDLE_ERROR(cudaFree(d_cj_nnz_temp));
-
-  // Flash GPU data back to cpu, update pointer then flash back
-  GPU_ANCF3243_Data *h_data_flash =
-      (GPU_ANCF3243_Data *)malloc(sizeof(GPU_ANCF3243_Data));
-  HANDLE_ERROR(cudaMemcpy(h_data_flash, d_data, sizeof(GPU_ANCF3243_Data),
-                          cudaMemcpyDeviceToHost));
-  h_data_flash->d_cj_csr_offsets = d_cj_csr_offsets;
-  h_data_flash->d_cj_csr_columns = d_cj_csr_columns;
-  h_data_flash->d_cj_csr_values  = d_cj_csr_values;
-  h_data_flash->d_cj_nnz         = d_cj_nnz;
-  HANDLE_ERROR(cudaMemcpy(d_data, h_data_flash, sizeof(GPU_ANCF3243_Data),
-                          cudaMemcpyHostToDevice));
-
-  free(h_data_flash);
-
+  HANDLE_ERROR(cudaMemcpy(d_cj_nnz, &nnz, sizeof(int), cudaMemcpyHostToDevice));
   is_cj_csr_setup = true;
+  HANDLE_ERROR(cudaMemcpy(d_data, this, sizeof(GPU_ANCF3243_Data),
+                          cudaMemcpyHostToDevice));
 }
 
 // This function converts the Constraint Jacobian matrix J to CSR format
 // (Rows = Constraints, Cols = DOFs)
 void GPU_ANCF3243_Data::ConvertToCSR_ConstraintJac() {
-  int num_rows = n_constraint;
-  int num_cols = n_coef * 3;
-  int ld       = num_rows;
-
-  int *d_j_csr_offsets_temp;
-  int *d_j_csr_columns_temp;
-  double *d_j_csr_values_temp;
-  int *d_j_nnz_temp;
-
-  double *d_dense = d_constraint_jac;
-
-  HANDLE_ERROR(
-      cudaMalloc((void **)&d_j_csr_offsets_temp, (num_rows + 1) * sizeof(int)));
-
-  cusparseHandle_t handle = NULL;
-  cusparseSpMatDescr_t matB;
-  cusparseDnMatDescr_t matA;
-  void *dBuffer     = NULL;
-  size_t bufferSize = 0;
-
-  CHECK_CUSPARSE(cusparseCreate(&handle));
-
-  CHECK_CUSPARSE(cusparseCreateDnMat(&matA, num_rows, num_cols, ld, d_dense,
-                                     CUDA_R_64F, CUSPARSE_ORDER_COL));
-
-  CHECK_CUSPARSE(cusparseCreateCsr(&matB, num_rows, num_cols, 0,
-                                   d_j_csr_offsets_temp, NULL, NULL,
-                                   CUSPARSE_INDEX_32I, CUSPARSE_INDEX_32I,
-                                   CUSPARSE_INDEX_BASE_ZERO, CUDA_R_64F));
-
-  CHECK_CUSPARSE(cusparseDenseToSparse_bufferSize(
-      handle, matA, matB, CUSPARSE_DENSETOSPARSE_ALG_DEFAULT, &bufferSize));
-  HANDLE_ERROR(cudaMalloc(&dBuffer, bufferSize));
-
-  CHECK_CUSPARSE(cusparseDenseToSparse_analysis(
-      handle, matA, matB, CUSPARSE_DENSETOSPARSE_ALG_DEFAULT, dBuffer));
-
-  int64_t num_rows_tmp, num_cols_tmp, nnz_tmp;
-  CHECK_CUSPARSE(
-      cusparseSpMatGetSize(matB, &num_rows_tmp, &num_cols_tmp, &nnz_tmp));
-
-  HANDLE_ERROR(
-      cudaMalloc((void **)&d_j_csr_columns_temp, nnz_tmp * sizeof(int)));
-  HANDLE_ERROR(
-      cudaMalloc((void **)&d_j_csr_values_temp, nnz_tmp * sizeof(double)));
-  HANDLE_ERROR(cudaMalloc((void **)&d_j_nnz_temp, sizeof(int)));
-
-  int nnz_int = static_cast<int>(nnz_tmp);
-  HANDLE_ERROR(cudaMemcpy(d_j_nnz_temp, &nnz_int, sizeof(int),
-                          cudaMemcpyHostToDevice));
-
-  CHECK_CUSPARSE(cusparseCsrSetPointers(matB, d_j_csr_offsets_temp,
-                                        d_j_csr_columns_temp,
-                                        d_j_csr_values_temp));
-
-  CHECK_CUSPARSE(cusparseDenseToSparse_convert(
-      handle, matA, matB, CUSPARSE_DENSETOSPARSE_ALG_DEFAULT, dBuffer));
-
-  CHECK_CUSPARSE(cusparseDestroyDnMat(matA));
-  CHECK_CUSPARSE(cusparseDestroySpMat(matB));
-  CHECK_CUSPARSE(cusparseDestroy(handle));
-  HANDLE_ERROR(cudaFree(dBuffer));
-
   if (is_j_csr_setup) {
-    HANDLE_ERROR(cudaFree(d_j_csr_offsets));
-    HANDLE_ERROR(cudaFree(d_j_csr_columns));
-    HANDLE_ERROR(cudaFree(d_j_csr_values));
-    HANDLE_ERROR(cudaFree(d_j_nnz));
+    return;
+  }
+  if (!is_constraints_setup || n_constraint == 0) {
+    return;
   }
 
-  d_j_csr_offsets = d_j_csr_offsets_temp;
-  d_j_csr_columns = d_j_csr_columns_temp;
-  d_j_csr_values  = d_j_csr_values_temp;
-  d_j_nnz         = d_j_nnz_temp;
+  const int nnz = n_constraint;
 
+  HANDLE_ERROR(cudaMalloc((void**)&d_j_csr_offsets,
+                          static_cast<size_t>(n_constraint + 1) * sizeof(int)));
+  HANDLE_ERROR(cudaMalloc((void**)&d_j_csr_columns,
+                          static_cast<size_t>(nnz) * sizeof(int)));
+  HANDLE_ERROR(cudaMalloc((void**)&d_j_csr_values,
+                          static_cast<size_t>(nnz) * sizeof(double)));
+  HANDLE_ERROR(cudaMalloc((void**)&d_j_nnz, sizeof(int)));
+
+  {
+    constexpr int threads = 256;
+    const int blocks      = (n_constraint + threads - 1) / threads;
+    build_constraint_j_csr_3243_kernel<<<blocks, threads>>>(
+        n_constraint, d_fixed_nodes, d_j_csr_offsets, d_j_csr_columns,
+        d_j_csr_values);
+    HANDLE_ERROR(cudaDeviceSynchronize());
+    set_last_offset_3243_kernel<<<1, 1>>>(d_j_csr_offsets, n_constraint, nnz);
+    HANDLE_ERROR(cudaDeviceSynchronize());
+  }
+
+  HANDLE_ERROR(cudaMemcpy(d_j_nnz, &nnz, sizeof(int), cudaMemcpyHostToDevice));
   is_j_csr_setup = true;
-
-  GPU_ANCF3243_Data *h_data_flash =
-      (GPU_ANCF3243_Data *)malloc(sizeof(GPU_ANCF3243_Data));
-  HANDLE_ERROR(cudaMemcpy(h_data_flash, d_data, sizeof(GPU_ANCF3243_Data),
-                          cudaMemcpyDeviceToHost));
-  h_data_flash->d_j_csr_offsets = d_j_csr_offsets;
-  h_data_flash->d_j_csr_columns = d_j_csr_columns;
-  h_data_flash->d_j_csr_values  = d_j_csr_values;
-  h_data_flash->d_j_nnz         = d_j_nnz;
-  h_data_flash->is_j_csr_setup  = true;
-  HANDLE_ERROR(cudaMemcpy(d_data, h_data_flash, sizeof(GPU_ANCF3243_Data),
+  HANDLE_ERROR(cudaMemcpy(d_data, this, sizeof(GPU_ANCF3243_Data),
                           cudaMemcpyHostToDevice));
-  free(h_data_flash);
 }
 
 void GPU_ANCF3243_Data::RetrieveMassCSRToCPU(std::vector<int> &offsets,
@@ -679,11 +613,24 @@ void GPU_ANCF3243_Data::RetrieveConstraintDataToCPU(
 
 void GPU_ANCF3243_Data::RetrieveConstraintJacobianToCPU(
     Eigen::MatrixXd &constraint_jac) {
-  int expected_size = 12 * n_coef * 3;
-  constraint_jac.resize(12, n_coef * 3);
-  HANDLE_ERROR(cudaMemcpy(constraint_jac.data(), d_constraint_jac,
-                          expected_size * sizeof(double),
+  constraint_jac.resize(n_constraint, n_coef * 3);
+  constraint_jac.setZero();
+
+  if (!is_constraints_setup || n_constraint == 0) {
+    return;
+  }
+
+  std::vector<int> h_fixed(static_cast<size_t>(n_constraint / 3), 0);
+  HANDLE_ERROR(cudaMemcpy(h_fixed.data(), d_fixed_nodes,
+                          static_cast<size_t>(n_constraint / 3) * sizeof(int),
                           cudaMemcpyDeviceToHost));
+
+  for (int i = 0; i < n_constraint / 3; ++i) {
+    int node = h_fixed[static_cast<size_t>(i)];
+    constraint_jac(i * 3 + 0, node * 3 + 0) = 1.0;
+    constraint_jac(i * 3 + 1, node * 3 + 1) = 1.0;
+    constraint_jac(i * 3 + 2, node * 3 + 2) = 1.0;
+  }
 }
 
 void GPU_ANCF3243_Data::RetrievePositionToCPU(Eigen::VectorXd &x12,

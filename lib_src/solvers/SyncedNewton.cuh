@@ -35,7 +35,8 @@ struct SyncedNewtonParams {
 class SyncedNewtonSolver : public SolverBase {
  public:
   SyncedNewtonSolver(ElementBase *data, int n_constraints)
-      : n_coef_(data->get_n_coef()),
+      : h_data_(data),
+        n_coef_(data->get_n_coef()),
         n_beam_(data->get_n_beam()),
         n_constraints_(n_constraints),
         sparse_hessian_initialized_(false),
@@ -352,6 +353,7 @@ class SyncedNewtonSolver : public SolverBase {
   void AnalyzeHessianSparsity();
 
  private:
+  ElementBase *h_data_;
   ElementType type_;
   ElementBase *d_data_;
   SyncedNewtonSolver *d_newton_solver_;

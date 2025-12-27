@@ -68,7 +68,7 @@ __device__ double solver_grad_L(int tid, ElementType *data,
     const double *__restrict__ lam = d_solver->lambda_guess().data();
     const double *__restrict__ con = data->constraint().data();
 
-    // If you have CSC format (or build it once):
+    // CSR format stores J^T (transpose of constraint Jacobian).
     const int *__restrict__ cjT_offsets   = data->cj_csr_offsets();
     const int *__restrict__ cjT_columns   = data->cj_csr_columns();
     const double *__restrict__ cjT_values = data->cj_csr_values();
