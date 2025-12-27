@@ -238,26 +238,15 @@ __device__ __forceinline__ void compute_p(int elem_idx, int qp_idx,
   // Compute trace(F^T * F)
   double trFtF = FtF[0][0] + FtF[1][1] + FtF[2][2];
 
-  // Compute F * F^T
-  double FFt[3][3] = {{0.0}};
+  // Compute FFtF = F * (F^T * F) = F * C.
+  double FFtF[3][3] = {{0.0}};
   #pragma unroll
   for (int i = 0; i < 3; i++) {
     #pragma unroll
     for (int j = 0; j < 3; j++) {
       #pragma unroll
       for (int k = 0; k < 3; k++) {
-        FFt[i][j] += F[i][k] * F[j][k];  // F[i][k] * F^T[k][j]
-      }
-    }
-  }
-
-  // Compute F * F^T * F
-  double FFtF[3][3] = {{0.0}};
-  #pragma unroll
-  for (int i = 0; i < 3; i++) {
-    for (int j = 0; j < 3; j++) {
-      for (int k = 0; k < 3; k++) {
-        FFtF[i][j] += FFt[i][k] * F[k][j];
+        FFtF[i][j] += F[i][k] * FtF[k][j];
       }
     }
   }
