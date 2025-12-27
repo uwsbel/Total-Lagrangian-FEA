@@ -15,6 +15,7 @@
 #include <cooperative_groups.h>
 #include <cublas_v2.h>
 #include <thrust/device_ptr.h>
+#include <thrust/execution_policy.h>
 #include <thrust/scan.h>
 
 #include "../elements/ANCF3243Data.cuh"
@@ -131,7 +132,7 @@ struct ElementTraits<GPU_ANCF3443_Data> {
 };
 
 // =====================================================
-// SPARSE HESSIAN: Bitset-based Sparsity Analysis
+// SPARSE HESSIAN: Sparsity Pattern Construction
 // =====================================================
 
 // Helper: Binary search to find column index in sorted array
@@ -148,218 +149,55 @@ __device__ int binary_search_column(const int *cols, int n_cols, int target) {
   }
   return -1;  // Not found
 }
-// Step 1: Analyze sparsity pattern using bitsets (union of all contributions)
+// Build the global DOF-level CSR pattern from the coefficient-level adjacency
+// already constructed by each ElementData via BuildMassCSRPattern().
+//
+// The global Hessian assembly kernels scatter dense 3x3 blocks between
+// coefficient vectors, so we expand each coefficient neighbor into 3 DOF
+// columns. This scales with the number of (coefficient) adjacency edges, not
+// n_dofs^2.
 template <typename ElementType>
-__global__ void analyze_hessian_sparsity_bitset(ElementType *d_data,
-                                                SyncedNewtonSolver *d_solver,
-                                                unsigned int *d_col_bitset,
-                                                int bitset_size) {
-  using Traits = ElementTraits<ElementType>;
-
-  int row_dof = blockIdx.x * blockDim.x + threadIdx.x;
-  int n_dofs  = 3 * d_solver->get_n_coef();
-
-  if (row_dof >= n_dofs)
+__global__ void build_dof_row_nnz_from_coef_csr(ElementType *d_data, int n_coef,
+                                               int *d_row_nnz) {
+  int coef_i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (coef_i >= n_coef)
     return;
 
-  unsigned int *my_bitset = &d_col_bitset[row_dof * bitset_size];
+  const int *offsets = d_data->csr_offsets();
+  int deg            = offsets[coef_i + 1] - offsets[coef_i];
+  int row_nnz        = deg * 3;
 
-  int coef_i = row_dof / 3;  // This is coefficient index for both element types
-  int dof_i  = row_dof % 3;
-
-  // ===== Contribution 1: Mass Matrix =====
-  const int *mass_offsets = d_data->csr_offsets();
-  const int *mass_columns = d_data->csr_columns();
-
-  int row_start = mass_offsets[coef_i];
-  int row_end   = mass_offsets[coef_i + 1];
-
-  for (int idx = row_start; idx < row_end; idx++) {
-    int coef_j  = mass_columns[idx];
-    int col_dof = coef_j * 3 + dof_i;
-
-    int word_idx = col_dof / 32;
-    int bit_idx  = col_dof % 32;
-    atomicOr(&my_bitset[word_idx], 1u << bit_idx);
-  }
-
-  // ===== Contribution 2: Tangent Stiffness (Element Connectivity) =====
-  int n_elems = d_solver->get_n_beam();
-
-  for (int elem = 0; elem < n_elems; elem++) {
-    bool node_in_elem = false;
-
-    // Check connectivity based on element type
-    if constexpr (std::is_same_v<ElementType, GPU_FEAT10_Data>) {
-      for (int local_node = 0; local_node < Traits::N_NODES; local_node++) {
-        int global_node = Traits::get_global_node(d_data, elem, local_node);
-        if (global_node == coef_i) {
-          node_in_elem = true;
-          break;
-        }
-      }
-
-      if (node_in_elem) {
-        for (int local_node = 0; local_node < Traits::N_NODES; local_node++) {
-          int node_j = Traits::get_global_node(d_data, elem, local_node);
-          for (int dof_j = 0; dof_j < 3; dof_j++) {
-            int col_dof  = node_j * 3 + dof_j;
-            int word_idx = col_dof / 32;
-            int bit_idx  = col_dof % 32;
-            atomicOr(&my_bitset[word_idx], 1u << bit_idx);
-          }
-        }
-      }
-    } else if constexpr (std::is_same_v<ElementType, GPU_ANCF3243_Data>) {
-      // For ANCF, check if any coefficient of this node is in the element
-      for (int shape_idx = 0; shape_idx < Traits::N_SHAPE; shape_idx++) {
-        int coef_idx = Traits::shape_to_coef(d_data, elem, shape_idx);
-        if (coef_idx == coef_i) {
-          node_in_elem = true;
-          break;
-        }
-      }
-
-      if (node_in_elem) {
-        for (int shape_idx = 0; shape_idx < Traits::N_SHAPE; shape_idx++) {
-          int coef_j = Traits::shape_to_coef(d_data, elem, shape_idx);
-          for (int dof_j = 0; dof_j < 3; dof_j++) {
-            int col_dof  = coef_j * 3 + dof_j;
-            int word_idx = col_dof / 32;
-            int bit_idx  = col_dof % 32;
-            atomicOr(&my_bitset[word_idx], 1u << bit_idx);
-          }
-        }
-      }
-    } else if constexpr (std::is_same_v<ElementType, GPU_ANCF3443_Data>) {
-      // For ANCF3443, check if any coefficient of this node is in the element
-      for (int shape_idx = 0; shape_idx < Traits::N_SHAPE; shape_idx++) {
-        int coef_idx = Traits::shape_to_coef(d_data, elem, shape_idx);
-        if (coef_idx == coef_i) {
-          node_in_elem = true;
-          break;
-        }
-      }
-
-      if (node_in_elem) {
-        for (int shape_idx = 0; shape_idx < Traits::N_SHAPE; shape_idx++) {
-          int coef_j = Traits::shape_to_coef(d_data, elem, shape_idx);
-          for (int dof_j = 0; dof_j < 3; dof_j++) {
-            int col_dof  = coef_j * 3 + dof_j;
-            int word_idx = col_dof / 32;
-            int bit_idx  = col_dof % 32;
-            atomicOr(&my_bitset[word_idx], 1u << bit_idx);
-          }
-        }
-      }
-    }
-  }
-  // ===== Contribution 3: Constraint Jacobian (J^T * J) =====
-  int n_constraints = d_solver->gpu_n_constraints();
-  if (n_constraints > 0) {
-    if constexpr (std::is_same_v<ElementType, GPU_FEAT10_Data>) {
-      const int *cjT_offsets = d_data->cj_csr_offsets();
-      const int *cjT_columns = d_data->cj_csr_columns();
-
-      if (cjT_offsets != nullptr && cjT_columns != nullptr) {
-        int col_start = cjT_offsets[row_dof];
-        int col_end   = cjT_offsets[row_dof + 1];
-
-        for (int idx1 = col_start; idx1 < col_end; idx1++) {
-          int c_idx = cjT_columns[idx1];
-
-          for (int other_dof = 0; other_dof < n_dofs; other_dof++) {
-            int other_start = cjT_offsets[other_dof];
-            int other_end   = cjT_offsets[other_dof + 1];
-
-            for (int idx2 = other_start; idx2 < other_end; idx2++) {
-              if (cjT_columns[idx2] == c_idx) {
-                int word_idx = other_dof / 32;
-                int bit_idx  = other_dof % 32;
-                atomicOr(&my_bitset[word_idx], 1u << bit_idx);
-                break;
-              }
-            }
-          }
-        }
-      }
-    } else {
-      const int *j_offsets = d_data->j_csr_offsets();
-      const int *j_columns = d_data->j_csr_columns();
-
-      if (j_offsets != nullptr && j_columns != nullptr) {
-        for (int c_idx = 0; c_idx < n_constraints; c_idx++) {
-          int row_start = j_offsets[c_idx];
-          int row_end   = j_offsets[c_idx + 1];
-
-          bool row_in_constraint = false;
-          for (int idx = row_start; idx < row_end; idx++) {
-            if (j_columns[idx] == row_dof) {
-              row_in_constraint = true;
-              break;
-            }
-          }
-
-          if (!row_in_constraint)
-            continue;
-
-          for (int idx = row_start; idx < row_end; idx++) {
-            int other_dof = j_columns[idx];
-            int word_idx  = other_dof / 32;
-            int bit_idx   = other_dof % 32;
-            atomicOr(&my_bitset[word_idx], 1u << bit_idx);
-          }
-        }
-      }
-    }
-  }
+  int base = 3 * coef_i;
+  d_row_nnz[base + 0] = row_nnz;
+  d_row_nnz[base + 1] = row_nnz;
+  d_row_nnz[base + 2] = row_nnz;
 }
 
-// Step 2: Count non-zeros from bitset
-__global__ void count_nnz_from_bitset(unsigned int *d_col_bitset,
-                                      int *d_nnz_per_row, int n_dofs,
-                                      int bitset_size) {
-  int row = blockIdx.x * blockDim.x + threadIdx.x;
-  if (row >= n_dofs)
+template <typename ElementType>
+__global__ void fill_dof_cols_from_coef_csr(ElementType *d_data, int n_coef,
+                                           const int *d_dof_row_offsets,
+                                           int *d_dof_col_indices) {
+  int dof_row = blockIdx.x * blockDim.x + threadIdx.x;
+  int n_dofs  = 3 * n_coef;
+  if (dof_row >= n_dofs)
     return;
 
-  unsigned int *my_bitset = &d_col_bitset[row * bitset_size];
-  int count               = 0;
+  const int coef_i   = dof_row / 3;
+  const int *offsets = d_data->csr_offsets();
+  const int *columns = d_data->csr_columns();
 
-  for (int w = 0; w < bitset_size; w++) {
-    count += __popc(my_bitset[w]);
-  }
+  const int row_start = offsets[coef_i];
+  const int row_end   = offsets[coef_i + 1];
+  int out             = d_dof_row_offsets[dof_row];
 
-  d_nnz_per_row[row] = count;
-}
-
-// Step 3: Prefix sum to compute row offsets (call thrust::exclusive_scan on
-// host)
-__global__ void extract_columns_from_bitset(unsigned int *d_col_bitset,
-                                            int *d_csr_row_offsets,
-                                            int *d_csr_col_indices, int n_dofs,
-                                            int bitset_size) {
-  int row = blockIdx.x * blockDim.x + threadIdx.x;
-  if (row >= n_dofs)
-    return;
-
-  unsigned int *my_bitset = &d_col_bitset[row * bitset_size];
-  int write_pos           = d_csr_row_offsets[row];
-
-  // Scan all words in order
-  for (int w = 0; w < bitset_size; w++) {
-    unsigned int word = my_bitset[w];
-
-    // Process bits from LSB to MSB (gives sorted order)
-    for (int bit = 0; bit < 32; bit++) {
-      if (word & (1u << bit)) {
-        int col = w * 32 + bit;
-
-        if (col < n_dofs) {
-          d_csr_col_indices[write_pos++] = col;
-        }
-      }
-    }
+  // Expand each coefficient neighbor into {x,y,z} DOF columns.
+  // Column ordering is sorted if coefficient columns are sorted.
+  for (int idx = row_start; idx < row_end; ++idx) {
+    int coef_j   = columns[idx];
+    int base_col = 3 * coef_j;
+    d_dof_col_indices[out++] = base_col + 0;
+    d_dof_col_indices[out++] = base_col + 1;
+    d_dof_col_indices[out++] = base_col + 2;
   }
 }
 
@@ -709,6 +547,17 @@ void SyncedNewtonSolver::AnalyzeHessianSparsity() {
 
   std::cout << "Analyzing Hessian sparsity pattern..." << std::endl;
 
+  // Ensure the coefficient-level adjacency CSR exists on the ElementData.
+  // This CSR is built from element connectivity (via BuildMassCSRPattern) and
+  // provides a compact graph we can expand into a DOF-level Hessian pattern.
+  if (type_ == TYPE_T10) {
+    static_cast<GPU_FEAT10_Data *>(h_data_)->BuildMassCSRPattern();
+  } else if (type_ == TYPE_3243) {
+    static_cast<GPU_ANCF3243_Data *>(h_data_)->BuildMassCSRPattern();
+  } else if (type_ == TYPE_3443) {
+    static_cast<GPU_ANCF3443_Data *>(h_data_)->BuildMassCSRPattern();
+  }
+
   if (n_constraints_ > 0) {
     if (type_ == TYPE_T10) {
       auto *typed_data = static_cast<GPU_FEAT10_Data *>(h_data_);
@@ -725,80 +574,75 @@ void SyncedNewtonSolver::AnalyzeHessianSparsity() {
     }
   }
 
-  int n_dofs      = 3 * n_coef_;
-  int bitset_size = (n_dofs + 31) / 32;
+  const int n_dofs = 3 * n_coef_;
 
-  HANDLE_ERROR(
-      cudaMalloc(&d_col_bitset_, n_dofs * bitset_size * sizeof(unsigned int)));
-  HANDLE_ERROR(cudaMemset(d_col_bitset_, 0,
-                          n_dofs * bitset_size * sizeof(unsigned int)));
+  // 1) Compute DOF-level row nnz by expanding coefficient adjacency rows.
+  int *d_row_nnz = nullptr;
+  HANDLE_ERROR(cudaMalloc(&d_row_nnz, static_cast<size_t>(n_dofs) * sizeof(int)));
+  HANDLE_ERROR(cudaMemset(d_row_nnz, 0, static_cast<size_t>(n_dofs) * sizeof(int)));
 
-  HANDLE_ERROR(cudaMalloc(&d_nnz_per_row_, n_dofs * sizeof(int)));
-  HANDLE_ERROR(cudaMemset(d_nnz_per_row_, 0, n_dofs * sizeof(int)));
-
-  int numBlocks = (n_dofs + 255) / 256;
-
-  // Call templated kernel based on element type
+  const int threads = 256;
+  const int blocks_coef = (n_coef_ + threads - 1) / threads;
   if (type_ == TYPE_T10) {
-    analyze_hessian_sparsity_bitset<<<numBlocks, 256>>>(
-        static_cast<GPU_FEAT10_Data *>(d_data_), d_newton_solver_,
-        d_col_bitset_, bitset_size);
+    build_dof_row_nnz_from_coef_csr<<<blocks_coef, threads>>>(
+        static_cast<GPU_FEAT10_Data *>(d_data_), n_coef_, d_row_nnz);
   } else if (type_ == TYPE_3243) {
-    analyze_hessian_sparsity_bitset<<<numBlocks, 256>>>(
-        static_cast<GPU_ANCF3243_Data *>(d_data_), d_newton_solver_,
-        d_col_bitset_, bitset_size);
+    build_dof_row_nnz_from_coef_csr<<<blocks_coef, threads>>>(
+        static_cast<GPU_ANCF3243_Data *>(d_data_), n_coef_, d_row_nnz);
   } else if (type_ == TYPE_3443) {
-    analyze_hessian_sparsity_bitset<<<numBlocks, 256>>>(
-        static_cast<GPU_ANCF3443_Data *>(d_data_), d_newton_solver_,
-        d_col_bitset_, bitset_size);
+    build_dof_row_nnz_from_coef_csr<<<blocks_coef, threads>>>(
+        static_cast<GPU_ANCF3443_Data *>(d_data_), n_coef_, d_row_nnz);
   }
-
   HANDLE_ERROR(cudaDeviceSynchronize());
 
-  // Rest of the implementation remains the same...
-  count_nnz_from_bitset<<<numBlocks, 256>>>(d_col_bitset_, d_nnz_per_row_,
-                                            n_dofs, bitset_size);
-  HANDLE_ERROR(cudaDeviceSynchronize());
+  // 2) Prefix-sum to build CSR row offsets.
+  HANDLE_ERROR(
+      cudaMalloc(&d_csr_row_offsets_, static_cast<size_t>(n_dofs + 1) * sizeof(int)));
 
-  HANDLE_ERROR(cudaMalloc(&d_csr_row_offsets_, (n_dofs + 1) * sizeof(int)));
-
-  thrust::device_ptr<int> nnz_ptr(d_nnz_per_row_);
-  thrust::device_ptr<int> offset_ptr(d_csr_row_offsets_);
-
+  thrust::device_ptr<int> nnz_ptr(d_row_nnz);
   int zero = 0;
   HANDLE_ERROR(cudaMemcpy(d_csr_row_offsets_, &zero, sizeof(int),
                           cudaMemcpyHostToDevice));
 
-  int *d_temp_scan;
-  HANDLE_ERROR(cudaMalloc(&d_temp_scan, n_dofs * sizeof(int)));
+  int *d_temp_scan = nullptr;
+  HANDLE_ERROR(cudaMalloc(&d_temp_scan, static_cast<size_t>(n_dofs) * sizeof(int)));
   thrust::device_ptr<int> temp_ptr(d_temp_scan);
-  thrust::inclusive_scan(nnz_ptr, nnz_ptr + n_dofs, temp_ptr);
+  thrust::inclusive_scan(thrust::device, nnz_ptr, nnz_ptr + n_dofs, temp_ptr);
 
   HANDLE_ERROR(cudaMemcpy(d_csr_row_offsets_ + 1, d_temp_scan,
-                          n_dofs * sizeof(int), cudaMemcpyDeviceToDevice));
+                          static_cast<size_t>(n_dofs) * sizeof(int),
+                          cudaMemcpyDeviceToDevice));
   HANDLE_ERROR(cudaFree(d_temp_scan));
-
-  HANDLE_ERROR(cudaDeviceSynchronize());
 
   HANDLE_ERROR(cudaMemcpy(&h_nnz_, &d_csr_row_offsets_[n_dofs], sizeof(int),
                           cudaMemcpyDeviceToHost));
 
+  // 3) Allocate CSR columns/values and fill column indices.
+  HANDLE_ERROR(cudaMalloc(&d_csr_col_indices_, static_cast<size_t>(h_nnz_) * sizeof(int)));
+  HANDLE_ERROR(cudaMalloc(&d_csr_values_, static_cast<size_t>(h_nnz_) * sizeof(double)));
+
+  const int blocks_dof = (n_dofs + threads - 1) / threads;
+  if (type_ == TYPE_T10) {
+    fill_dof_cols_from_coef_csr<<<blocks_dof, threads>>>(
+        static_cast<GPU_FEAT10_Data *>(d_data_), n_coef_, d_csr_row_offsets_,
+        d_csr_col_indices_);
+  } else if (type_ == TYPE_3243) {
+    fill_dof_cols_from_coef_csr<<<blocks_dof, threads>>>(
+        static_cast<GPU_ANCF3243_Data *>(d_data_), n_coef_, d_csr_row_offsets_,
+        d_csr_col_indices_);
+  } else if (type_ == TYPE_3443) {
+    fill_dof_cols_from_coef_csr<<<blocks_dof, threads>>>(
+        static_cast<GPU_ANCF3443_Data *>(d_data_), n_coef_, d_csr_row_offsets_,
+        d_csr_col_indices_);
+  }
+  HANDLE_ERROR(cudaDeviceSynchronize());
+  HANDLE_ERROR(cudaFree(d_row_nnz));
+
   std::cout << "Sparse Hessian: " << n_dofs << " x " << n_dofs
             << ", nnz = " << h_nnz_ << " ("
-            << (100.0 * h_nnz_) / (n_dofs * n_dofs) << "%)" << std::endl;
-
-  HANDLE_ERROR(cudaMalloc(&d_csr_col_indices_, h_nnz_ * sizeof(int)));
-  HANDLE_ERROR(cudaMalloc(&d_csr_values_, h_nnz_ * sizeof(double)));
-
-  extract_columns_from_bitset<<<numBlocks, 256>>>(
-      d_col_bitset_, d_csr_row_offsets_, d_csr_col_indices_, n_dofs,
-      bitset_size);
-  HANDLE_ERROR(cudaDeviceSynchronize());
-
-  cudaFree(d_col_bitset_);
-  d_col_bitset_ = nullptr;
-  cudaFree(d_nnz_per_row_);
-  d_nnz_per_row_ = nullptr;
+            << (100.0 * static_cast<double>(h_nnz_)) /
+                   (static_cast<double>(n_dofs) * static_cast<double>(n_dofs))
+            << "%)" << std::endl;
 
   sparse_hessian_initialized_ = true;
   std::cout << "Sparsity analysis complete." << std::endl;
