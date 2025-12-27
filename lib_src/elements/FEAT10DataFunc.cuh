@@ -86,18 +86,7 @@ __device__ __forceinline__ void compute_p(int elem_idx, int qp_idx,
                                           GPU_FEAT10_Data* d_data,
                                           const double* __restrict__ v_guess,
                                           double dt) {
-  // Get current nodal positions for this element
-  double x_nodes[10][3];  // 10 nodes × 3 coordinates
-
   // clang-format off
-
-  #pragma unroll
-  for (int node = 0; node < 10; node++) {
-    int global_node_idx = d_data->element_connectivity()(elem_idx, node);
-    x_nodes[node][0]    = d_data->x12()(global_node_idx);  // x coordinate
-    x_nodes[node][1]    = d_data->y12()(global_node_idx);  // y coordinate
-    x_nodes[node][2]    = d_data->z12()(global_node_idx);  // z coordinate
-  }
 
   // Get precomputed shape function gradients for this element and QP
   // grad_N[a][i] = ∂N_a/∂x_i (physical coordinates)
@@ -112,15 +101,23 @@ __device__ __forceinline__ void compute_p(int elem_idx, int qp_idx,
   // Initialize deformation gradient F to zero
   double F[3][3] = {{0.0}};
 
-  // Compute F = sum_a (x_nodes[a] ⊗ grad_N[a])
-  // F[i][j] = sum_a (x_nodes[a][i] * grad_N[a][j])
+  // Compute F = sum_a (x_a ⊗ grad_N[a]), where x_a is current nodal position.
+  // F[i][j] = sum_a (x_a[i] * grad_N[a][j])
   #pragma unroll
   for (int a = 0; a < 10; a++) {
-    for (int i = 0; i < 3; i++) {    // Current position components
-      for (int j = 0; j < 3; j++) {  // Gradient components
-        F[i][j] += x_nodes[a][i] * grad_N[a][j];
-      }
-    }
+    const int global_node_idx = d_data->element_connectivity()(elem_idx, a);
+    const double x0 = d_data->x12()(global_node_idx);
+    const double x1 = d_data->y12()(global_node_idx);
+    const double x2 = d_data->z12()(global_node_idx);
+    F[0][0] += x0 * grad_N[a][0];
+    F[0][1] += x0 * grad_N[a][1];
+    F[0][2] += x0 * grad_N[a][2];
+    F[1][0] += x1 * grad_N[a][0];
+    F[1][1] += x1 * grad_N[a][1];
+    F[1][2] += x1 * grad_N[a][2];
+    F[2][0] += x2 * grad_N[a][0];
+    F[2][1] += x2 * grad_N[a][1];
+    F[2][2] += x2 * grad_N[a][2];
   }
 
   double eta = d_data->eta_damp();
@@ -133,16 +130,19 @@ __device__ __forceinline__ void compute_p(int elem_idx, int qp_idx,
     double Fdot[3][3] = {{0.0}};
     #pragma unroll
     for (int a = 0; a < 10; a++) {
-      double v_a[3] = {0.0, 0.0, 0.0};
-      int global_node_idx = d_data->element_connectivity()(elem_idx, a);
-      v_a[0] = v_guess[global_node_idx * 3 + 0];
-      v_a[1] = v_guess[global_node_idx * 3 + 1];
-      v_a[2] = v_guess[global_node_idx * 3 + 2];
-      for (int i = 0; i < 3; i++) {
-        for (int j = 0; j < 3; j++) {
-          Fdot[i][j] += v_a[i] * grad_N[a][j];
-        }
-      }
+      const int global_node_idx = d_data->element_connectivity()(elem_idx, a);
+      const double v0 = v_guess[global_node_idx * 3 + 0];
+      const double v1 = v_guess[global_node_idx * 3 + 1];
+      const double v2 = v_guess[global_node_idx * 3 + 2];
+      Fdot[0][0] += v0 * grad_N[a][0];
+      Fdot[0][1] += v0 * grad_N[a][1];
+      Fdot[0][2] += v0 * grad_N[a][2];
+      Fdot[1][0] += v1 * grad_N[a][0];
+      Fdot[1][1] += v1 * grad_N[a][1];
+      Fdot[1][2] += v1 * grad_N[a][2];
+      Fdot[2][0] += v2 * grad_N[a][0];
+      Fdot[2][1] += v2 * grad_N[a][1];
+      Fdot[2][2] += v2 * grad_N[a][2];
     }
 
     // Compute viscous Piola: P_vis = F * S_vis, where
