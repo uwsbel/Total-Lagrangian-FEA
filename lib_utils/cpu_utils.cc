@@ -3,8 +3,122 @@
 #include <fstream>
 #include <iostream>
 #include <sstream>
+#include <algorithm>
+#include <numeric>
+#include <climits>
 
 namespace ANCFCPUUtils {
+
+// ============================================================
+// Coloring and VBD helper functions
+// ============================================================
+
+std::vector<std::set<int>> BuildVertexAdjacency(
+    const Eigen::MatrixXi &element_connectivity, int n_nodes) {
+  std::vector<std::set<int>> adj(n_nodes);
+  int n_elem = element_connectivity.rows();
+  int nodes_per_elem = element_connectivity.cols();
+
+  for (int e = 0; e < n_elem; ++e) {
+    // All nodes in an element are adjacent to each other
+    for (int i = 0; i < nodes_per_elem; ++i) {
+      int node_i = element_connectivity(e, i);
+      for (int j = i + 1; j < nodes_per_elem; ++j) {
+        int node_j = element_connectivity(e, j);
+        adj[node_i].insert(node_j);
+        adj[node_j].insert(node_i);
+      }
+    }
+  }
+  return adj;
+}
+
+Eigen::VectorXi GreedyVertexColoring(
+    const std::vector<std::set<int>> &adjacency) {
+  int n = static_cast<int>(adjacency.size());
+  
+  // Compute degrees and sort by decreasing degree
+  std::vector<int> degrees(n);
+  for (int i = 0; i < n; ++i) {
+    degrees[i] = static_cast<int>(adjacency[i].size());
+  }
+
+  std::vector<int> order(n);
+  std::iota(order.begin(), order.end(), 0);
+  std::sort(order.begin(), order.end(),
+            [&degrees](int a, int b) { return degrees[a] > degrees[b]; });
+
+  Eigen::VectorXi colors = Eigen::VectorXi::Constant(n, -1);
+  std::vector<bool> used(n, false);
+
+  for (int v : order) {
+    // Mark colors used by neighbors
+    std::fill(used.begin(), used.end(), false);
+    for (int nb : adjacency[v]) {
+      int c = colors[nb];
+      if (c >= 0 && c < n) {
+        used[c] = true;
+      }
+    }
+
+    // Find smallest unused color
+    int c = 0;
+    while (used[c]) {
+      ++c;
+    }
+    colors[v] = c;
+  }
+
+  return colors;
+}
+
+bool ValidateColoring(const Eigen::MatrixXi &element_connectivity,
+                      const Eigen::VectorXi &colors) {
+  int n_elem = element_connectivity.rows();
+  int nodes_per_elem = element_connectivity.cols();
+
+  for (int e = 0; e < n_elem; ++e) {
+    std::set<int> elem_colors;
+    for (int i = 0; i < nodes_per_elem; ++i) {
+      int node = element_connectivity(e, i);
+      int c = colors[node];
+      if (elem_colors.count(c)) {
+        std::cerr << "Invalid coloring: element " << e << " has duplicate color "
+                  << c << std::endl;
+        return false;
+      }
+      elem_colors.insert(c);
+    }
+  }
+  return true;
+}
+
+std::vector<std::vector<std::pair<int, int>>> BuildNodeIncidence(
+    const Eigen::MatrixXi &element_connectivity, int n_nodes) {
+  std::vector<std::vector<std::pair<int, int>>> incidence(n_nodes);
+  int n_elem = element_connectivity.rows();
+  int nodes_per_elem = element_connectivity.cols();
+
+  for (int e = 0; e < n_elem; ++e) {
+    for (int local = 0; local < nodes_per_elem; ++local) {
+      int global_node = element_connectivity(e, local);
+      incidence[global_node].push_back({e, local});
+    }
+  }
+  return incidence;
+}
+
+std::vector<std::vector<int>> BuildColorToNodes(const Eigen::VectorXi &colors,
+                                                 int n_colors) {
+  std::vector<std::vector<int>> color_to_nodes(n_colors);
+  for (int i = 0; i < colors.size(); ++i) {
+    int c = colors[i];
+    if (c >= 0 && c < n_colors) {
+      color_to_nodes[c].push_back(i);
+    }
+  }
+  return color_to_nodes;
+}
 
 void ANCF3243_B12_matrix(double L, double W, double H,
                          Eigen::MatrixXd &B_inv_out, int n_shape) {

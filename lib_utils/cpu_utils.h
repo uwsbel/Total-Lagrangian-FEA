@@ -2,8 +2,57 @@
 
 #include <Eigen/Dense>
 #include <string>
+#include <vector>
+#include <set>
 
 namespace ANCFCPUUtils {
+
+/**
+ * Build vertex adjacency graph from element connectivity
+ * Two nodes are adjacent if they belong to the same element
+ * @param element_connectivity Element connectivity matrix (n_elem × nodes_per_elem)
+ * @param n_nodes Total number of nodes
+ * @return Adjacency list for each node
+ */
+std::vector<std::set<int>> BuildVertexAdjacency(
+    const Eigen::MatrixXi &element_connectivity, int n_nodes);
+
+/**
+ * Greedy vertex coloring for parallel VBD updates
+ * Colors are assigned such that no two adjacent nodes have the same color
+ * Uses degree ordering heuristic for better coloring
+ * @param adjacency Adjacency list for each node
+ * @return Color assignment for each node
+ */
+Eigen::VectorXi GreedyVertexColoring(
+    const std::vector<std::set<int>> &adjacency);
+
+/**
+ * Validate that coloring is valid (no element has two nodes of same color)
+ * @param element_connectivity Element connectivity matrix
+ * @param colors Color assignment for each node
+ * @return true if coloring is valid
+ */
+bool ValidateColoring(const Eigen::MatrixXi &element_connectivity,
+                      const Eigen::VectorXi &colors);
+
+/**
+ * Build incidence list mapping each node to (element_idx, local_node_idx) pairs
+ * @param element_connectivity Element connectivity matrix (n_elem × nodes_per_elem)
+ * @param n_nodes Total number of nodes
+ * @return For each node, a vector of (element_idx, local_node_idx) pairs
+ */
+std::vector<std::vector<std::pair<int, int>>> BuildNodeIncidence(
+    const Eigen::MatrixXi &element_connectivity, int n_nodes);
+
+/**
+ * Organize nodes by color for VBD parallel processing
+ * @param colors Color assignment for each node
+ * @param n_colors Number of colors used
+ * @return For each color, a vector of node indices
+ */
+std::vector<std::vector<int>> BuildColorToNodes(const Eigen::VectorXi &colors,
+                                                 int n_colors);
 
 /**
  * Construct the B matrix for ANCF3243 elements and compute its inverse
