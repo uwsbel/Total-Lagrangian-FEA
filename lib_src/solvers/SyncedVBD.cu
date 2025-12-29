@@ -1115,7 +1115,7 @@ void SyncedVBDSolver::OneStepVBD() {
   HANDLE_ERROR(cudaEventCreate(&start));
   HANDLE_ERROR(cudaEventCreate(&stop));
 
-  constexpr int kVbdBlockThreads = 128;
+  constexpr int kVbdBlockThreads = 64;
   const int threads = kVbdBlockThreads;
   const int n_dofs = n_coef_ * 3;
 

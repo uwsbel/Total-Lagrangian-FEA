@@ -37,7 +37,7 @@ int main() {
   int plot_target_node;
   int n_nodes, n_elems;
 
-  MESH_RESOLUTION resolution = RES_16;  // Use moderate resolution for testing
+  MESH_RESOLUTION resolution = RES_4;  // Use moderate resolution for testing
 
   MATERIAL_MODEL material = MAT_SVK;
 
