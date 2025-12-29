@@ -1,1 +1,3 @@
 test-scripts
+.bazel_output
+.bazel_user_root

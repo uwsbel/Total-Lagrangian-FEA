@@ -37,7 +37,7 @@ int main() {
   int plot_target_node;
   int n_nodes, n_elems;
 
-  MESH_RESOLUTION resolution = RES_8;  // Use moderate resolution for testing
+  MESH_RESOLUTION resolution = RES_16;  // Use moderate resolution for testing
 
   MATERIAL_MODEL material = MAT_SVK;
 
@@ -201,14 +201,14 @@ int main() {
   SyncedVBDParams params = {
       1e-4,   // inner_tol
       1e-4,   // inner_rtol
-      1e-6,   // outer_tol
-      1e12,   // rho (ALM penalty)
+      1e-4,   // outer_tol
+      1e14,   // rho (ALM penalty)
       5,      // max_outer
       500,     // max_inner (VBD sweeps per outer iteration)
       1e-3,   // time_step
-      1.5,    // omega (relaxation factor)
+      1.8,    // omega (relaxation factor)
       1e-12,  // hess_eps (regularization)
-      50       // convergence_check_interval
+      10       // convergence_check_interval
   };
 
   SyncedVBDSolver solver(&gpu_t10_data, gpu_t10_data.get_n_constraint());

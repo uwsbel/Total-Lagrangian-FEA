@@ -123,6 +123,15 @@ __device__ __forceinline__ void compute_p(int elem_idx, int qp_idx,
     }
   }
 
+  // Store deformation gradient
+  #pragma unroll
+  for (int i = 0; i < 3; i++) {
+    #pragma unroll
+    for (int j = 0; j < 3; j++) {
+      d_data->F(elem_idx, qp_idx)(i, j) = F[i][j];
+    }
+  }
+
   double eta = d_data->eta_damp();
   double lambda_d = d_data->lambda_damp();
   const bool do_damp = (v_guess != nullptr) && (eta != 0.0 || lambda_d != 0.0);

@@ -12,6 +12,8 @@
 
 #include <cooperative_groups.h>
 #include <cublas_v2.h>
+#include <algorithm>
+#include <chrono>
 #include <cstring>
 #include <iomanip>
 #include <thrust/device_ptr.h>
@@ -69,6 +71,68 @@ __device__ __forceinline__ void solve_3x3_vbd(const double H[3][3],
 }
 
 // =====================================================
+// Residual/gradient computation (shared with AdamW/Newton formulation)
+// =====================================================
+
+template <typename ElementType>
+__device__ __forceinline__ double solver_grad_L_vbd(int tid, ElementType *data,
+                                                    SyncedVBDSolver *d_solver) {
+  double res = 0.0;
+
+  const int node_i = tid / 3;
+  const int dof_i  = tid % 3;
+
+  const double inv_dt = 1.0 / d_solver->solver_time_step();
+  const double dt     = d_solver->solver_time_step();
+
+  const double *__restrict__ v_g    = d_solver->v_guess().data();
+  const double *__restrict__ v_p    = d_solver->v_prev().data();
+  const int *__restrict__ offsets   = data->csr_offsets();
+  const int *__restrict__ columns   = data->csr_columns();
+  const double *__restrict__ values = data->csr_values();
+
+  // Mass term: (M @ (v - v_prev)) / h
+  const int row_start = offsets[node_i];
+  const int row_end   = offsets[node_i + 1];
+  for (int idx = row_start; idx < row_end; ++idx) {
+    const int node_j     = columns[idx];
+    const double mass_ij = values[idx];
+    const int tid_j      = node_j * 3 + dof_i;
+    const double v_diff  = v_g[tid_j] - v_p[tid_j];
+    res += mass_ij * v_diff * inv_dt;
+  }
+
+  // Mechanical force: f_int - f_ext
+  res -= (-data->f_int()(tid));
+  res -= data->f_ext()(tid);
+
+  const int n_constraints = d_solver->gpu_n_constraints();
+  if (n_constraints > 0) {
+    const double rho = *d_solver->solver_rho();
+
+    const double *__restrict__ lam = d_solver->lambda_guess().data();
+    const double *__restrict__ con = data->constraint().data();
+
+    // J^T stored in CSR by DOF-column (same as Newton/AdamW).
+    const int *__restrict__ cjT_offsets   = data->cj_csr_offsets();
+    const int *__restrict__ cjT_columns   = data->cj_csr_columns();
+    const double *__restrict__ cjT_values = data->cj_csr_values();
+
+    const int col_start = cjT_offsets[tid];
+    const int col_end   = cjT_offsets[tid + 1];
+    for (int idx = col_start; idx < col_end; ++idx) {
+      const int constraint_idx        = cjT_columns[idx];
+      const double constraint_jac_val = cjT_values[idx];
+      const double constraint_val     = con[constraint_idx];
+      res += dt * constraint_jac_val *
+             (lam[constraint_idx] + rho * constraint_val);
+    }
+  }
+
+  return res;
+}
+
+// =====================================================
 // VBD Update Kernel for FEAT10 Elements
 // =====================================================
 
@@ -83,267 +147,235 @@ __global__ void vbd_build_fixed_map_kernel(ElementType *d_data,
   }
 }
 
- template <typename ElementType>
- __global__ void vbd_update_color_kernel(
-     ElementType *d_data, SyncedVBDSolver *d_solver, int color_start,
-     int color_count) {
-  int tid = blockIdx.x * blockDim.x + threadIdx.x;
-  if (tid >= color_count)
-    return;
+// Per-color VBD update with 1 block per node. Threads parallelize over the
+// mass-row scan and the (incident element × quadrature point) contributions.
+// Reduction and the 3×3 solve happen in shared memory.
+//
+// Uses a fixed block size so shared memory can be statically allocated.
+template <int kBlockSize>
+__global__ void vbd_update_color_block_kernel(GPU_FEAT10_Data *d_data,
+                                              SyncedVBDSolver *d_solver,
+                                              int color_start,
+                                              int color_count) {
+  static_assert(kBlockSize > 0, "kBlockSize must be > 0");
+  static_assert((kBlockSize & (kBlockSize - 1)) == 0,
+                "kBlockSize must be power-of-two for reduction");
 
-  // Get the actual node index for this color
-  int node_i = d_solver->color_nodes()[color_start + tid];
+  const int tid = threadIdx.x;
+  if (tid >= kBlockSize) return;
+  const int node_slot = blockIdx.x;
+  if (node_slot >= color_count) return;
 
-  const double h       = d_solver->solver_time_step();
-  const double inv_h   = 1.0 / h;
-  const double omega   = d_solver->solver_omega();
+  const int node_i = d_solver->color_nodes()[color_start + node_slot];
+
+  const double h        = d_solver->solver_time_step();
+  const double inv_h    = 1.0 / h;
+  const double omega    = d_solver->solver_omega();
   const double hess_eps = d_solver->solver_hess_eps();
-  const double rho     = *d_solver->solver_rho();
+  const double rho      = *d_solver->solver_rho();
 
-  // Get current velocity for this node
-  double v_i[3];
-  v_i[0] = d_solver->v_guess()[node_i * 3 + 0];
-  v_i[1] = d_solver->v_guess()[node_i * 3 + 1];
-  v_i[2] = d_solver->v_guess()[node_i * 3 + 2];
+  double r0 = 0.0, r1 = 0.0, r2 = 0.0;
+  double h00 = 0.0, h01 = 0.0, h02 = 0.0;
+  double h10 = 0.0, h11 = 0.0, h12 = 0.0;
+  double h20 = 0.0, h21 = 0.0, h22 = 0.0;
 
-  // Get current position = q_prev + h*v
-  double x_prev_i[3];
-  x_prev_i[0] = d_solver->x12_prev()[node_i];
-  x_prev_i[1] = d_solver->y12_prev()[node_i];
-  x_prev_i[2] = d_solver->z12_prev()[node_i];
-
-  double x_i[3];
-  x_i[0] = x_prev_i[0] + h * v_i[0];
-  x_i[1] = x_prev_i[1] + h * v_i[1];
-  x_i[2] = x_prev_i[2] + h * v_i[2];
-
-  // Get mass diagonal block for this node (3x3)
-  double M_ii[3][3];
-  const double *mass_block = d_solver->mass_diag_blocks() + node_i * 9;
-#pragma unroll
-  for (int i = 0; i < 3; ++i) {
-#pragma unroll
-    for (int j = 0; j < 3; ++j) {
-      M_ii[i][j] = mass_block[i * 3 + j];
-    }
-  }
-
-  // Initialize residual and local Hessian block (3x3) for node_i.
-  // Residual/cost uses the full problem (matches other solvers' grad_L):
-  //   R_i = (M_row_i/h)(v - v_prev) + f_int_i - f_ext_i + h * J_i^T (lam + rho*c)
-  // Local Hessian uses only the diagonal 3x3 block approximation:
-  //   H_i ≈ (M_ii/h) + h*K_ii + h^2*rho*I   (pins only)
-  double R_i[3] = {0.0, 0.0, 0.0};
-  double H_i[3][3] = {{0.0}};
-
-  // Mass contribution to residual: full consistent mass row
-  //   (M_row_i/h) * (v - v_prev)
+  // Mass-row contribution: (M_row_i/h) * (v - v_prev)
   {
     const int *__restrict__ offsets = d_data->csr_offsets();
     const int *__restrict__ columns = d_data->csr_columns();
     const double *__restrict__ values = d_data->csr_values();
-
-    int row_start = offsets[node_i];
-    int row_end = offsets[node_i + 1];
-
-    for (int idx = row_start; idx < row_end; ++idx) {
-      int node_j = columns[idx];
-      double m_ij = values[idx];
-
-      R_i[0] += m_ij *
-                (d_solver->v_guess()[node_j * 3 + 0] -
-                 d_solver->v_prev()[node_j * 3 + 0]) *
-                inv_h;
-      R_i[1] += m_ij *
-                (d_solver->v_guess()[node_j * 3 + 1] -
-                 d_solver->v_prev()[node_j * 3 + 1]) *
-                inv_h;
-      R_i[2] += m_ij *
-                (d_solver->v_guess()[node_j * 3 + 2] -
-                 d_solver->v_prev()[node_j * 3 + 2]) *
-                inv_h;
+    const int row_start = offsets[node_i];
+    const int row_end   = offsets[node_i + 1];
+    for (int idx = row_start + tid; idx < row_end; idx += blockDim.x) {
+      const int node_j  = columns[idx];
+      const double m_ij = values[idx];
+      const int dof_j   = node_j * 3;
+      r0 += m_ij * (d_solver->v_guess()[dof_j + 0] -
+                    d_solver->v_prev()[dof_j + 0]) *
+            inv_h;
+      r1 += m_ij * (d_solver->v_guess()[dof_j + 1] -
+                    d_solver->v_prev()[dof_j + 1]) *
+            inv_h;
+      r2 += m_ij * (d_solver->v_guess()[dof_j + 2] -
+                    d_solver->v_prev()[dof_j + 2]) *
+            inv_h;
     }
   }
 
-  // Mass contribution to Hessian: M_ii / h
-  for (int i = 0; i < 3; ++i) {
-    for (int j = 0; j < 3; ++j) {
-      H_i[i][j] = M_ii[i][j] * inv_h;
+  // Element contributions for this node: cached F/P at (elem, qp).
+  {
+    const int inc_start = d_solver->incidence_offsets()[node_i];
+    const int inc_end   = d_solver->incidence_offsets()[node_i + 1];
+    const int n_inc     = inc_end - inc_start;
+
+    const double lambda = d_data->lambda();
+    const double mu     = d_data->mu();
+
+    constexpr int n_qp = Quadrature::N_QP_T10_5;
+    const int work_count = n_inc * n_qp;
+
+    for (int w = tid; w < work_count; w += blockDim.x) {
+      const int inc_idx = inc_start + (w / n_qp);
+      const int qp_idx  = w - (w / n_qp) * n_qp;
+
+      const int2 inc       = d_solver->incidence_data()[inc_idx];
+      const int elem_idx   = inc.x;
+      const int local_node = inc.y;
+
+      const double ha0 = d_data->grad_N_ref(elem_idx, qp_idx)(local_node, 0);
+      const double ha1 = d_data->grad_N_ref(elem_idx, qp_idx)(local_node, 1);
+      const double ha2 = d_data->grad_N_ref(elem_idx, qp_idx)(local_node, 2);
+
+      const double detJ = d_data->detJ_ref(elem_idx, qp_idx);
+      const double wq   = d_data->tet5pt_weights(qp_idx);
+      const double dV   = detJ * wq;
+
+      // Internal force: (P @ h_a) * dV
+      const double P00 = d_data->P(elem_idx, qp_idx)(0, 0);
+      const double P01 = d_data->P(elem_idx, qp_idx)(0, 1);
+      const double P02 = d_data->P(elem_idx, qp_idx)(0, 2);
+      const double P10 = d_data->P(elem_idx, qp_idx)(1, 0);
+      const double P11 = d_data->P(elem_idx, qp_idx)(1, 1);
+      const double P12 = d_data->P(elem_idx, qp_idx)(1, 2);
+      const double P20 = d_data->P(elem_idx, qp_idx)(2, 0);
+      const double P21 = d_data->P(elem_idx, qp_idx)(2, 1);
+      const double P22 = d_data->P(elem_idx, qp_idx)(2, 2);
+
+      r0 += (P00 * ha0 + P01 * ha1 + P02 * ha2) * dV;
+      r1 += (P10 * ha0 + P11 * ha1 + P12 * ha2) * dV;
+      r2 += (P20 * ha0 + P21 * ha1 + P22 * ha2) * dV;
+
+      // Diagonal tangent block K_ii contribution (SVK diagonal block).
+      const double F00 = d_data->F(elem_idx, qp_idx)(0, 0);
+      const double F01 = d_data->F(elem_idx, qp_idx)(0, 1);
+      const double F02 = d_data->F(elem_idx, qp_idx)(0, 2);
+      const double F10 = d_data->F(elem_idx, qp_idx)(1, 0);
+      const double F11 = d_data->F(elem_idx, qp_idx)(1, 1);
+      const double F12 = d_data->F(elem_idx, qp_idx)(1, 2);
+      const double F20 = d_data->F(elem_idx, qp_idx)(2, 0);
+      const double F21 = d_data->F(elem_idx, qp_idx)(2, 1);
+      const double F22 = d_data->F(elem_idx, qp_idx)(2, 2);
+
+      const double trFtF = F00 * F00 + F01 * F01 + F02 * F02 + F10 * F10 +
+                           F11 * F11 + F12 * F12 + F20 * F20 + F21 * F21 +
+                           F22 * F22;
+
+      const double FFT00 = F00 * F00 + F01 * F01 + F02 * F02;
+      const double FFT01 = F00 * F10 + F01 * F11 + F02 * F12;
+      const double FFT02 = F00 * F20 + F01 * F21 + F02 * F22;
+      const double FFT10 = FFT01;
+      const double FFT11 = F10 * F10 + F11 * F11 + F12 * F12;
+      const double FFT12 = F10 * F20 + F11 * F21 + F12 * F22;
+      const double FFT20 = FFT02;
+      const double FFT21 = FFT12;
+      const double FFT22 = F20 * F20 + F21 * F21 + F22 * F22;
+
+      const double g0 = F00 * ha0 + F01 * ha1 + F02 * ha2;
+      const double g1 = F10 * ha0 + F11 * ha1 + F12 * ha2;
+      const double g2 = F20 * ha0 + F21 * ha1 + F22 * ha2;
+
+      const double s    = ha0 * ha0 + ha1 * ha1 + ha2 * ha2;
+      const double g_sq = g0 * g0 + g1 * g1 + g2 * g2;
+      const double trE  = 0.5 * (trFtF - 3.0);
+
+      const double t1 = (lambda + mu);
+      const double t2 = lambda * trE * s;
+      const double t3 = mu * g_sq;
+      const double t4 = mu * s;
+      const double wK = h * dV;
+
+      h00 += wK * (t1 * g0 * g0 + (t2 + t3) + t4 * (FFT00 - 1.0));
+      h01 += wK * (t1 * g0 * g1 + t4 * (FFT01));
+      h02 += wK * (t1 * g0 * g2 + t4 * (FFT02));
+      h10 += wK * (t1 * g1 * g0 + t4 * (FFT10));
+      h11 += wK * (t1 * g1 * g1 + (t2 + t3) + t4 * (FFT11 - 1.0));
+      h12 += wK * (t1 * g1 * g2 + t4 * (FFT12));
+      h20 += wK * (t1 * g2 * g0 + t4 * (FFT20));
+      h21 += wK * (t1 * g2 * g1 + t4 * (FFT21));
+      h22 += wK * (t1 * g2 * g2 + (t2 + t3) + t4 * (FFT22 - 1.0));
     }
   }
 
-  // Get incidence data for this node - iterate over all incident elements
-  int inc_start = d_solver->incidence_offsets()[node_i];
-  int inc_end = d_solver->incidence_offsets()[node_i + 1];
+  // Shared-memory reduction (12 accumulators).
+  __shared__ double smem[12 * kBlockSize];
+  double *s_r0 = smem;
+  double *s_r1 = s_r0 + kBlockSize;
+  double *s_r2 = s_r1 + kBlockSize;
+  double *s_h00 = s_r2 + kBlockSize;
+  double *s_h01 = s_h00 + kBlockSize;
+  double *s_h02 = s_h01 + kBlockSize;
+  double *s_h10 = s_h02 + kBlockSize;
+  double *s_h11 = s_h10 + kBlockSize;
+  double *s_h12 = s_h11 + kBlockSize;
+  double *s_h20 = s_h12 + kBlockSize;
+  double *s_h21 = s_h20 + kBlockSize;
+  double *s_h22 = s_h21 + kBlockSize;
 
-  // Material parameters
-  double lambda = d_data->lambda();
-  double mu = d_data->mu();
+  s_r0[tid] = r0;
+  s_r1[tid] = r1;
+  s_r2[tid] = r2;
+  s_h00[tid] = h00;
+  s_h01[tid] = h01;
+  s_h02[tid] = h02;
+  s_h10[tid] = h10;
+  s_h11[tid] = h11;
+  s_h12[tid] = h12;
+  s_h20[tid] = h20;
+  s_h21[tid] = h21;
+  s_h22[tid] = h22;
 
-  // Loop over incident elements
-  for (int inc_idx = inc_start; inc_idx < inc_end; ++inc_idx) {
-    int2 inc = d_solver->incidence_data()[inc_idx];
-    int elem_idx = inc.x;
-    int local_node = inc.y;
+  __syncthreads();
 
-    // Get element connectivity
-    int global_nodes[10];
-#pragma unroll
-    for (int n = 0; n < 10; ++n) {
-      global_nodes[n] = d_data->element_connectivity()(elem_idx, n);
+  for (int stride = kBlockSize >> 1; stride > 0; stride >>= 1) {
+    if (tid < stride) {
+      const int peer = tid + stride;
+      s_r0[tid] += s_r0[peer];
+      s_r1[tid] += s_r1[peer];
+      s_r2[tid] += s_r2[peer];
+      s_h00[tid] += s_h00[peer];
+      s_h01[tid] += s_h01[peer];
+      s_h02[tid] += s_h02[peer];
+      s_h10[tid] += s_h10[peer];
+      s_h11[tid] += s_h11[peer];
+      s_h12[tid] += s_h12[peer];
+      s_h20[tid] += s_h20[peer];
+      s_h21[tid] += s_h21[peer];
+      s_h22[tid] += s_h22[peer];
     }
+    __syncthreads();
+  }
 
-    // Loop over quadrature points for this element
-    for (int qp_idx = 0; qp_idx < Quadrature::N_QP_T10_5; ++qp_idx) {
-      // Compute deformation gradient F
-      double F[3][3] = {{0.0}};
-#pragma unroll
-      for (int a = 0; a < 10; ++a) {
-        int gn = global_nodes[a];
-        double x_a0 = d_solver->x12_prev()[gn] + h * d_solver->v_guess()[gn * 3 + 0];
-        double x_a1 = d_solver->y12_prev()[gn] + h * d_solver->v_guess()[gn * 3 + 1];
-        double x_a2 = d_solver->z12_prev()[gn] + h * d_solver->v_guess()[gn * 3 + 2];
+  if (tid != 0) return;
 
-        double g0 = d_data->grad_N_ref(elem_idx, qp_idx)(a, 0);
-        double g1 = d_data->grad_N_ref(elem_idx, qp_idx)(a, 1);
-        double g2 = d_data->grad_N_ref(elem_idx, qp_idx)(a, 2);
+  r0 = s_r0[0];
+  r1 = s_r1[0];
+  r2 = s_r2[0];
+  h00 = s_h00[0];
+  h01 = s_h01[0];
+  h02 = s_h02[0];
+  h10 = s_h10[0];
+  h11 = s_h11[0];
+  h12 = s_h12[0];
+  h20 = s_h20[0];
+  h21 = s_h21[0];
+  h22 = s_h22[0];
 
-        F[0][0] += x_a0 * g0;
-        F[0][1] += x_a0 * g1;
-        F[0][2] += x_a0 * g2;
-        F[1][0] += x_a1 * g0;
-        F[1][1] += x_a1 * g1;
-        F[1][2] += x_a1 * g2;
-        F[2][0] += x_a2 * g0;
-        F[2][1] += x_a2 * g1;
-        F[2][2] += x_a2 * g2;
-      }
-
-      // Compute F^T * F
-      double FtF[3][3] = {{0.0}};
-#pragma unroll
-      for (int i = 0; i < 3; ++i) {
-#pragma unroll
-        for (int j = 0; j < 3; ++j) {
-#pragma unroll
-          for (int k = 0; k < 3; ++k) {
-            FtF[i][j] += F[k][i] * F[k][j];
-          }
-        }
-      }
-
-      double trFtF = FtF[0][0] + FtF[1][1] + FtF[2][2];
-
-      // Compute F * F^T
-      double FFT[3][3] = {{0.0}};
-#pragma unroll
-      for (int i = 0; i < 3; ++i) {
-#pragma unroll
-        for (int j = 0; j < 3; ++j) {
-#pragma unroll
-          for (int k = 0; k < 3; ++k) {
-            FFT[i][j] += F[i][k] * F[j][k];
-          }
-        }
-      }
-
-      // Compute F * F^T * F
-      double FFtF[3][3] = {{0.0}};
-#pragma unroll
-      for (int i = 0; i < 3; ++i) {
-        for (int j = 0; j < 3; ++j) {
-          for (int k = 0; k < 3; ++k) {
-            FFtF[i][j] += FFT[i][k] * F[k][j];
-          }
-        }
-      }
-
-      // Compute first Piola-Kirchhoff stress P (SVK material)
-      // P = lambda*(0.5*tr(F^T*F) - 1.5)*F + mu*(F*F^T*F - F)
-      double P[3][3];
-#pragma unroll
-      for (int i = 0; i < 3; ++i) {
-#pragma unroll
-        for (int j = 0; j < 3; ++j) {
-          P[i][j] = lambda * (0.5 * trFtF - 1.5) * F[i][j] +
-                    mu * (FFtF[i][j] - F[i][j]);
-        }
-      }
-
-      // Get shape gradient for node_i at this QP
-      double h_a[3];
-      h_a[0] = d_data->grad_N_ref(elem_idx, qp_idx)(local_node, 0);
-      h_a[1] = d_data->grad_N_ref(elem_idx, qp_idx)(local_node, 1);
-      h_a[2] = d_data->grad_N_ref(elem_idx, qp_idx)(local_node, 2);
-
-      // Integration weight
-      double detJ = d_data->detJ_ref(elem_idx, qp_idx);
-      double wq = d_data->tet5pt_weights(qp_idx);
-      double dV = detJ * wq;
-
-      // Internal force contribution: f_int_i += (P @ h_a) * dV
-      double f_int_contrib[3];
-#pragma unroll
-      for (int i = 0; i < 3; ++i) {
-        f_int_contrib[i] = 0.0;
-        for (int j = 0; j < 3; ++j) {
-          f_int_contrib[i] += P[i][j] * h_a[j];
-        }
-        f_int_contrib[i] *= dV;
-      }
-
-      // Add to residual (internal force goes positive)
-      R_i[0] += f_int_contrib[0];
-      R_i[1] += f_int_contrib[1];
-      R_i[2] += f_int_contrib[2];
-
-      // Compute diagonal tangent block K_aa for this quadrature point
-      // From Python: Kaa = (lam+mu)*outer(g,g) + lam*trE*s*I + mu*g2*I + mu*s*(FFT-I)
-      // where g = F @ h_a, s = h_a^T @ h_a, g2 = g^T @ g, trE = 0.5*(tr(F^T*F)-3)
-
-      double g[3];  // g = F @ h_a
-#pragma unroll
-      for (int i = 0; i < 3; ++i) {
-        g[i] = 0.0;
-        for (int j = 0; j < 3; ++j) {
-          g[i] += F[i][j] * h_a[j];
-        }
-      }
-
-      double s = h_a[0] * h_a[0] + h_a[1] * h_a[1] + h_a[2] * h_a[2];
-      double g2 = g[0] * g[0] + g[1] * g[1] + g[2] * g[2];
-      double trE = 0.5 * (trFtF - 3.0);
-
-      // Compute K_aa block
-      double K_aa[3][3];
-#pragma unroll
-      for (int i = 0; i < 3; ++i) {
-#pragma unroll
-        for (int j = 0; j < 3; ++j) {
-          double I_ij = (i == j) ? 1.0 : 0.0;
-          K_aa[i][j] = (lambda + mu) * g[i] * g[j] +
-                       lambda * trE * s * I_ij +
-                       mu * g2 * I_ij +
-                       mu * s * (FFT[i][j] - I_ij);
-          K_aa[i][j] *= dV;
-        }
-      }
-
-      // Add tangent contribution to Hessian: H += h * K_aa
-#pragma unroll
-      for (int i = 0; i < 3; ++i) {
-#pragma unroll
-        for (int j = 0; j < 3; ++j) {
-          H_i[i][j] += h * K_aa[i][j];
-        }
-      }
-    }  // end qp loop
-  }    // end incidence loop
-
-  // Subtract external force from residual
+  double R_i[3] = {r0, r1, r2};
   R_i[0] -= d_data->f_ext()(node_i * 3 + 0);
   R_i[1] -= d_data->f_ext()(node_i * 3 + 1);
   R_i[2] -= d_data->f_ext()(node_i * 3 + 2);
+
+  double H_i[3][3];
+  const double *mass_block = d_solver->mass_diag_blocks() + node_i * 9;
+  H_i[0][0] = mass_block[0] * inv_h + h00;
+  H_i[0][1] = mass_block[1] * inv_h + h01;
+  H_i[0][2] = mass_block[2] * inv_h + h02;
+  H_i[1][0] = mass_block[3] * inv_h + h10;
+  H_i[1][1] = mass_block[4] * inv_h + h11;
+  H_i[1][2] = mass_block[5] * inv_h + h12;
+  H_i[2][0] = mass_block[6] * inv_h + h20;
+  H_i[2][1] = mass_block[7] * inv_h + h21;
+  H_i[2][2] = mass_block[8] * inv_h + h22;
 
   // Handle constraints (pin constraints)
   int k = -1;
@@ -351,62 +383,77 @@ __global__ void vbd_build_fixed_map_kernel(ElementType *d_data,
     k = d_solver->fixed_map()[node_i];
   }
   if (k >= 0) {
-    // Get reference position
-    double X_i[3];
-    X_i[0] = d_data->x12_jac()(node_i);
-    X_i[1] = d_data->y12_jac()(node_i);
-    X_i[2] = d_data->z12_jac()(node_i);
+    // Current position = q_prev + h*v (computed on-the-fly for this node).
+    const double v_i0 = d_solver->v_guess()[node_i * 3 + 0];
+    const double v_i1 = d_solver->v_guess()[node_i * 3 + 1];
+    const double v_i2 = d_solver->v_guess()[node_i * 3 + 2];
 
-    // Constraint: c_i = x_i - X_i
-    double c_i[3];
-    c_i[0] = x_i[0] - X_i[0];
-    c_i[1] = x_i[1] - X_i[1];
-    c_i[2] = x_i[2] - X_i[2];
+    const double x_i0 = d_solver->x12_prev()[node_i] + h * v_i0;
+    const double x_i1 = d_solver->y12_prev()[node_i] + h * v_i1;
+    const double x_i2 = d_solver->z12_prev()[node_i] + h * v_i2;
 
-    // Get Lagrange multiplier for this constraint
-    double lam_k[3];
-    lam_k[0] = d_solver->lambda_guess()[k * 3 + 0];
-    lam_k[1] = d_solver->lambda_guess()[k * 3 + 1];
-    lam_k[2] = d_solver->lambda_guess()[k * 3 + 2];
+    const double X_i0 = d_data->x12_jac()(node_i);
+    const double X_i1 = d_data->y12_jac()(node_i);
+    const double X_i2 = d_data->z12_jac()(node_i);
 
-    // Add to residual: h * (lambda + rho * c)
-    R_i[0] += h * (lam_k[0] + rho * c_i[0]);
-    R_i[1] += h * (lam_k[1] + rho * c_i[1]);
-    R_i[2] += h * (lam_k[2] + rho * c_i[2]);
+    const double c0 = x_i0 - X_i0;
+    const double c1 = x_i1 - X_i1;
+    const double c2 = x_i2 - X_i2;
 
-    // Add to Hessian: h^2 * rho * I
-    double h2_rho = h * h * rho;
+    const double lam0 = d_solver->lambda_guess()[k * 3 + 0];
+    const double lam1 = d_solver->lambda_guess()[k * 3 + 1];
+    const double lam2 = d_solver->lambda_guess()[k * 3 + 2];
+
+    R_i[0] += h * (lam0 + rho * c0);
+    R_i[1] += h * (lam1 + rho * c1);
+    R_i[2] += h * (lam2 + rho * c2);
+
+    const double h2_rho = h * h * rho;
     H_i[0][0] += h2_rho;
     H_i[1][1] += h2_rho;
     H_i[2][2] += h2_rho;
   }
 
   // Symmetrize and regularize Hessian
-#pragma unroll
-  for (int i = 0; i < 3; ++i) {
-#pragma unroll
-    for (int j = i + 1; j < 3; ++j) {
-      double avg = 0.5 * (H_i[i][j] + H_i[j][i]);
-      H_i[i][j] = avg;
-      H_i[j][i] = avg;
-    }
+  {
+    const double avg01 = 0.5 * (H_i[0][1] + H_i[1][0]);
+    const double avg02 = 0.5 * (H_i[0][2] + H_i[2][0]);
+    const double avg12 = 0.5 * (H_i[1][2] + H_i[2][1]);
+    H_i[0][1] = H_i[1][0] = avg01;
+    H_i[0][2] = H_i[2][0] = avg02;
+    H_i[1][2] = H_i[2][1] = avg12;
   }
 
-  // Add regularization
-  double trace_H = H_i[0][0] + H_i[1][1] + H_i[2][2];
-  double eps_reg = hess_eps * fmax(1.0, trace_H);
+  const double trace_H = H_i[0][0] + H_i[1][1] + H_i[2][2];
+  const double eps_reg = hess_eps * fmax(1.0, trace_H);
   H_i[0][0] += eps_reg;
   H_i[1][1] += eps_reg;
   H_i[2][2] += eps_reg;
 
-  // Solve for velocity update: dv = -H^{-1} * R
   double dv[3];
   solve_3x3_vbd(H_i, R_i, dv);
 
-  // Apply relaxation and update velocity
-  d_solver->v_guess()[node_i * 3 + 0] = v_i[0] + omega * dv[0];
-  d_solver->v_guess()[node_i * 3 + 1] = v_i[1] + omega * dv[1];
-  d_solver->v_guess()[node_i * 3 + 2] = v_i[2] + omega * dv[2];
+  d_solver->v_guess()[node_i * 3 + 0] += omega * dv[0];
+  d_solver->v_guess()[node_i * 3 + 1] += omega * dv[1];
+  d_solver->v_guess()[node_i * 3 + 2] += omega * dv[2];
+}
+
+template <typename ElementType>
+__global__ void vbd_update_pos_from_vel_color(SyncedVBDSolver *d_solver,
+                                             ElementType *d_data,
+                                             int color_start,
+                                             int color_count) {
+  const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (idx >= color_count) return;
+
+  const int node_i = d_solver->color_nodes()[color_start + idx];
+  const double h   = d_solver->solver_time_step();
+  d_data->x12()(node_i) =
+      d_solver->x12_prev()(node_i) + d_solver->v_guess()(node_i * 3 + 0) * h;
+  d_data->y12()(node_i) =
+      d_solver->y12_prev()(node_i) + d_solver->v_guess()(node_i * 3 + 1) * h;
+  d_data->z12()(node_i) =
+      d_solver->z12_prev()(node_i) + d_solver->v_guess()(node_i * 3 + 2) * h;
 }
 
 // =====================================================
@@ -704,6 +751,61 @@ __global__ void vbd_compute_residual_norm(ElementType *d_data,
 }
 
 // =====================================================
+// Update element stress caches (F/P) for current x12
+// =====================================================
+template <typename ElementType>
+__global__ void vbd_compute_p_kernel(ElementType *d_data,
+                                     SyncedVBDSolver *d_solver) {
+  const int tid = blockIdx.x * blockDim.x + threadIdx.x;
+  const int stride = blockDim.x * gridDim.x;
+  const int n_qp = d_solver->gpu_n_total_qp();
+  const int total = d_solver->get_n_beam() * n_qp;
+  for (int idx = tid; idx < total; idx += stride) {
+    const int elem_idx = idx / n_qp;
+    const int qp_idx   = idx - elem_idx * n_qp;
+    compute_p(elem_idx, qp_idx, d_data, d_solver->v_guess().data(),
+              d_solver->solver_time_step());
+  }
+}
+
+template <typename ElementType>
+__global__ void vbd_clear_internal_force_kernel(ElementType *d_data) {
+  clear_internal_force(d_data);
+}
+
+template <typename ElementType>
+__global__ void vbd_compute_internal_force_kernel(ElementType *d_data,
+                                                  SyncedVBDSolver *d_solver) {
+  const int tid = blockIdx.x * blockDim.x + threadIdx.x;
+  const int stride = blockDim.x * gridDim.x;
+  const int n_shape = d_solver->gpu_n_shape();
+  const int total = d_solver->get_n_beam() * n_shape;
+  for (int idx = tid; idx < total; idx += stride) {
+    const int elem_idx = idx / n_shape;
+    const int node_idx = idx - elem_idx * n_shape;
+    compute_internal_force(elem_idx, node_idx, d_data);
+  }
+}
+
+template <typename ElementType>
+__global__ void vbd_constraints_eval_kernel(ElementType *d_data,
+                                           SyncedVBDSolver *d_solver) {
+  (void)d_solver;
+  compute_constraint_data(d_data);
+}
+
+template <typename ElementType>
+__global__ void vbd_compute_grad_l_kernel(ElementType *d_data,
+                                         SyncedVBDSolver *d_solver) {
+  int tid = blockIdx.x * blockDim.x + threadIdx.x;
+  const int n_dofs = d_solver->get_n_coef() * 3;
+  if (tid < n_dofs) {
+    const double g = solver_grad_L_vbd(tid, d_data, d_solver);
+    d_solver->g()[tid] = g;
+  }
+}
+
+// =====================================================
 // Initialize Coloring
 // =====================================================
 
@@ -948,6 +1050,58 @@ double SyncedVBDSolver::compute_l2_norm_cublas(double *d_vec, int n_dofs) {
 // =====================================================
 
 void SyncedVBDSolver::OneStepVBD() {
+  constexpr bool timing_enabled = true;
+
+  auto wall_now             = []() { return std::chrono::steady_clock::now(); };
+  auto wall_ms_since        = [&](std::chrono::steady_clock::time_point t0) {
+    return std::chrono::duration<double, std::milli>(wall_now() - t0).count();
+  };
+
+  cudaDeviceProp props;
+  HANDLE_ERROR(cudaGetDeviceProperties(&props, 0));
+  const int max_grid_stride_blocks = 32 * props.multiProcessorCount;
+
+  double wall_total_ms = 0.0;
+  float gpu_total_ms   = 0.0f;
+
+  float gpu_pos_prev_ms   = 0.0f;
+  float gpu_inner_ms      = 0.0f;
+  float gpu_init_refresh_pos_ms = 0.0f;
+  float gpu_init_refresh_p_ms = 0.0f;
+  float gpu_inner_update_ms = 0.0f;
+  float gpu_inner_refresh_pos_color_ms = 0.0f;
+  float gpu_inner_refresh_p_ms = 0.0f;
+  float gpu_pos_update_ms = 0.0f;
+  float gpu_constraint_ms = 0.0f;
+  float gpu_dual_ms       = 0.0f;
+  float gpu_vprev_ms      = 0.0f;
+  float gpu_p_refresh_ms  = 0.0f;
+  float gpu_residual_check_kernels_ms = 0.0f;
+  float gpu_residual_check_nrm2_ms    = 0.0f;
+
+  double wall_residual_checks_ms = 0.0;
+  double wall_constraints_ms     = 0.0;
+  int residual_check_count       = 0;
+
+  cudaEvent_t seg_start, seg_stop;
+  cudaEvent_t check_kernels_start, check_kernels_stop;
+  cudaEvent_t check_nrm2_start, check_nrm2_stop;
+  cudaEvent_t color_e0, color_e1, color_e2, color_e3;
+  if (timing_enabled) {
+    HANDLE_ERROR(cudaEventCreate(&seg_start));
+    HANDLE_ERROR(cudaEventCreate(&seg_stop));
+    HANDLE_ERROR(cudaEventCreate(&check_kernels_start));
+    HANDLE_ERROR(cudaEventCreate(&check_kernels_stop));
+    HANDLE_ERROR(cudaEventCreate(&check_nrm2_start));
+    HANDLE_ERROR(cudaEventCreate(&check_nrm2_stop));
+    HANDLE_ERROR(cudaEventCreate(&color_e0));
+    HANDLE_ERROR(cudaEventCreate(&color_e1));
+    HANDLE_ERROR(cudaEventCreate(&color_e2));
+    HANDLE_ERROR(cudaEventCreate(&color_e3));
+  }
+
+  const auto wall_total_start = wall_now();
+
   // Ensure coloring is initialized
   if (!coloring_initialized_) {
     InitializeColoring();
@@ -961,32 +1115,146 @@ void SyncedVBDSolver::OneStepVBD() {
   HANDLE_ERROR(cudaEventCreate(&start));
   HANDLE_ERROR(cudaEventCreate(&stop));
 
-  const int threads = 256;
+  constexpr int kVbdBlockThreads = 128;
+  const int threads = kVbdBlockThreads;
   const int n_dofs = n_coef_ * 3;
+
+  GPU_FEAT10_Data *typed_data = nullptr;
+  int blocks_coef = 0;
+  int blocks_dof = 0;
+  int blocks_p = 0;
+  int blocks_if = 0;
+  int blocks_fixed = 0;
+
+  if (type_ == TYPE_T10) {
+    typed_data = static_cast<GPU_FEAT10_Data *>(d_data_);
+    blocks_coef = (n_coef_ + threads - 1) / threads;
+    blocks_dof = (n_dofs + threads - 1) / threads;
+
+    const int total_qp = n_beam_ * n_total_qp_;
+    blocks_p = (total_qp + threads - 1) / threads;
+    blocks_p = std::max(1, std::min(blocks_p, max_grid_stride_blocks));
+
+    const int total_if = n_beam_ * n_shape_;
+    blocks_if = (total_if + threads - 1) / threads;
+    blocks_if = std::max(1, std::min(blocks_if, max_grid_stride_blocks));
+
+    blocks_fixed =
+        ((n_constraints_ > 0 ? (n_constraints_ / 3) : 1) + threads - 1) /
+        threads;
+  }
+
+  auto launch_grad_l_residual_check = [&]() {
+    // Evaluate the same residual/gradient used by AdamW/Newton formulation,
+    // using cached F/P and (re)assembled f_int.
+    vbd_clear_internal_force_kernel<<<blocks_dof, threads>>>(typed_data);
+    vbd_compute_internal_force_kernel<<<blocks_if, threads>>>(typed_data,
+                                                              d_vbd_solver_);
+    if (n_constraints_ > 0) {
+      vbd_constraints_eval_kernel<<<blocks_fixed, threads>>>(typed_data,
+                                                             d_vbd_solver_);
+    }
+    vbd_compute_grad_l_kernel<<<blocks_dof, threads>>>(typed_data, d_vbd_solver_);
+  };
+
+  auto compute_l2_norm_g_timed = [&](double &out_norm, float &out_nrm2_ms) {
+    if (timing_enabled) {
+      HANDLE_ERROR(cudaEventRecord(check_nrm2_start));
+    }
+    cublasDnrm2(cublas_handle_, n_dofs, d_g_, 1, d_norm_temp_);
+    if (timing_enabled) {
+      HANDLE_ERROR(cudaEventRecord(check_nrm2_stop));
+      HANDLE_ERROR(cudaEventSynchronize(check_nrm2_stop));
+      HANDLE_ERROR(cudaEventElapsedTime(&out_nrm2_ms, check_nrm2_start,
+                                        check_nrm2_stop));
+    } else {
+      out_nrm2_ms = 0.0f;
+    }
+    HANDLE_ERROR(
+        cudaMemcpy(&out_norm, d_norm_temp_, sizeof(double), cudaMemcpyDeviceToHost));
+  };
 
   // Store previous positions
   HANDLE_ERROR(cudaEventRecord(start));
   if (type_ == TYPE_T10) {
-    int blocks = (n_coef_ + threads - 1) / threads;
+    int blocks = blocks_coef;
+    if (timing_enabled) {
+      HANDLE_ERROR(cudaEventRecord(seg_start));
+    }
     vbd_update_pos_prev<<<blocks, threads>>>(
         static_cast<GPU_FEAT10_Data *>(d_data_), d_vbd_solver_);
+    if (timing_enabled) {
+      HANDLE_ERROR(cudaEventRecord(seg_stop));
+      HANDLE_ERROR(cudaEventSynchronize(seg_stop));
+      HANDLE_ERROR(cudaEventElapsedTime(&gpu_pos_prev_ms, seg_start, seg_stop));
+    }
   }
   // ALM outer loop
   for (int outer_iter = 0; outer_iter < h_max_outer_; ++outer_iter) {
     double R0 = -1.0;
+    double wall_outer_residual_ms = 0.0;
+    double wall_outer_constraints_ms = 0.0;
+    int outer_residual_checks = 0;
+    int outer_inner_sweeps = 0;
+    float gpu_outer_inner_ms = 0.0f;
+
+    // Build initial x12/F/P caches for the current v_guess before running the
+    // colored inner sweeps in this outer iteration.
+    if (type_ == TYPE_T10) {
+      float ms = 0.0f;
+      HANDLE_ERROR(cudaEventRecord(color_e0));
+      vbd_update_pos_from_vel<<<blocks_coef, threads>>>(d_vbd_solver_,
+                                                        typed_data);
+      HANDLE_ERROR(cudaEventRecord(color_e1));
+      vbd_compute_p_kernel<<<blocks_p, threads>>>(typed_data, d_vbd_solver_);
+      HANDLE_ERROR(cudaEventRecord(color_e2));
+      HANDLE_ERROR(cudaEventSynchronize(color_e2));
+
+      HANDLE_ERROR(cudaEventElapsedTime(&ms, color_e0, color_e1));
+      gpu_init_refresh_pos_ms += ms;
+      HANDLE_ERROR(cudaEventElapsedTime(&ms, color_e1, color_e2));
+      gpu_init_refresh_p_ms += ms;
+    }
 
     if (h_conv_check_interval_ > 0 && type_ == TYPE_T10) {
-      int blocks = (n_coef_ + threads - 1) / threads;
-      vbd_compute_full_residual<<<blocks, threads>>>(
-          static_cast<GPU_FEAT10_Data *>(d_data_), d_vbd_solver_, d_g_);
-      HANDLE_ERROR(cudaDeviceSynchronize());
-      R0 = compute_l2_norm_cublas(d_g_, n_dofs);
+      auto wall_residual_start = wall_now();
+      float kernels_ms = 0.0f;
+      float nrm2_ms = 0.0f;
+      if (timing_enabled) {
+        HANDLE_ERROR(cudaEventRecord(check_kernels_start));
+      }
+      launch_grad_l_residual_check();
+      if (timing_enabled) {
+        HANDLE_ERROR(cudaEventRecord(check_kernels_stop));
+        HANDLE_ERROR(cudaEventSynchronize(check_kernels_stop));
+        HANDLE_ERROR(cudaEventElapsedTime(&kernels_ms, check_kernels_start,
+                                          check_kernels_stop));
+      }
+      compute_l2_norm_g_timed(R0, nrm2_ms);
+      double wall_residual_ms = wall_ms_since(wall_residual_start);
+      wall_outer_residual_ms += wall_residual_ms;
+      wall_residual_checks_ms += wall_residual_ms;
+      gpu_residual_check_kernels_ms += kernels_ms;
+      gpu_residual_check_nrm2_ms += nrm2_ms;
+      residual_check_count += 1;
+      outer_residual_checks += 1;
+      if (timing_enabled) {
+        std::cout << "    [VBD check] init: ||g||=" << std::scientific << R0
+                  << " kernels_gpu_ms=" << kernels_ms
+                  << " nrm2_gpu_ms=" << nrm2_ms
+                  << " wall_ms=" << wall_residual_ms << std::endl;
+      }
     }
 
     // VBD inner loop (colored Gauss-Seidel sweeps)
+    if (timing_enabled) {
+      HANDLE_ERROR(cudaEventRecord(seg_start));
+    }
     for (int inner_iter = 0; inner_iter < h_max_inner_; ++inner_iter) {
+      outer_inner_sweeps += 1;
       // Process each color sequentially (nodes within a color in parallel)
-      // Note: Positions are computed on-the-fly in the kernel from x_prev + h*v
+      // Note: Element state (x12/F/P) is refreshed between colors to preserve
+      // the Gauss-Seidel update semantics.
       for (int c = 0; c < n_colors_; ++c) {
         int color_start = 0;
         int color_count = 0;
@@ -1002,14 +1270,31 @@ void SyncedVBDSolver::OneStepVBD() {
         }
 
         if (color_count > 0) {
-          int blocks = (color_count + threads - 1) / threads;
-
           if (type_ == TYPE_T10) {
-            vbd_update_color_kernel<<<blocks, threads>>>(
+            float ms = 0.0f;
+            HANDLE_ERROR(cudaEventRecord(color_e0));
+            const int blocks = color_count;
+            vbd_update_color_block_kernel<kVbdBlockThreads><<<blocks, threads>>>(
                 static_cast<GPU_FEAT10_Data *>(d_data_), d_vbd_solver_,
                 color_start, color_count);
+            HANDLE_ERROR(cudaEventRecord(color_e1));
+
+            const int blocks_color = (color_count + threads - 1) / threads;
+            vbd_update_pos_from_vel_color<<<blocks_color, threads>>>(
+                d_vbd_solver_, typed_data, color_start, color_count);
+            HANDLE_ERROR(cudaEventRecord(color_e2));
+            vbd_compute_p_kernel<<<blocks_p, threads>>>(typed_data,
+                                                       d_vbd_solver_);
+            HANDLE_ERROR(cudaEventRecord(color_e3));
+            HANDLE_ERROR(cudaEventSynchronize(color_e3));
+
+            HANDLE_ERROR(cudaEventElapsedTime(&ms, color_e0, color_e1));
+            gpu_inner_update_ms += ms;
+            HANDLE_ERROR(cudaEventElapsedTime(&ms, color_e1, color_e2));
+            gpu_inner_refresh_pos_color_ms += ms;
+            HANDLE_ERROR(cudaEventElapsedTime(&ms, color_e2, color_e3));
+            gpu_inner_refresh_p_ms += ms;
           }
-          HANDLE_ERROR(cudaGetLastError());
         }
       }
 
@@ -1019,14 +1304,37 @@ void SyncedVBDSolver::OneStepVBD() {
           (inner_iter % h_conv_check_interval_ == 0 ||
            inner_iter == h_max_inner_ - 1)) {
         if (type_ == TYPE_T10) {
-          int blocks = (n_coef_ + threads - 1) / threads;
-          vbd_compute_full_residual<<<blocks, threads>>>(
-              static_cast<GPU_FEAT10_Data *>(d_data_), d_vbd_solver_, d_g_);
-          HANDLE_ERROR(cudaDeviceSynchronize());
-          
-          double R_norm = compute_l2_norm_cublas(d_g_, n_dofs);
+          auto wall_residual_start = wall_now();
+          float kernels_ms = 0.0f;
+          float nrm2_ms = 0.0f;
+          if (timing_enabled) {
+            HANDLE_ERROR(cudaEventRecord(check_kernels_start));
+          }
+          launch_grad_l_residual_check();
+          if (timing_enabled) {
+            HANDLE_ERROR(cudaEventRecord(check_kernels_stop));
+            HANDLE_ERROR(cudaEventSynchronize(check_kernels_stop));
+            HANDLE_ERROR(cudaEventElapsedTime(&kernels_ms, check_kernels_start,
+                                              check_kernels_stop));
+          }
+          double R_norm = 0.0;
+          compute_l2_norm_g_timed(R_norm, nrm2_ms);
+          double wall_residual_ms = wall_ms_since(wall_residual_start);
+          wall_outer_residual_ms += wall_residual_ms;
+          wall_residual_checks_ms += wall_residual_ms;
+          gpu_residual_check_kernels_ms += kernels_ms;
+          gpu_residual_check_nrm2_ms += nrm2_ms;
+          residual_check_count += 1;
+          outer_residual_checks += 1;
+
           std::cout << "    VBD sweep " << std::setw(3) << inner_iter 
-                    << ": ||R|| = " << std::scientific << R_norm << std::endl;
+                    << ": ||g|| = " << std::scientific << R_norm;
+          if (timing_enabled) {
+            std::cout << " [check kernels_gpu_ms=" << kernels_ms
+                      << " nrm2_gpu_ms=" << nrm2_ms
+                      << " wall_ms=" << wall_residual_ms << "]";
+          }
+          std::cout << std::endl;
 
           const double stop_thresh =
               fmax(h_inner_tol_, h_inner_rtol_ * (R0 >= 0.0 ? R0 : R_norm));
@@ -1036,22 +1344,50 @@ void SyncedVBDSolver::OneStepVBD() {
         }
       }
     }
+    if (timing_enabled) {
+      HANDLE_ERROR(cudaEventRecord(seg_stop));
+      HANDLE_ERROR(cudaEventSynchronize(seg_stop));
+      HANDLE_ERROR(
+          cudaEventElapsedTime(&gpu_outer_inner_ms, seg_start, seg_stop));
+      gpu_inner_ms += gpu_outer_inner_ms;
+    }
 
     // Update positions from final velocities after all sweeps
     if (type_ == TYPE_T10) {
       int blocks = (n_coef_ + threads - 1) / threads;
+      if (timing_enabled) {
+        HANDLE_ERROR(cudaEventRecord(seg_start));
+      }
       vbd_update_pos_from_vel<<<blocks, threads>>>(
           d_vbd_solver_, static_cast<GPU_FEAT10_Data *>(d_data_));
+      if (timing_enabled) {
+        HANDLE_ERROR(cudaEventRecord(seg_stop));
+        HANDLE_ERROR(cudaEventSynchronize(seg_stop));
+        float ms = 0.0f;
+        HANDLE_ERROR(cudaEventElapsedTime(&ms, seg_start, seg_stop));
+        gpu_pos_update_ms += ms;
+      }
     }
 
 	    // Compute constraint violation and update multipliers
 	    if (n_constraints_ > 0) {
+	      auto wall_constraints_start = wall_now();
 	      int n_fixed = n_constraints_ / 3;
 	      int blocks_c = (n_fixed + threads - 1) / threads;
 
 	      if (type_ == TYPE_T10) {
+          if (timing_enabled) {
+            HANDLE_ERROR(cudaEventRecord(seg_start));
+          }
 	        vbd_compute_constraint<<<blocks_c, threads>>>(
 	            static_cast<GPU_FEAT10_Data *>(d_data_), d_vbd_solver_);
+          if (timing_enabled) {
+            HANDLE_ERROR(cudaEventRecord(seg_stop));
+            HANDLE_ERROR(cudaEventSynchronize(seg_stop));
+            float ms = 0.0f;
+            HANDLE_ERROR(cudaEventElapsedTime(&ms, seg_start, seg_stop));
+            gpu_constraint_ms += ms;
+          }
 	      }
 
 	      // Check constraint norm
@@ -1063,6 +1399,10 @@ void SyncedVBDSolver::OneStepVBD() {
 	        c_norm = compute_l2_norm_cublas(typed_data->Get_Constraint_Ptr(),
 	                                        n_constraints_);
 	      }
+
+        double wall_constraint_ms = wall_ms_since(wall_constraints_start);
+        wall_outer_constraints_ms += wall_constraint_ms;
+        wall_constraints_ms += wall_constraint_ms;
 
 	      std::cout << "VBD outer " << outer_iter << ": ||c|| = " << c_norm
 	                << std::endl;
@@ -1076,17 +1416,60 @@ void SyncedVBDSolver::OneStepVBD() {
       // Update dual variables
       int blocks_d = (n_constraints_ + threads - 1) / threads;
       if (type_ == TYPE_T10) {
+        if (timing_enabled) {
+          HANDLE_ERROR(cudaEventRecord(seg_start));
+        }
         vbd_update_dual<<<blocks_d, threads>>>(
             static_cast<GPU_FEAT10_Data *>(d_data_), d_vbd_solver_);
+        if (timing_enabled) {
+          HANDLE_ERROR(cudaEventRecord(seg_stop));
+          HANDLE_ERROR(cudaEventSynchronize(seg_stop));
+          float ms = 0.0f;
+          HANDLE_ERROR(cudaEventElapsedTime(&ms, seg_start, seg_stop));
+          gpu_dual_ms += ms;
+        }
       }
-      HANDLE_ERROR(cudaDeviceSynchronize());
+    }
+
+    if (timing_enabled) {
+      std::cout << "[VBD timing] outer " << outer_iter
+                << ": sweeps=" << outer_inner_sweeps
+                << " residual_checks=" << outer_residual_checks
+                << " inner_gpu_ms=" << gpu_outer_inner_ms
+                << " residual_wall_ms=" << wall_outer_residual_ms
+                << " constraints_wall_ms=" << wall_outer_constraints_ms
+                << std::endl;
     }
   }
 
   // Update v_prev for next time step
   {
     int blocks = (n_dofs + threads - 1) / threads;
+    if (timing_enabled) {
+      HANDLE_ERROR(cudaEventRecord(seg_start));
+    }
     vbd_update_v_prev<<<blocks, threads>>>(d_vbd_solver_);
+    if (timing_enabled) {
+      HANDLE_ERROR(cudaEventRecord(seg_stop));
+      HANDLE_ERROR(cudaEventSynchronize(seg_stop));
+      HANDLE_ERROR(cudaEventElapsedTime(&gpu_vprev_ms, seg_start, seg_stop));
+    }
+  }
+
+  // Refresh global F/P caches for postprocessing/debug (matches updated x12)
+  if (type_ == TYPE_T10) {
+    int total = n_beam_ * n_total_qp_;
+    int blocks = (total + threads - 1) / threads;
+    if (timing_enabled) {
+      HANDLE_ERROR(cudaEventRecord(seg_start));
+    }
+    vbd_compute_p_kernel<<<blocks, threads>>>(
+        static_cast<GPU_FEAT10_Data *>(d_data_), d_vbd_solver_);
+    if (timing_enabled) {
+      HANDLE_ERROR(cudaEventRecord(seg_stop));
+      HANDLE_ERROR(cudaEventSynchronize(seg_stop));
+      HANDLE_ERROR(cudaEventElapsedTime(&gpu_p_refresh_ms, seg_start, seg_stop));
+    }
   }
 
   HANDLE_ERROR(cudaEventRecord(stop));
@@ -1095,6 +1478,45 @@ void SyncedVBDSolver::OneStepVBD() {
   float milliseconds = 0.0f;
   HANDLE_ERROR(cudaEventElapsedTime(&milliseconds, start, stop));
   std::cout << "OneStepVBD kernel time: " << milliseconds << " ms" << std::endl;
+
+  wall_total_ms = wall_ms_since(wall_total_start);
+  gpu_total_ms = milliseconds;
+
+  if (timing_enabled) {
+    std::cout << "[VBD timing] total_wall_ms=" << wall_total_ms
+              << " total_gpu_ms=" << gpu_total_ms
+              << " pos_prev_gpu_ms=" << gpu_pos_prev_ms
+              << " inner_gpu_ms=" << gpu_inner_ms
+              << " init_refresh_pos_gpu_ms=" << gpu_init_refresh_pos_ms
+              << " init_refresh_p_gpu_ms=" << gpu_init_refresh_p_ms
+              << " inner_update_gpu_ms=" << gpu_inner_update_ms
+              << " inner_refresh_pos_gpu_ms=" << gpu_inner_refresh_pos_color_ms
+              << " inner_refresh_p_gpu_ms=" << gpu_inner_refresh_p_ms
+              << " pos_update_gpu_ms=" << gpu_pos_update_ms
+              << " constraint_gpu_ms=" << gpu_constraint_ms
+              << " dual_gpu_ms=" << gpu_dual_ms
+              << " vprev_gpu_ms=" << gpu_vprev_ms
+              << " p_refresh_gpu_ms=" << gpu_p_refresh_ms
+              << " residual_checks=" << residual_check_count
+              << " residual_check_kernels_gpu_ms=" << gpu_residual_check_kernels_ms
+              << " residual_check_nrm2_gpu_ms=" << gpu_residual_check_nrm2_ms
+              << " residual_checks_wall_ms=" << wall_residual_checks_ms
+              << " constraints_wall_ms=" << wall_constraints_ms
+              << std::endl;
+  }
+
+  if (timing_enabled) {
+    HANDLE_ERROR(cudaEventDestroy(seg_start));
+    HANDLE_ERROR(cudaEventDestroy(seg_stop));
+    HANDLE_ERROR(cudaEventDestroy(check_kernels_start));
+    HANDLE_ERROR(cudaEventDestroy(check_kernels_stop));
+    HANDLE_ERROR(cudaEventDestroy(check_nrm2_start));
+    HANDLE_ERROR(cudaEventDestroy(check_nrm2_stop));
+    HANDLE_ERROR(cudaEventDestroy(color_e0));
+    HANDLE_ERROR(cudaEventDestroy(color_e1));
+    HANDLE_ERROR(cudaEventDestroy(color_e2));
+    HANDLE_ERROR(cudaEventDestroy(color_e3));
+  }
 
   HANDLE_ERROR(cudaEventDestroy(start));
   HANDLE_ERROR(cudaEventDestroy(stop));
