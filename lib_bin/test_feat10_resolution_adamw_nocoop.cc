@@ -367,6 +367,9 @@ int main(int argc, char **argv) {
     std::cerr << "Unsupported resolution" << std::endl;
     return 1;
   }
+  params.material_model =
+      (material == MAT_MOONEY_RIVLIN) ? MATERIAL_MODEL_MOONEY_RIVLIN
+                                      : MATERIAL_MODEL_SVK;
   SyncedAdamWNocoopSolver solver(&gpu_t10_data,
                                  gpu_t10_data.get_n_constraint());
   solver.Setup();

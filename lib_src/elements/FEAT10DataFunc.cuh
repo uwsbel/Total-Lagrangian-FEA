@@ -82,10 +82,10 @@ __device__ __forceinline__ void solve_3x3_system(double A[3][3], double b[3],
   x[0] = (aug[0][3] - aug[0][2] * x[2] - aug[0][1] * x[1]) / aug[0][0];
 }
 
-__device__ __forceinline__ void compute_p(int elem_idx, int qp_idx,
-                                          GPU_FEAT10_Data* d_data,
-                                          const double* __restrict__ v_guess,
-                                          double dt) {
+template <int Material>
+__device__ __forceinline__ void compute_p_impl(
+    int elem_idx, int qp_idx, GPU_FEAT10_Data* d_data,
+    const double* __restrict__ v_guess, double dt) {
   // clang-format off
 
   // Get precomputed shape function gradients for this element and QP
@@ -234,7 +234,7 @@ __device__ __forceinline__ void compute_p(int elem_idx, int qp_idx,
   }
 
   double P_el[3][3];
-  if (d_data->material_model() == MATERIAL_MODEL_MOONEY_RIVLIN) {
+  if constexpr (Material == MATERIAL_MODEL_MOONEY_RIVLIN) {
     mr_compute_P(F, d_data->mu10(), d_data->mu01(), d_data->kappa(), P_el);
   } else {
     // Get material parameters
@@ -252,6 +252,18 @@ __device__ __forceinline__ void compute_p(int elem_idx, int qp_idx,
     }
   }
   // clang-format on
+}
+
+__device__ __forceinline__ void compute_p(int elem_idx, int qp_idx,
+                                          GPU_FEAT10_Data* d_data,
+                                          const double* __restrict__ v_guess,
+                                          double dt) {
+  if (d_data->material_model() == MATERIAL_MODEL_MOONEY_RIVLIN) {
+    compute_p_impl<MATERIAL_MODEL_MOONEY_RIVLIN>(elem_idx, qp_idx, d_data,
+                                                 v_guess, dt);
+  } else {
+    compute_p_impl<MATERIAL_MODEL_SVK>(elem_idx, qp_idx, d_data, v_guess, dt);
+  }
 }
 
 __device__ __forceinline__ void compute_internal_force(

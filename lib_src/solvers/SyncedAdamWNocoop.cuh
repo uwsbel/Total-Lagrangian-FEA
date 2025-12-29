@@ -17,7 +17,15 @@
 
 #include "lib_src/solvers/SyncedAdamW.cuh"
 
-using SyncedAdamWNocoopParams = SyncedAdamWParams;
+struct SyncedAdamWNocoopParams {
+  double lr, beta1, beta2, eps, weight_decay, lr_decay;
+  double inner_tol, outer_tol, rho;
+  int max_outer, max_inner;
+  double time_step;
+  int convergence_check_interval;
+  double inner_rtol;
+  int material_model;
+};
 
 class SyncedAdamWNocoopSolver : public SolverBase {
  public:
@@ -168,6 +176,7 @@ class SyncedAdamWNocoopSolver : public SolverBase {
     cudaMemcpy(d_solver_rho_, &p->rho, sizeof(double), cudaMemcpyHostToDevice);
     cudaMemcpy(d_convergence_check_interval_, &p->convergence_check_interval,
                sizeof(int), cudaMemcpyHostToDevice);
+    material_model_host_ = p->material_model;
 
     cudaMemset(d_v_guess_, 0, n_coef_ * 3 * sizeof(double));
     cudaMemset(d_v_prev_, 0, n_coef_ * 3 * sizeof(double));
@@ -320,6 +329,7 @@ class SyncedAdamWNocoopSolver : public SolverBase {
   SyncedAdamWNocoopSolver *d_adamw_solver_;
   int n_total_qp_, n_shape_;
   int n_coef_, n_beam_, n_constraints_;
+  int material_model_host_ = MATERIAL_MODEL_SVK;
 
   double *d_constraint_ptr_;
 
