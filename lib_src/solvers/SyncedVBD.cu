@@ -13,12 +13,13 @@
 #include <cooperative_groups.h>
 #include <cublas_v2.h>
 #include <algorithm>
-#include <chrono>
+#include <cstdint>
 #include <cstring>
 #include <iomanip>
 #include <thrust/device_ptr.h>
 #include <thrust/execution_policy.h>
 #include <thrust/scan.h>
+#include <vector>
 
 #include "../elements/ANCF3243Data.cuh"
 #include "../elements/ANCF3243DataFunc.cuh"
@@ -909,6 +910,112 @@ void SyncedVBDSolver::InitializeColoring() {
                           h_color_nodes.size() * sizeof(int),
                           cudaMemcpyHostToDevice));
 
+  // Build color grouping schedule (host-only). We group colors such that no two
+  // colors in the same group share an element, allowing a single P refresh per
+  // group (reduces compute_p launches).
+  {
+    if (h_color_group_offsets_cache_) {
+      delete[] h_color_group_offsets_cache_;
+      h_color_group_offsets_cache_ = nullptr;
+      h_color_group_offsets_cache_size_ = 0;
+    }
+    if (h_color_group_colors_cache_) {
+      delete[] h_color_group_colors_cache_;
+      h_color_group_colors_cache_ = nullptr;
+      h_color_group_colors_cache_size_ = 0;
+    }
+
+    const int group_size = std::max(1, h_color_group_size_);
+
+    // Build conflict matrix between colors from element connectivity.
+    const int n_words = (n_colors_ + 63) / 64;
+    std::vector<uint64_t> conflict_bits(
+        static_cast<size_t>(n_colors_) * static_cast<size_t>(n_words), 0ULL);
+
+    auto set_conflict = [&](int a, int b) {
+      if (a == b) return;
+      const int word = b >> 6;
+      const int bit = b & 63;
+      conflict_bits[static_cast<size_t>(a) * static_cast<size_t>(n_words) +
+                    static_cast<size_t>(word)] |= (1ULL << bit);
+    };
+
+    const int n_elem = h_connectivity.rows();
+    for (int e = 0; e < n_elem; ++e) {
+      for (int i = 0; i < nodes_per_elem; ++i) {
+        const int node_i = h_connectivity(e, i);
+        const int c_i = colors[node_i];
+        for (int j = i + 1; j < nodes_per_elem; ++j) {
+          const int node_j = h_connectivity(e, j);
+          const int c_j = colors[node_j];
+          set_conflict(c_i, c_j);
+          set_conflict(c_j, c_i);
+        }
+      }
+    }
+
+    auto conflicts = [&](int a, int b) -> bool {
+      const int word = b >> 6;
+      const int bit = b & 63;
+      const uint64_t mask =
+          conflict_bits[static_cast<size_t>(a) * static_cast<size_t>(n_words) +
+                        static_cast<size_t>(word)];
+      return (mask & (1ULL << bit)) != 0ULL;
+    };
+
+    std::vector<std::vector<int>> groups;
+    groups.reserve(static_cast<size_t>(n_colors_));
+    for (int c = 0; c < n_colors_; ++c) {
+      bool placed = false;
+      if (group_size > 1) {
+        for (auto &g : groups) {
+          if (static_cast<int>(g.size()) >= group_size) continue;
+          bool ok = true;
+          for (int c2 : g) {
+            if (conflicts(c2, c)) {
+              ok = false;
+              break;
+            }
+          }
+          if (ok) {
+            g.push_back(c);
+            placed = true;
+            break;
+          }
+        }
+      }
+      if (!placed) {
+        groups.push_back({c});
+      }
+    }
+
+    n_color_groups_ = static_cast<int>(groups.size());
+    h_color_group_offsets_cache_size_ = n_color_groups_ + 1;
+    h_color_group_colors_cache_size_ = n_colors_;
+    h_color_group_offsets_cache_ = new int[static_cast<size_t>(h_color_group_offsets_cache_size_)];
+    h_color_group_colors_cache_ = new int[static_cast<size_t>(h_color_group_colors_cache_size_)];
+
+    int cursor = 0;
+    h_color_group_offsets_cache_[0] = 0;
+    for (int g = 0; g < n_color_groups_; ++g) {
+      for (int c : groups[static_cast<size_t>(g)]) {
+        h_color_group_colors_cache_[cursor++] = c;
+      }
+      h_color_group_offsets_cache_[g + 1] = cursor;
+    }
+
+    if (cursor != n_colors_) {
+      std::cerr << "Color grouping internal error: expected " << n_colors_
+                << " colors, got " << cursor << std::endl;
+    }
+
+    if (group_size > 1) {
+      std::cout << "VBD color grouping: group_size=" << group_size
+                << " => " << n_color_groups_ << " groups (from " << n_colors_
+                << " colors)" << std::endl;
+    }
+  }
+
   // Build incidence data arrays
   std::vector<int> h_incidence_offsets(n_coef_ + 1);
   std::vector<int2> h_incidence_data;
@@ -1046,61 +1153,326 @@ double SyncedVBDSolver::compute_l2_norm_cublas(double *d_vec, int n_dofs) {
 }
 
 // =====================================================
+// CUDA Graphs (required)
+// =====================================================
+
+void SyncedVBDSolver::DestroyCudaGraphs() {
+  if (inner_sweep_graph_exec_) {
+    HANDLE_ERROR(cudaGraphExecDestroy(inner_sweep_graph_exec_));
+    inner_sweep_graph_exec_ = nullptr;
+  }
+  if (post_outer_graph_exec_) {
+    HANDLE_ERROR(cudaGraphExecDestroy(post_outer_graph_exec_));
+    post_outer_graph_exec_ = nullptr;
+  }
+
+  graph_threads_ = 0;
+  graph_blocks_coef_ = 0;
+  graph_blocks_p_ = 0;
+  graph_n_colors_ = 0;
+  graph_n_constraints_ = 0;
+  graph_color_group_size_ = 1;
+  graph_n_color_groups_ = 0;
+}
+
+bool SyncedVBDSolver::EnsureInnerSweepGraph(int threads, int blocks_p) {
+  if (type_ != TYPE_T10) {
+    std::cerr << "EnsureInnerSweepGraph is only implemented for TYPE_T10."
+              << std::endl;
+    exit(EXIT_FAILURE);
+  }
+  if (!coloring_initialized_ || !fixed_map_initialized_) {
+    std::cerr << "EnsureInnerSweepGraph requires InitializeColoring() and "
+                 "InitializeFixedMap() first."
+              << std::endl;
+    exit(EXIT_FAILURE);
+  }
+
+  const bool signature_match =
+      inner_sweep_graph_exec_ && graph_threads_ == threads &&
+      graph_blocks_p_ == blocks_p && graph_n_colors_ == n_colors_ &&
+      graph_n_constraints_ == n_constraints_ &&
+      graph_color_group_size_ == h_color_group_size_ &&
+      graph_n_color_groups_ == n_color_groups_;
+  if (signature_match) return false;
+
+  // If a previously captured graph exists but the signature changed, destroy it.
+  if (inner_sweep_graph_exec_) {
+    const bool shared_mismatch =
+        graph_threads_ != threads || graph_n_constraints_ != n_constraints_;
+    const bool inner_mismatch =
+        shared_mismatch || graph_blocks_p_ != blocks_p ||
+        graph_n_colors_ != n_colors_ ||
+        graph_color_group_size_ != h_color_group_size_ ||
+        graph_n_color_groups_ != n_color_groups_;
+    if (inner_mismatch) {
+      HANDLE_ERROR(cudaGraphExecDestroy(inner_sweep_graph_exec_));
+      inner_sweep_graph_exec_ = nullptr;
+    }
+    if (shared_mismatch && post_outer_graph_exec_) {
+      HANDLE_ERROR(cudaGraphExecDestroy(post_outer_graph_exec_));
+      post_outer_graph_exec_ = nullptr;
+    }
+  } else if (post_outer_graph_exec_) {
+    // If post-outer graph exists but shared signature fields changed, drop it.
+    const bool shared_mismatch =
+        graph_threads_ != threads || graph_n_constraints_ != n_constraints_;
+    if (shared_mismatch) {
+      HANDLE_ERROR(cudaGraphExecDestroy(post_outer_graph_exec_));
+      post_outer_graph_exec_ = nullptr;
+    }
+  }
+
+  if (!h_color_offsets_cache_ || h_color_offsets_cache_size_ != n_colors_ + 1) {
+    std::cerr << "CUDA graph init requires host color-offset cache. "
+                 "Call InitializeColoring() first."
+              << std::endl;
+    exit(EXIT_FAILURE);
+  }
+  if (!h_color_group_offsets_cache_ ||
+      h_color_group_offsets_cache_size_ != n_color_groups_ + 1 ||
+      !h_color_group_colors_cache_ ||
+      h_color_group_colors_cache_size_ != n_colors_) {
+    std::cerr << "CUDA graph init requires host color-group schedule cache."
+              << std::endl;
+    exit(EXIT_FAILURE);
+  }
+
+  constexpr int kVbdBlockThreads = 64;
+  if (threads != kVbdBlockThreads) {
+    std::cerr << "CUDA graph init expects threads=" << kVbdBlockThreads
+              << " for vbd_update_color_block_kernel<" << kVbdBlockThreads
+              << ">."
+              << std::endl;
+    exit(EXIT_FAILURE);
+  }
+
+  if (!graph_capture_stream_) {
+    std::cerr << "CUDA graph capture stream is null; aborting."
+              << std::endl;
+    exit(EXIT_FAILURE);
+  }
+
+  auto *typed_data = static_cast<GPU_FEAT10_Data *>(d_data_);
+
+  // Stream capture executes the recorded kernels once. We only call this at the
+  // first inner sweep so that execution counts as sweep 0.
+  cudaGraph_t graph = nullptr;
+  cudaError_t err = cudaStreamSynchronize(0);
+  if (err != cudaSuccess) {
+    std::cerr << "cudaStreamSynchronize(default) failed during graph init: "
+              << cudaGetErrorString(err) << std::endl;
+    exit(EXIT_FAILURE);
+  }
+  err = cudaStreamSynchronize(graph_capture_stream_);
+  if (err != cudaSuccess) {
+    std::cerr << "cudaStreamSynchronize(capture) failed during graph init: "
+              << cudaGetErrorString(err) << std::endl;
+    exit(EXIT_FAILURE);
+  }
+
+  err = cudaStreamBeginCapture(graph_capture_stream_,
+                               cudaStreamCaptureModeRelaxed);
+  if (err != cudaSuccess) {
+    std::cerr << "cudaStreamBeginCapture failed: "
+              << cudaGetErrorString(err) << std::endl;
+    exit(EXIT_FAILURE);
+  }
+
+  for (int g = 0; g < n_color_groups_; ++g) {
+    const int group_begin = h_color_group_offsets_cache_[g];
+    const int group_end = h_color_group_offsets_cache_[g + 1];
+    for (int gi = group_begin; gi < group_end; ++gi) {
+      const int c = h_color_group_colors_cache_[gi];
+      const int color_start = h_color_offsets_cache_[c];
+      const int color_count =
+          h_color_offsets_cache_[c + 1] - h_color_offsets_cache_[c];
+      if (color_count <= 0) continue;
+
+      const int blocks = color_count;
+      vbd_update_color_block_kernel<kVbdBlockThreads>
+          <<<blocks, threads, 0, graph_capture_stream_>>>(
+              typed_data, d_vbd_solver_, color_start, color_count);
+
+      const int blocks_color = (color_count + threads - 1) / threads;
+      vbd_update_pos_from_vel_color<<<blocks_color, threads, 0,
+                                     graph_capture_stream_>>>(
+          d_vbd_solver_, typed_data, color_start, color_count);
+    }
+
+    // Refresh global element cache once per group.
+    vbd_compute_p_kernel<<<blocks_p, threads, 0, graph_capture_stream_>>>(
+        typed_data, d_vbd_solver_);
+  }
+
+  err = cudaStreamEndCapture(graph_capture_stream_, &graph);
+  if (err != cudaSuccess) {
+    std::cerr << "cudaStreamEndCapture(inner sweep) failed: "
+              << cudaGetErrorString(err) << std::endl;
+    exit(EXIT_FAILURE);
+  }
+
+  // Ensure the sweep executed during capture completes before continuing on the
+  // default stream.
+  err = cudaStreamSynchronize(graph_capture_stream_);
+  if (err != cudaSuccess) {
+    std::cerr << "cudaStreamSynchronize(capture) failed after capture: "
+              << cudaGetErrorString(err) << std::endl;
+    HANDLE_ERROR(cudaGraphDestroy(graph));
+    exit(EXIT_FAILURE);
+  }
+
+  cudaGraphNode_t error_node = nullptr;
+  char log_buffer[4096] = {0};
+  const cudaError_t inst_err =
+      cudaGraphInstantiate(&inner_sweep_graph_exec_, graph, &error_node,
+                           log_buffer, sizeof(log_buffer));
+  if (inst_err != cudaSuccess) {
+    std::cerr << "cudaGraphInstantiate(inner sweep) failed: "
+              << cudaGetErrorString(inst_err) << "\n"
+              << log_buffer << std::endl;
+    HANDLE_ERROR(cudaGraphDestroy(graph));
+    exit(EXIT_FAILURE);
+  }
+  HANDLE_ERROR(cudaGraphDestroy(graph));
+
+  graph_threads_ = threads;
+  graph_blocks_p_ = blocks_p;
+  graph_n_colors_ = n_colors_;
+  graph_n_constraints_ = n_constraints_;
+  graph_color_group_size_ = h_color_group_size_;
+  graph_n_color_groups_ = n_color_groups_;
+  return true;
+}
+
+bool SyncedVBDSolver::EnsurePostOuterGraph(int threads, int blocks_coef) {
+  if (type_ != TYPE_T10) {
+    std::cerr << "EnsurePostOuterGraph is only implemented for TYPE_T10."
+              << std::endl;
+    exit(EXIT_FAILURE);
+  }
+  if (!coloring_initialized_ || !fixed_map_initialized_) {
+    std::cerr << "EnsurePostOuterGraph requires InitializeColoring() and "
+                 "InitializeFixedMap() first."
+              << std::endl;
+    exit(EXIT_FAILURE);
+  }
+
+  const bool signature_match =
+      post_outer_graph_exec_ && graph_threads_ == threads &&
+      graph_blocks_coef_ == blocks_coef && graph_n_colors_ == n_colors_ &&
+      graph_n_constraints_ == n_constraints_;
+  if (signature_match) return false;
+
+  // If a previously captured graph exists but the signature changed, destroy it.
+  if (post_outer_graph_exec_) {
+    const bool shared_mismatch =
+        graph_threads_ != threads || graph_n_constraints_ != n_constraints_;
+    const bool post_mismatch =
+        shared_mismatch || graph_blocks_coef_ != blocks_coef;
+    if (post_mismatch) {
+      HANDLE_ERROR(cudaGraphExecDestroy(post_outer_graph_exec_));
+      post_outer_graph_exec_ = nullptr;
+    }
+    if (shared_mismatch && inner_sweep_graph_exec_) {
+      HANDLE_ERROR(cudaGraphExecDestroy(inner_sweep_graph_exec_));
+      inner_sweep_graph_exec_ = nullptr;
+    }
+  } else if (inner_sweep_graph_exec_) {
+    // If inner-sweep graph exists but shared signature fields changed, drop it.
+    const bool shared_mismatch =
+        graph_threads_ != threads || graph_n_constraints_ != n_constraints_;
+    if (shared_mismatch) {
+      HANDLE_ERROR(cudaGraphExecDestroy(inner_sweep_graph_exec_));
+      inner_sweep_graph_exec_ = nullptr;
+    }
+  }
+
+  if (!graph_capture_stream_) {
+    std::cerr << "CUDA graph capture stream is null; aborting."
+              << std::endl;
+    exit(EXIT_FAILURE);
+  }
+
+  auto *typed_data = static_cast<GPU_FEAT10_Data *>(d_data_);
+
+  cudaGraph_t graph = nullptr;
+  cudaError_t err = cudaStreamSynchronize(0);
+  if (err != cudaSuccess) {
+    std::cerr << "cudaStreamSynchronize(default) failed during graph init: "
+              << cudaGetErrorString(err) << std::endl;
+    exit(EXIT_FAILURE);
+  }
+  err = cudaStreamSynchronize(graph_capture_stream_);
+  if (err != cudaSuccess) {
+    std::cerr << "cudaStreamSynchronize(capture) failed during graph init: "
+              << cudaGetErrorString(err) << std::endl;
+    exit(EXIT_FAILURE);
+  }
+
+  err = cudaStreamBeginCapture(graph_capture_stream_,
+                               cudaStreamCaptureModeRelaxed);
+  if (err != cudaSuccess) {
+    std::cerr << "cudaStreamBeginCapture failed: "
+              << cudaGetErrorString(err) << std::endl;
+    exit(EXIT_FAILURE);
+  }
+
+  vbd_update_pos_from_vel<<<blocks_coef, threads, 0, graph_capture_stream_>>>(
+      d_vbd_solver_, typed_data);
+  if (n_constraints_ > 0) {
+    const int n_fixed = n_constraints_ / 3;
+    const int blocks_c = (n_fixed + threads - 1) / threads;
+    vbd_compute_constraint<<<blocks_c, threads, 0, graph_capture_stream_>>>(
+        typed_data, d_vbd_solver_);
+  }
+
+  err = cudaStreamEndCapture(graph_capture_stream_, &graph);
+  if (err != cudaSuccess) {
+    std::cerr << "cudaStreamEndCapture(post outer) failed: "
+              << cudaGetErrorString(err) << std::endl;
+    exit(EXIT_FAILURE);
+  }
+
+  err = cudaStreamSynchronize(graph_capture_stream_);
+  if (err != cudaSuccess) {
+    std::cerr << "cudaStreamSynchronize(capture) failed after capture: "
+              << cudaGetErrorString(err) << std::endl;
+    HANDLE_ERROR(cudaGraphDestroy(graph));
+    exit(EXIT_FAILURE);
+  }
+
+  cudaGraphNode_t error_node = nullptr;
+  char log_buffer[4096] = {0};
+  const cudaError_t inst_err =
+      cudaGraphInstantiate(&post_outer_graph_exec_, graph, &error_node,
+                           log_buffer, sizeof(log_buffer));
+  if (inst_err != cudaSuccess) {
+    std::cerr << "cudaGraphInstantiate(post outer) failed: "
+              << cudaGetErrorString(inst_err) << "\n"
+              << log_buffer << std::endl;
+    HANDLE_ERROR(cudaGraphDestroy(graph));
+    exit(EXIT_FAILURE);
+  }
+  HANDLE_ERROR(cudaGraphDestroy(graph));
+
+  graph_threads_ = threads;
+  graph_blocks_coef_ = blocks_coef;
+  graph_n_colors_ = n_colors_;
+  graph_n_constraints_ = n_constraints_;
+  graph_color_group_size_ = h_color_group_size_;
+  graph_n_color_groups_ = n_color_groups_;
+  return true;
+}
+
+// =====================================================
 // Main VBD Solve Step
 // =====================================================
 
 void SyncedVBDSolver::OneStepVBD() {
-  constexpr bool timing_enabled = true;
-
-  auto wall_now             = []() { return std::chrono::steady_clock::now(); };
-  auto wall_ms_since        = [&](std::chrono::steady_clock::time_point t0) {
-    return std::chrono::duration<double, std::milli>(wall_now() - t0).count();
-  };
-
   cudaDeviceProp props;
   HANDLE_ERROR(cudaGetDeviceProperties(&props, 0));
   const int max_grid_stride_blocks = 32 * props.multiProcessorCount;
-
-  double wall_total_ms = 0.0;
-  float gpu_total_ms   = 0.0f;
-
-  float gpu_pos_prev_ms   = 0.0f;
-  float gpu_inner_ms      = 0.0f;
-  float gpu_init_refresh_pos_ms = 0.0f;
-  float gpu_init_refresh_p_ms = 0.0f;
-  float gpu_inner_update_ms = 0.0f;
-  float gpu_inner_refresh_pos_color_ms = 0.0f;
-  float gpu_inner_refresh_p_ms = 0.0f;
-  float gpu_pos_update_ms = 0.0f;
-  float gpu_constraint_ms = 0.0f;
-  float gpu_dual_ms       = 0.0f;
-  float gpu_vprev_ms      = 0.0f;
-  float gpu_p_refresh_ms  = 0.0f;
-  float gpu_residual_check_kernels_ms = 0.0f;
-  float gpu_residual_check_nrm2_ms    = 0.0f;
-
-  double wall_residual_checks_ms = 0.0;
-  double wall_constraints_ms     = 0.0;
-  int residual_check_count       = 0;
-
-  cudaEvent_t seg_start, seg_stop;
-  cudaEvent_t check_kernels_start, check_kernels_stop;
-  cudaEvent_t check_nrm2_start, check_nrm2_stop;
-  cudaEvent_t color_e0, color_e1, color_e2, color_e3;
-  if (timing_enabled) {
-    HANDLE_ERROR(cudaEventCreate(&seg_start));
-    HANDLE_ERROR(cudaEventCreate(&seg_stop));
-    HANDLE_ERROR(cudaEventCreate(&check_kernels_start));
-    HANDLE_ERROR(cudaEventCreate(&check_kernels_stop));
-    HANDLE_ERROR(cudaEventCreate(&check_nrm2_start));
-    HANDLE_ERROR(cudaEventCreate(&check_nrm2_stop));
-    HANDLE_ERROR(cudaEventCreate(&color_e0));
-    HANDLE_ERROR(cudaEventCreate(&color_e1));
-    HANDLE_ERROR(cudaEventCreate(&color_e2));
-    HANDLE_ERROR(cudaEventCreate(&color_e3));
-  }
-
-  const auto wall_total_start = wall_now();
 
   // Ensure coloring is initialized
   if (!coloring_initialized_) {
@@ -1144,6 +1516,12 @@ void SyncedVBDSolver::OneStepVBD() {
         threads;
   }
 
+  if (type_ != TYPE_T10) {
+    std::cerr << "SyncedVBDSolver::OneStepVBD is only implemented for TYPE_T10."
+              << std::endl;
+    exit(EXIT_FAILURE);
+  }
+
   auto launch_grad_l_residual_check = [&]() {
     // Evaluate the same residual/gradient used by AdamW/Newton formulation,
     // using cached F/P and (re)assembled f_int.
@@ -1157,145 +1535,33 @@ void SyncedVBDSolver::OneStepVBD() {
     vbd_compute_grad_l_kernel<<<blocks_dof, threads>>>(typed_data, d_vbd_solver_);
   };
 
-  auto compute_l2_norm_g_timed = [&](double &out_norm, float &out_nrm2_ms) {
-    if (timing_enabled) {
-      HANDLE_ERROR(cudaEventRecord(check_nrm2_start));
-    }
-    cublasDnrm2(cublas_handle_, n_dofs, d_g_, 1, d_norm_temp_);
-    if (timing_enabled) {
-      HANDLE_ERROR(cudaEventRecord(check_nrm2_stop));
-      HANDLE_ERROR(cudaEventSynchronize(check_nrm2_stop));
-      HANDLE_ERROR(cudaEventElapsedTime(&out_nrm2_ms, check_nrm2_start,
-                                        check_nrm2_stop));
-    } else {
-      out_nrm2_ms = 0.0f;
-    }
-    HANDLE_ERROR(
-        cudaMemcpy(&out_norm, d_norm_temp_, sizeof(double), cudaMemcpyDeviceToHost));
-  };
-
   // Store previous positions
   HANDLE_ERROR(cudaEventRecord(start));
-  if (type_ == TYPE_T10) {
-    int blocks = blocks_coef;
-    if (timing_enabled) {
-      HANDLE_ERROR(cudaEventRecord(seg_start));
-    }
-    vbd_update_pos_prev<<<blocks, threads>>>(
-        static_cast<GPU_FEAT10_Data *>(d_data_), d_vbd_solver_);
-    if (timing_enabled) {
-      HANDLE_ERROR(cudaEventRecord(seg_stop));
-      HANDLE_ERROR(cudaEventSynchronize(seg_stop));
-      HANDLE_ERROR(cudaEventElapsedTime(&gpu_pos_prev_ms, seg_start, seg_stop));
-    }
-  }
+  vbd_update_pos_prev<<<blocks_coef, threads>>>(
+      static_cast<GPU_FEAT10_Data *>(d_data_), d_vbd_solver_);
+
   // ALM outer loop
   for (int outer_iter = 0; outer_iter < h_max_outer_; ++outer_iter) {
     double R0 = -1.0;
-    double wall_outer_residual_ms = 0.0;
-    double wall_outer_constraints_ms = 0.0;
-    int outer_residual_checks = 0;
-    int outer_inner_sweeps = 0;
-    float gpu_outer_inner_ms = 0.0f;
 
     // Build initial x12/F/P caches for the current v_guess before running the
     // colored inner sweeps in this outer iteration.
-    if (type_ == TYPE_T10) {
-      float ms = 0.0f;
-      HANDLE_ERROR(cudaEventRecord(color_e0));
-      vbd_update_pos_from_vel<<<blocks_coef, threads>>>(d_vbd_solver_,
-                                                        typed_data);
-      HANDLE_ERROR(cudaEventRecord(color_e1));
-      vbd_compute_p_kernel<<<blocks_p, threads>>>(typed_data, d_vbd_solver_);
-      HANDLE_ERROR(cudaEventRecord(color_e2));
-      HANDLE_ERROR(cudaEventSynchronize(color_e2));
-
-      HANDLE_ERROR(cudaEventElapsedTime(&ms, color_e0, color_e1));
-      gpu_init_refresh_pos_ms += ms;
-      HANDLE_ERROR(cudaEventElapsedTime(&ms, color_e1, color_e2));
-      gpu_init_refresh_p_ms += ms;
-    }
+    vbd_update_pos_from_vel<<<blocks_coef, threads>>>(d_vbd_solver_, typed_data);
+    vbd_compute_p_kernel<<<blocks_p, threads>>>(typed_data, d_vbd_solver_);
 
     if (h_conv_check_interval_ > 0 && type_ == TYPE_T10) {
-      auto wall_residual_start = wall_now();
-      float kernels_ms = 0.0f;
-      float nrm2_ms = 0.0f;
-      if (timing_enabled) {
-        HANDLE_ERROR(cudaEventRecord(check_kernels_start));
-      }
       launch_grad_l_residual_check();
-      if (timing_enabled) {
-        HANDLE_ERROR(cudaEventRecord(check_kernels_stop));
-        HANDLE_ERROR(cudaEventSynchronize(check_kernels_stop));
-        HANDLE_ERROR(cudaEventElapsedTime(&kernels_ms, check_kernels_start,
-                                          check_kernels_stop));
-      }
-      compute_l2_norm_g_timed(R0, nrm2_ms);
-      double wall_residual_ms = wall_ms_since(wall_residual_start);
-      wall_outer_residual_ms += wall_residual_ms;
-      wall_residual_checks_ms += wall_residual_ms;
-      gpu_residual_check_kernels_ms += kernels_ms;
-      gpu_residual_check_nrm2_ms += nrm2_ms;
-      residual_check_count += 1;
-      outer_residual_checks += 1;
-      if (timing_enabled) {
-        std::cout << "    [VBD check] init: ||g||=" << std::scientific << R0
-                  << " kernels_gpu_ms=" << kernels_ms
-                  << " nrm2_gpu_ms=" << nrm2_ms
-                  << " wall_ms=" << wall_residual_ms << std::endl;
-      }
+      R0 = compute_l2_norm_cublas(d_g_, n_dofs);
+      std::cout << "    [VBD check] init: ||g||=" << std::scientific << R0
+                << std::endl;
     }
 
     // VBD inner loop (colored Gauss-Seidel sweeps)
-    if (timing_enabled) {
-      HANDLE_ERROR(cudaEventRecord(seg_start));
-    }
+    const bool sweep0_already_executed =
+        EnsureInnerSweepGraph(threads, blocks_p);
     for (int inner_iter = 0; inner_iter < h_max_inner_; ++inner_iter) {
-      outer_inner_sweeps += 1;
-      // Process each color sequentially (nodes within a color in parallel)
-      // Note: Element state (x12/F/P) is refreshed between colors to preserve
-      // the Gauss-Seidel update semantics.
-      for (int c = 0; c < n_colors_; ++c) {
-        int color_start = 0;
-        int color_count = 0;
-        if (h_color_offsets_cache_ && h_color_offsets_cache_size_ == n_colors_ + 1) {
-          color_start = h_color_offsets_cache_[c];
-          color_count = h_color_offsets_cache_[c + 1] - color_start;
-        } else {
-          int h_color_offsets[2];
-          HANDLE_ERROR(cudaMemcpy(h_color_offsets, d_color_offsets_ + c,
-                                  2 * sizeof(int), cudaMemcpyDeviceToHost));
-          color_start = h_color_offsets[0];
-          color_count = h_color_offsets[1] - h_color_offsets[0];
-        }
-
-        if (color_count > 0) {
-          if (type_ == TYPE_T10) {
-            float ms = 0.0f;
-            HANDLE_ERROR(cudaEventRecord(color_e0));
-            const int blocks = color_count;
-            vbd_update_color_block_kernel<kVbdBlockThreads><<<blocks, threads>>>(
-                static_cast<GPU_FEAT10_Data *>(d_data_), d_vbd_solver_,
-                color_start, color_count);
-            HANDLE_ERROR(cudaEventRecord(color_e1));
-
-            const int blocks_color = (color_count + threads - 1) / threads;
-            vbd_update_pos_from_vel_color<<<blocks_color, threads>>>(
-                d_vbd_solver_, typed_data, color_start, color_count);
-            HANDLE_ERROR(cudaEventRecord(color_e2));
-            vbd_compute_p_kernel<<<blocks_p, threads>>>(typed_data,
-                                                       d_vbd_solver_);
-            HANDLE_ERROR(cudaEventRecord(color_e3));
-            HANDLE_ERROR(cudaEventSynchronize(color_e3));
-
-            HANDLE_ERROR(cudaEventElapsedTime(&ms, color_e0, color_e1));
-            gpu_inner_update_ms += ms;
-            HANDLE_ERROR(cudaEventElapsedTime(&ms, color_e1, color_e2));
-            gpu_inner_refresh_pos_color_ms += ms;
-            HANDLE_ERROR(cudaEventElapsedTime(&ms, color_e2, color_e3));
-            gpu_inner_refresh_p_ms += ms;
-          }
-        }
+      if (!(inner_iter == 0 && sweep0_already_executed)) {
+        HANDLE_ERROR(cudaGraphLaunch(inner_sweep_graph_exec_, 0));
       }
 
       // Compute and print residual every convergence_check_interval sweeps (like Python)
@@ -1304,36 +1570,11 @@ void SyncedVBDSolver::OneStepVBD() {
           (inner_iter % h_conv_check_interval_ == 0 ||
            inner_iter == h_max_inner_ - 1)) {
         if (type_ == TYPE_T10) {
-          auto wall_residual_start = wall_now();
-          float kernels_ms = 0.0f;
-          float nrm2_ms = 0.0f;
-          if (timing_enabled) {
-            HANDLE_ERROR(cudaEventRecord(check_kernels_start));
-          }
           launch_grad_l_residual_check();
-          if (timing_enabled) {
-            HANDLE_ERROR(cudaEventRecord(check_kernels_stop));
-            HANDLE_ERROR(cudaEventSynchronize(check_kernels_stop));
-            HANDLE_ERROR(cudaEventElapsedTime(&kernels_ms, check_kernels_start,
-                                              check_kernels_stop));
-          }
-          double R_norm = 0.0;
-          compute_l2_norm_g_timed(R_norm, nrm2_ms);
-          double wall_residual_ms = wall_ms_since(wall_residual_start);
-          wall_outer_residual_ms += wall_residual_ms;
-          wall_residual_checks_ms += wall_residual_ms;
-          gpu_residual_check_kernels_ms += kernels_ms;
-          gpu_residual_check_nrm2_ms += nrm2_ms;
-          residual_check_count += 1;
-          outer_residual_checks += 1;
+          const double R_norm = compute_l2_norm_cublas(d_g_, n_dofs);
 
           std::cout << "    VBD sweep " << std::setw(3) << inner_iter 
                     << ": ||g|| = " << std::scientific << R_norm;
-          if (timing_enabled) {
-            std::cout << " [check kernels_gpu_ms=" << kernels_ms
-                      << " nrm2_gpu_ms=" << nrm2_ms
-                      << " wall_ms=" << wall_residual_ms << "]";
-          }
           std::cout << std::endl;
 
           const double stop_thresh =
@@ -1344,68 +1585,30 @@ void SyncedVBDSolver::OneStepVBD() {
         }
       }
     }
-    if (timing_enabled) {
-      HANDLE_ERROR(cudaEventRecord(seg_stop));
-      HANDLE_ERROR(cudaEventSynchronize(seg_stop));
-      HANDLE_ERROR(
-          cudaEventElapsedTime(&gpu_outer_inner_ms, seg_start, seg_stop));
-      gpu_inner_ms += gpu_outer_inner_ms;
-    }
 
     // Update positions from final velocities after all sweeps
     if (type_ == TYPE_T10) {
-      int blocks = (n_coef_ + threads - 1) / threads;
-      if (timing_enabled) {
-        HANDLE_ERROR(cudaEventRecord(seg_start));
-      }
-      vbd_update_pos_from_vel<<<blocks, threads>>>(
-          d_vbd_solver_, static_cast<GPU_FEAT10_Data *>(d_data_));
-      if (timing_enabled) {
-        HANDLE_ERROR(cudaEventRecord(seg_stop));
-        HANDLE_ERROR(cudaEventSynchronize(seg_stop));
-        float ms = 0.0f;
-        HANDLE_ERROR(cudaEventElapsedTime(&ms, seg_start, seg_stop));
-        gpu_pos_update_ms += ms;
+      const bool post_already_executed =
+          EnsurePostOuterGraph(threads, blocks_coef);
+      if (!post_already_executed) {
+        HANDLE_ERROR(cudaGraphLaunch(post_outer_graph_exec_, 0));
       }
     }
 
-	    // Compute constraint violation and update multipliers
-	    if (n_constraints_ > 0) {
-	      auto wall_constraints_start = wall_now();
-	      int n_fixed = n_constraints_ / 3;
-	      int blocks_c = (n_fixed + threads - 1) / threads;
+    // Compute constraint violation and update multipliers
+    if (n_constraints_ > 0) {
+      // Check constraint norm
+      double c_norm = 0.0;
+      if (d_constraint_ptr_ != nullptr) {
+        c_norm = compute_l2_norm_cublas(d_constraint_ptr_, n_constraints_);
+      } else if (type_ == TYPE_T10) {
+        auto *typed_data = static_cast<GPU_FEAT10_Data *>(h_data_);
+        c_norm = compute_l2_norm_cublas(typed_data->Get_Constraint_Ptr(),
+                                        n_constraints_);
+      }
 
-	      if (type_ == TYPE_T10) {
-          if (timing_enabled) {
-            HANDLE_ERROR(cudaEventRecord(seg_start));
-          }
-	        vbd_compute_constraint<<<blocks_c, threads>>>(
-	            static_cast<GPU_FEAT10_Data *>(d_data_), d_vbd_solver_);
-          if (timing_enabled) {
-            HANDLE_ERROR(cudaEventRecord(seg_stop));
-            HANDLE_ERROR(cudaEventSynchronize(seg_stop));
-            float ms = 0.0f;
-            HANDLE_ERROR(cudaEventElapsedTime(&ms, seg_start, seg_stop));
-            gpu_constraint_ms += ms;
-          }
-	      }
-
-	      // Check constraint norm
-	      double c_norm = 0.0;
-	      if (d_constraint_ptr_ != nullptr) {
-	        c_norm = compute_l2_norm_cublas(d_constraint_ptr_, n_constraints_);
-	      } else if (type_ == TYPE_T10) {
-	        auto *typed_data = static_cast<GPU_FEAT10_Data *>(h_data_);
-	        c_norm = compute_l2_norm_cublas(typed_data->Get_Constraint_Ptr(),
-	                                        n_constraints_);
-	      }
-
-        double wall_constraint_ms = wall_ms_since(wall_constraints_start);
-        wall_outer_constraints_ms += wall_constraint_ms;
-        wall_constraints_ms += wall_constraint_ms;
-
-	      std::cout << "VBD outer " << outer_iter << ": ||c|| = " << c_norm
-	                << std::endl;
+      std::cout << "VBD outer " << outer_iter << ": ||c|| = " << c_norm
+                << std::endl;
 
       if (c_norm < h_outer_tol_) {
         std::cout << "VBD converged at outer iteration " << outer_iter
@@ -1416,60 +1619,24 @@ void SyncedVBDSolver::OneStepVBD() {
       // Update dual variables
       int blocks_d = (n_constraints_ + threads - 1) / threads;
       if (type_ == TYPE_T10) {
-        if (timing_enabled) {
-          HANDLE_ERROR(cudaEventRecord(seg_start));
-        }
         vbd_update_dual<<<blocks_d, threads>>>(
             static_cast<GPU_FEAT10_Data *>(d_data_), d_vbd_solver_);
-        if (timing_enabled) {
-          HANDLE_ERROR(cudaEventRecord(seg_stop));
-          HANDLE_ERROR(cudaEventSynchronize(seg_stop));
-          float ms = 0.0f;
-          HANDLE_ERROR(cudaEventElapsedTime(&ms, seg_start, seg_stop));
-          gpu_dual_ms += ms;
-        }
       }
-    }
-
-    if (timing_enabled) {
-      std::cout << "[VBD timing] outer " << outer_iter
-                << ": sweeps=" << outer_inner_sweeps
-                << " residual_checks=" << outer_residual_checks
-                << " inner_gpu_ms=" << gpu_outer_inner_ms
-                << " residual_wall_ms=" << wall_outer_residual_ms
-                << " constraints_wall_ms=" << wall_outer_constraints_ms
-                << std::endl;
     }
   }
 
   // Update v_prev for next time step
   {
     int blocks = (n_dofs + threads - 1) / threads;
-    if (timing_enabled) {
-      HANDLE_ERROR(cudaEventRecord(seg_start));
-    }
     vbd_update_v_prev<<<blocks, threads>>>(d_vbd_solver_);
-    if (timing_enabled) {
-      HANDLE_ERROR(cudaEventRecord(seg_stop));
-      HANDLE_ERROR(cudaEventSynchronize(seg_stop));
-      HANDLE_ERROR(cudaEventElapsedTime(&gpu_vprev_ms, seg_start, seg_stop));
-    }
   }
 
   // Refresh global F/P caches for postprocessing/debug (matches updated x12)
   if (type_ == TYPE_T10) {
     int total = n_beam_ * n_total_qp_;
     int blocks = (total + threads - 1) / threads;
-    if (timing_enabled) {
-      HANDLE_ERROR(cudaEventRecord(seg_start));
-    }
     vbd_compute_p_kernel<<<blocks, threads>>>(
         static_cast<GPU_FEAT10_Data *>(d_data_), d_vbd_solver_);
-    if (timing_enabled) {
-      HANDLE_ERROR(cudaEventRecord(seg_stop));
-      HANDLE_ERROR(cudaEventSynchronize(seg_stop));
-      HANDLE_ERROR(cudaEventElapsedTime(&gpu_p_refresh_ms, seg_start, seg_stop));
-    }
   }
 
   HANDLE_ERROR(cudaEventRecord(stop));
@@ -1478,45 +1645,6 @@ void SyncedVBDSolver::OneStepVBD() {
   float milliseconds = 0.0f;
   HANDLE_ERROR(cudaEventElapsedTime(&milliseconds, start, stop));
   std::cout << "OneStepVBD kernel time: " << milliseconds << " ms" << std::endl;
-
-  wall_total_ms = wall_ms_since(wall_total_start);
-  gpu_total_ms = milliseconds;
-
-  if (timing_enabled) {
-    std::cout << "[VBD timing] total_wall_ms=" << wall_total_ms
-              << " total_gpu_ms=" << gpu_total_ms
-              << " pos_prev_gpu_ms=" << gpu_pos_prev_ms
-              << " inner_gpu_ms=" << gpu_inner_ms
-              << " init_refresh_pos_gpu_ms=" << gpu_init_refresh_pos_ms
-              << " init_refresh_p_gpu_ms=" << gpu_init_refresh_p_ms
-              << " inner_update_gpu_ms=" << gpu_inner_update_ms
-              << " inner_refresh_pos_gpu_ms=" << gpu_inner_refresh_pos_color_ms
-              << " inner_refresh_p_gpu_ms=" << gpu_inner_refresh_p_ms
-              << " pos_update_gpu_ms=" << gpu_pos_update_ms
-              << " constraint_gpu_ms=" << gpu_constraint_ms
-              << " dual_gpu_ms=" << gpu_dual_ms
-              << " vprev_gpu_ms=" << gpu_vprev_ms
-              << " p_refresh_gpu_ms=" << gpu_p_refresh_ms
-              << " residual_checks=" << residual_check_count
-              << " residual_check_kernels_gpu_ms=" << gpu_residual_check_kernels_ms
-              << " residual_check_nrm2_gpu_ms=" << gpu_residual_check_nrm2_ms
-              << " residual_checks_wall_ms=" << wall_residual_checks_ms
-              << " constraints_wall_ms=" << wall_constraints_ms
-              << std::endl;
-  }
-
-  if (timing_enabled) {
-    HANDLE_ERROR(cudaEventDestroy(seg_start));
-    HANDLE_ERROR(cudaEventDestroy(seg_stop));
-    HANDLE_ERROR(cudaEventDestroy(check_kernels_start));
-    HANDLE_ERROR(cudaEventDestroy(check_kernels_stop));
-    HANDLE_ERROR(cudaEventDestroy(check_nrm2_start));
-    HANDLE_ERROR(cudaEventDestroy(check_nrm2_stop));
-    HANDLE_ERROR(cudaEventDestroy(color_e0));
-    HANDLE_ERROR(cudaEventDestroy(color_e1));
-    HANDLE_ERROR(cudaEventDestroy(color_e2));
-    HANDLE_ERROR(cudaEventDestroy(color_e3));
-  }
 
   HANDLE_ERROR(cudaEventDestroy(start));
   HANDLE_ERROR(cudaEventDestroy(stop));

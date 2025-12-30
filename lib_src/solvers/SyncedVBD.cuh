@@ -8,8 +8,10 @@
  * Brief:   Declares the SyncedVBDSolver class for a Vertex Block Descent
  *          (VBD) method. This solver uses graph coloring to parallelize
  *          per-node 3×3 block updates within the ALM outer loop.
+ *          The current implementation targets FEAT10 (TYPE_T10).
  *          The inner loop performs colored Gauss-Seidel style updates
  *          without assembling a global Hessian matrix.
+ *          CUDA graphs are used for the inner sweeps and post-sweep kernels.
  *==============================================================
  *==============================================================*/
 
@@ -30,6 +32,7 @@ struct SyncedVBDParams {
   double omega;            // Relaxation factor (default 1.0)
   double hess_eps;         // Regularization for local Hessian (default 1e-12)
   int convergence_check_interval;
+  int color_group_size;    // Group multiple colors per refresh (default 1)
 };
 
 class SyncedVBDSolver : public SolverBase {
@@ -48,9 +51,25 @@ class SyncedVBDSolver : public SolverBase {
         d_incidence_data_(nullptr),
         h_color_offsets_cache_(nullptr),
         h_color_offsets_cache_size_(0),
+        h_color_group_size_(1),
+        n_color_groups_(0),
+        h_color_group_offsets_cache_(nullptr),
+        h_color_group_offsets_cache_size_(0),
+        h_color_group_colors_cache_(nullptr),
+        h_color_group_colors_cache_size_(0),
         fixed_map_initialized_(false),
         d_fixed_map_(nullptr),
-        d_mass_diag_blocks_(nullptr) {
+        d_mass_diag_blocks_(nullptr),
+        graph_threads_(0),
+        graph_blocks_coef_(0),
+        graph_blocks_p_(0),
+        graph_n_colors_(0),
+        graph_n_constraints_(0),
+        graph_color_group_size_(1),
+        graph_n_color_groups_(0),
+        graph_capture_stream_(nullptr),
+        inner_sweep_graph_exec_(nullptr),
+        post_outer_graph_exec_(nullptr) {
     // Type-based casting to get the correct d_data from derived class
     if (data->type == TYPE_3243) {
       type_            = TYPE_3243;
@@ -136,9 +155,19 @@ class SyncedVBDSolver : public SolverBase {
     cublasCreate(&cublas_handle_);
     cublasSetPointerMode(cublas_handle_, CUBLAS_POINTER_MODE_DEVICE);
     cudaMalloc(&d_norm_temp_, sizeof(double));
+
+    // Dedicated stream for CUDA graph capture (do not use default stream).
+    HANDLE_ERROR(cudaStreamCreateWithFlags(&graph_capture_stream_,
+                                          cudaStreamNonBlocking));
   }
 
   ~SyncedVBDSolver() {
+    DestroyCudaGraphs();
+    if (graph_capture_stream_) {
+      HANDLE_ERROR(cudaStreamDestroy(graph_capture_stream_));
+      graph_capture_stream_ = nullptr;
+    }
+
     cudaFree(d_v_guess_);
     cudaFree(d_v_prev_);
     cudaFree(d_lambda_guess_);
@@ -176,6 +205,9 @@ class SyncedVBDSolver : public SolverBase {
 
     if (cublas_handle_) cublasDestroy(cublas_handle_);
     if (d_norm_temp_) cudaFree(d_norm_temp_);
+
+    if (h_color_group_offsets_cache_) delete[] h_color_group_offsets_cache_;
+    if (h_color_group_colors_cache_) delete[] h_color_group_colors_cache_;
   }
 
   void SetParameters(void *params) override {
@@ -187,6 +219,7 @@ class SyncedVBDSolver : public SolverBase {
     h_max_outer_ = p->max_outer;
     h_max_inner_ = p->max_inner;
     h_conv_check_interval_ = p->convergence_check_interval;
+    h_color_group_size_ = (p->color_group_size > 0 ? p->color_group_size : 1);
 
     cudaMemcpy(d_inner_tol_, &p->inner_tol, sizeof(double),
                cudaMemcpyHostToDevice);
@@ -339,6 +372,12 @@ class SyncedVBDSolver : public SolverBase {
   int2 *d_incidence_data_;   // (element_idx, local_node_idx) pairs
   int *h_color_offsets_cache_;   // Host cache of d_color_offsets_ (n_colors_+1)
   int h_color_offsets_cache_size_;
+  int h_color_group_size_;           // Desired number of colors per group
+  int n_color_groups_;               // Number of groups in schedule
+  int *h_color_group_offsets_cache_; // Offsets into h_color_group_colors_cache_
+  int h_color_group_offsets_cache_size_;
+  int *h_color_group_colors_cache_;  // Flat list of color indices (size n_colors_)
+  int h_color_group_colors_cache_size_;
   bool fixed_map_initialized_;
   int *d_fixed_map_;  // (n_coef_) node->k in fixed_nodes, or -1 if not fixed
 
@@ -348,4 +387,24 @@ class SyncedVBDSolver : public SolverBase {
   // cuBLAS handle
   cublasHandle_t cublas_handle_;
   double *d_norm_temp_;
+
+  // CUDA Graphs (host-only)
+  void DestroyCudaGraphs();
+  // Returns true if the graph was re-captured, which also executes the captured
+  // work once on the capture stream.
+  bool EnsureInnerSweepGraph(int threads, int blocks_p);
+  // Returns true if the graph was re-captured, which also executes the captured
+  // work once on the capture stream.
+  bool EnsurePostOuterGraph(int threads, int blocks_coef);
+
+  int graph_threads_;
+  int graph_blocks_coef_;
+  int graph_blocks_p_;
+  int graph_n_colors_;
+  int graph_n_constraints_;
+  int graph_color_group_size_;
+  int graph_n_color_groups_;
+  cudaStream_t graph_capture_stream_;
+  cudaGraphExec_t inner_sweep_graph_exec_;
+  cudaGraphExec_t post_outer_graph_exec_;
 };

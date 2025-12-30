@@ -1,6 +1,8 @@
 bazel-*
+.bazel_*
 .vscode
 __pycache__/
 *.py[cod]
 test-scripts/hydropatch_proto/.venv
 temp/*
+node_x_history*.csv

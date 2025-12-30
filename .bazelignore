@@ -1,3 +1,11 @@
 test-scripts
 .bazel_output
+.bazel_output_base
+.bazel_home
+.bazel_tmp
 .bazel_user_root
+.bazel_root
+bazel-bin
+bazel-out
+bazel-testlogs
+bazel-Total-Lagrangian-FEA
