@@ -213,6 +213,11 @@ __global__ void vbd_update_color_block_kernel(GPU_FEAT10_Data *d_data,
     const double mu     = d_data->mu();
 
     constexpr int n_qp = Quadrature::N_QP_T10_5;
+    double wq_cache[n_qp];
+#pragma unroll
+    for (int q = 0; q < n_qp; ++q) {
+      wq_cache[q] = d_data->tet5pt_weights(q);
+    }
     const int work_count = n_inc * n_qp;
 
     for (int w = tid; w < work_count; w += blockDim.x) {
@@ -228,7 +233,7 @@ __global__ void vbd_update_color_block_kernel(GPU_FEAT10_Data *d_data,
       const double ha2 = d_data->grad_N_ref(elem_idx, qp_idx)(local_node, 2);
 
       const double detJ = d_data->detJ_ref(elem_idx, qp_idx);
-      const double wq   = d_data->tet5pt_weights(qp_idx);
+      const double wq   = wq_cache[qp_idx];
       const double dV   = detJ * wq;
 
       // Internal force: (P @ h_a) * dV
@@ -582,6 +587,13 @@ __global__ void vbd_update_dual(ElementType *d_data,
   double lambda = d_data->lambda();
   double mu = d_data->mu();
 
+  constexpr int n_qp = Quadrature::N_QP_T10_5;
+  double wq_cache[n_qp];
+#pragma unroll
+  for (int q = 0; q < n_qp; ++q) {
+    wq_cache[q] = d_data->tet5pt_weights(q);
+  }
+
   // Loop over incident elements to compute f_int_i
   for (int inc_idx = inc_start; inc_idx < inc_end; ++inc_idx) {
     int2 inc = d_solver->incidence_data()[inc_idx];
@@ -593,7 +605,7 @@ __global__ void vbd_update_dual(ElementType *d_data,
       global_nodes[n] = d_data->element_connectivity()(elem_idx, n);
     }
 
-    for (int qp_idx = 0; qp_idx < Quadrature::N_QP_T10_5; ++qp_idx) {
+    for (int qp_idx = 0; qp_idx < n_qp; ++qp_idx) {
       // Compute F
       double F[3][3] = {{0.0}};
       for (int a = 0; a < 10; ++a) {
@@ -663,7 +675,7 @@ __global__ void vbd_update_dual(ElementType *d_data,
       h_a[2] = d_data->grad_N_ref(elem_idx, qp_idx)(local_node, 2);
 
       double detJ = d_data->detJ_ref(elem_idx, qp_idx);
-      double wq = d_data->tet5pt_weights(qp_idx);
+      double wq = wq_cache[qp_idx];
       double dV = detJ * wq;
 
       // f_int contribution
