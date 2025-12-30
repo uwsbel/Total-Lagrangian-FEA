@@ -254,6 +254,28 @@ cuda_library(
     visibility = ["//visibility:public"],
 )
 
+cuda_library(
+    name = "solvers_syncedvbd",
+    srcs = [
+        "lib_src/solvers/SyncedVBD.cu",
+    ],
+    hdrs = [
+        "lib_src/solvers/SolverBase.h",
+        "lib_src/solvers/SyncedVBD.cuh",
+    ],
+    copts = ["--std=c++17", "-O3", "--use_fast_math", "--extra-device-vectorization"],
+    linkopts = ["-lcublas"],
+    deps = [
+        ":ANCF3243Data",
+        ":ANCF3443Data",
+        ":FEAT10Data",
+        ":cuda_utils",
+        ":cpu_utils",
+        "@eigen//:eigen",
+    ],
+    visibility = ["//visibility:public"],
+)
+
 # ========================================
 
 # ========================================
@@ -457,6 +479,24 @@ cc_binary(
         ":solvers_syncednesterov",
         ":solvers_syncedadamw",
         ":solvers_syncednewton",
+        "@eigen//:eigen",
+    ],
+)
+
+cc_binary(
+    name = "test_feat10_resolution_vbd",
+    srcs = ["lib_bin/test_feat10_resolution_vbd.cc"],
+    copts = ["--std=c++17"],
+    linkopts = [
+        "-L/usr/local/cuda/lib64",
+        "-lcublas",
+        "-lcusparse",
+        "-lcudart",
+    ],
+    deps = [
+        ":FEAT10Data",
+        ":cpu_utils",
+        ":solvers_syncedvbd",
         "@eigen//:eigen",
     ],
 )

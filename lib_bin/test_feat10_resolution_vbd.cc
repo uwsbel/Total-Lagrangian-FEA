@@ -1,14 +1,13 @@
 /**
- * FEAT10 Beam Resolution Study (Newton)
+ * FEAT10 Beam Resolution Study (VBD)
  *
  * Author: Json Zhou
  * Email:  zzhou292@wisc.edu
  *
- * This driver mirrors the FEAT10 AdamW resolution study but advances the
- * cantilever beam using the synchronized Newton solver. It varies mesh
- * resolution, applies distributed end loads, performs Hessian analysis, and
- * records the displacement history of a target node to CSV to compare
- * Newton-based dynamics across resolutions.
+ * This driver mirrors the FEAT10 Newton resolution study but advances the
+ * cantilever beam using the synchronized VBD (Vertex Block Descent) solver.
+ * It varies mesh resolution, applies distributed end loads, and records the
+ * displacement history of a target node to CSV.
  */
 
 #include <cuda_runtime.h>
@@ -20,7 +19,7 @@
 
 #include "../../lib_utils/quadrature_utils.h"
 #include "../lib_src/elements/FEAT10Data.cuh"
-#include "../lib_src/solvers/SyncedNewton.cuh"
+#include "../lib_src/solvers/SyncedVBD.cuh"
 #include "../lib_utils/cpu_utils.h"
 
 const double E    = 7e8;   // Young's modulus
@@ -38,7 +37,7 @@ int main() {
   int plot_target_node;
   int n_nodes, n_elems;
 
-  MESH_RESOLUTION resolution = RES_8;
+  MESH_RESOLUTION resolution = RES_4;  // Use moderate resolution for testing
 
   MATERIAL_MODEL material = MAT_SVK;
 
@@ -83,12 +82,6 @@ int main() {
   std::cout << "mesh read nodes: " << n_nodes << std::endl;
   std::cout << "mesh read elements: " << n_elems << std::endl;
 
-  // print nodes and elements matrix
-  std::cout << "nodes matrix:" << std::endl;
-  std::cout << nodes << std::endl;
-  std::cout << "elements matrix:" << std::endl;
-  std::cout << elements << std::endl;
-
   GPU_FEAT10_Data gpu_t10_data(n_elems, n_nodes);
 
   std::cout << "gpu_t10_data created" << std::endl;
@@ -122,18 +115,14 @@ int main() {
   }
 
   // print fixed nodes
-  std::cout << "Fixed nodes (z == 0):" << std::endl;
-  for (int i = 0; i < h_fixed_nodes.size(); ++i) {
-    std::cout << h_fixed_nodes(i) << " ";
-  }
-  std::cout << std::endl;
+  std::cout << "Fixed nodes (x == 0): " << h_fixed_nodes.size() << " nodes"
+            << std::endl;
 
   // Set fixed nodes
   gpu_t10_data.SetNodalFixed(h_fixed_nodes);
 
   // set external force
-  // set 5000N force in x direction for all nodes with x = 3(count all number of
-  // nodes and equally distribute)
+  // set 5000N force in x direction for all nodes with x = 3
   Eigen::VectorXd h_f_ext(gpu_t10_data.get_n_coef() * 3);
   h_f_ext.setZero();
 
@@ -184,91 +173,60 @@ int main() {
   // =========================================================================
 
   gpu_t10_data.CalcDnDuPre();
-
   std::cout << "gpu_t10_data dndu pre complete" << std::endl;
 
-  // 2. Retrieve results
-  // std::vector<std::vector<Eigen::MatrixXd>> ref_grads;
-  // gpu_t10_data.RetrieveDnDuPreToCPU(ref_grads);
-
-  // std::cout << "ref_grads:" << std::endl;
-  // for (size_t i = 0; i < ref_grads.size(); i++) {
-  //   for (size_t j = 0; j < ref_grads[i].size(); j++) {
-  //     std::cout << ref_grads[i][j] << std::endl;
-  //   }
-  // }
-  // std::cout << "done retrieving ref_grads" << std::endl;
-
-  // std::vector<std::vector<double>> detJ;
-  // gpu_t10_data.RetrieveDetJToCPU(detJ);
-
-  // std::cout << "detJ:" << std::endl;
-  // for (size_t i = 0; i < detJ.size(); i++) {
-  //   for (size_t j = 0; j < detJ[i].size(); j++) {
-  //     std::cout << detJ[i][j] << std::endl;
-  //   }
-  // }
-  // std::cout << "done retrieving detJ" << std::endl;
-
   gpu_t10_data.CalcMassMatrix();
+  std::cout << "done CalcMassMatrix" << std::endl;
 
   gpu_t10_data.CalcConstraintData();
-
   std::cout << "done CalcConstraintData" << std::endl;
 
   gpu_t10_data.ConvertToCSR_ConstraintJacT();
-
   std::cout << "done ConvertToCSR_ConstraintJacT" << std::endl;
 
   gpu_t10_data.BuildConstraintJacobianCSR();
-
   std::cout << "done BuildConstraintJacobianCSR" << std::endl;
 
   // calculate p
   gpu_t10_data.CalcP();
-
   std::cout << "done CalcP" << std::endl;
-
-  // retrieve p
-  // std::vector<std::vector<Eigen::MatrixXd>> p_from_F;
-  // gpu_t10_data.RetrievePFromFToCPU(p_from_F);
-
-  // std::cout << "P matrices (First Piola-Kirchhoff stress):" << std::endl;
-  // for (size_t elem = 0; elem < p_from_F.size(); elem++) {
-  //   std::cout << "Element " << elem << ":" << std::endl;
-  //   for (size_t qp = 0; qp < p_from_F[elem].size(); qp++) {
-  //     std::cout << "  Quadrature Point " << qp << ":" << std::endl;
-  //     std::cout << p_from_F[elem][qp] << std::endl;
-  //   }
-  // }
-  // std::cout << "done retrieving P matrices" << std::endl;
 
   // calculate internal force
   gpu_t10_data.CalcInternalForce();
   std::cout << "done CalcInternalForce" << std::endl;
 
-  // retrieve internal force
-  // Eigen::VectorXd f_int;
-  // gpu_t10_data.RetrieveInternalForceToCPU(f_int);
-  // std::cout << "Internal force vector (size: " << f_int.size()
-  //           << "):" << std::endl;
-  // std::cout << f_int.transpose() << std::endl;
-  // std::cout << "done retrieving internal force vector" << std::endl;
+  // Create VBD solver with parameters
+  // VBD parameters: inner_tol, inner_rtol, outer_tol, rho, max_outer, max_inner,
+  //                 time_step, omega, hess_eps, convergence_check_interval
+  SyncedVBDParams params = {
+      1e-4,   // inner_tol
+      1e-4,   // inner_rtol
+      1e-4,   // outer_tol
+      1e14,   // rho (ALM penalty)
+      5,      // max_outer
+      500,     // max_inner (VBD sweeps per outer iteration)
+      1e-3,   // time_step
+      1.8,    // omega (relaxation factor)
+      1e-12,  // hess_eps (regularization)
+      10       // convergence_check_interval
+  };
 
-  SyncedNewtonParams params = {1e-4, 1e-4, 1e-4, 1e14, 5, 10, 1e-3};
-  SyncedNewtonSolver solver(&gpu_t10_data, gpu_t10_data.get_n_constraint());
+  SyncedVBDSolver solver(&gpu_t10_data, gpu_t10_data.get_n_constraint());
   solver.Setup();
   solver.SetParameters(&params);
 
-  // Vector to store x position of node 353 at each step
+  // Initialize coloring (done once before simulation)
+  solver.InitializeColoring();
+  solver.InitializeMassDiagBlocks();
+
+  // Vector to store x position of target node at each step
   std::vector<double> node_x_history;
 
-  solver.AnalyzeHessianSparsity();
-  solver.SetFixedSparsityPattern(true);  // Enable analysis reuse for fixed structure
+  std::cout << "\n=== Starting VBD simulation ===" << std::endl;
 
   for (int i = 0; i < 50; i++) {
-    // solver.Solve();
     solver.Solve();
+
     // Retrieve current positions
     Eigen::VectorXd x12_current, y12_current, z12_current;
     gpu_t10_data.RetrievePositionToCPU(x12_current, y12_current, z12_current);
@@ -281,7 +239,7 @@ int main() {
   }
 
   // Write to CSV file
-  std::ofstream csv_file("node_x_history.csv");
+  std::ofstream csv_file("node_x_history_vbd.csv");
   csv_file << std::fixed << std::setprecision(17);
   csv_file << "step,x_position\n";
   for (size_t i = 0; i < node_x_history.size(); i++) {
@@ -289,38 +247,23 @@ int main() {
   }
   csv_file.close();
   std::cout << "Wrote node " << plot_target_node
-            << " x-position history to node_x_history.csv" << std::endl;
+            << " x-position history to node_x_history_vbd.csv" << std::endl;
 
-  // // Set highest precision for cout
+  // Set highest precision for cout
   std::cout << std::fixed << std::setprecision(17);
 
   Eigen::VectorXd x12, y12, z12;
   gpu_t10_data.RetrievePositionToCPU(x12, y12, z12);
 
-  std::cout << "x12:" << std::endl;
-  for (int i = 0; i < x12.size(); i++) {
-    std::cout << x12(i) << " ";
+  std::cout << "\nFinal positions (first 10 nodes):" << std::endl;
+  for (int i = 0; i < std::min(10, n_nodes); i++) {
+    std::cout << "Node " << i << ": (" << x12(i) << ", " << y12(i) << ", "
+              << z12(i) << ")" << std::endl;
   }
-
-  std::cout << std::endl;
-
-  std::cout << "y12:" << std::endl;
-  for (int i = 0; i < y12.size(); i++) {
-    std::cout << y12(i) << " ";
-  }
-
-  std::cout << std::endl;
-
-  std::cout << "z12:" << std::endl;
-  for (int i = 0; i < z12.size(); i++) {
-    std::cout << z12(i) << " ";
-  }
-
-  std::cout << std::endl;
 
   gpu_t10_data.Destroy();
 
-  std::cout << "gpu_t10_data destroyed" << std::endl;
+  std::cout << "\ngpu_t10_data destroyed" << std::endl;
 
   return 0;
 }
