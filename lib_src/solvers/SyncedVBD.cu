@@ -32,6 +32,11 @@
 
 namespace cg = cooperative_groups;
 
+namespace {
+// Thread block size used by VBD kernels and captured CUDA graphs.
+constexpr int kVbdBlockThreads = 64;
+}  // namespace
+
 // =====================================================
 // Device Helper Functions
 // =====================================================
@@ -944,12 +949,35 @@ void SyncedVBDSolver::InitializeColoring() {
     std::vector<uint64_t> conflict_bits(
         static_cast<size_t>(n_colors_) * static_cast<size_t>(n_words), 0ULL);
 
+    auto conflict_word_index = [&](int a, int b) -> size_t {
+      if (a < 0 || a >= n_colors_ || b < 0 || b >= n_colors_) {
+        std::cerr << "Color grouping error: color index out of range (a=" << a
+                  << ", b=" << b << ", n_colors=" << n_colors_ << ")"
+                  << std::endl;
+        exit(EXIT_FAILURE);
+      }
+      const int word = b >> 6;
+      if (word < 0 || word >= n_words) {
+        std::cerr << "Color grouping error: word index out of range (word="
+                  << word << ", n_words=" << n_words << ", b=" << b << ")"
+                  << std::endl;
+        exit(EXIT_FAILURE);
+      }
+      const size_t idx = static_cast<size_t>(a) * static_cast<size_t>(n_words) +
+                         static_cast<size_t>(word);
+      if (idx >= conflict_bits.size()) {
+        std::cerr << "Color grouping error: conflict_bits index out of range (idx="
+                  << idx << ", size=" << conflict_bits.size() << ")"
+                  << std::endl;
+        exit(EXIT_FAILURE);
+      }
+      return idx;
+    };
+
     auto set_conflict = [&](int a, int b) {
       if (a == b) return;
-      const int word = b >> 6;
       const int bit = b & 63;
-      conflict_bits[static_cast<size_t>(a) * static_cast<size_t>(n_words) +
-                    static_cast<size_t>(word)] |= (1ULL << bit);
+      conflict_bits[conflict_word_index(a, b)] |= (1ULL << bit);
     };
 
     const int n_elem = h_connectivity.rows();
@@ -967,11 +995,9 @@ void SyncedVBDSolver::InitializeColoring() {
     }
 
     auto conflicts = [&](int a, int b) -> bool {
-      const int word = b >> 6;
       const int bit = b & 63;
       const uint64_t mask =
-          conflict_bits[static_cast<size_t>(a) * static_cast<size_t>(n_words) +
-                        static_cast<size_t>(word)];
+          conflict_bits[conflict_word_index(a, b)];
       return (mask & (1ULL << bit)) != 0ULL;
     };
 
@@ -1250,7 +1276,6 @@ bool SyncedVBDSolver::EnsureInnerSweepGraph(int threads, int blocks_p) {
     exit(EXIT_FAILURE);
   }
 
-  constexpr int kVbdBlockThreads = 64;
   if (threads != kVbdBlockThreads) {
     std::cerr << "CUDA graph init expects threads=" << kVbdBlockThreads
               << " for vbd_update_color_block_kernel<" << kVbdBlockThreads
@@ -1499,7 +1524,6 @@ void SyncedVBDSolver::OneStepVBD() {
   HANDLE_ERROR(cudaEventCreate(&start));
   HANDLE_ERROR(cudaEventCreate(&stop));
 
-  constexpr int kVbdBlockThreads = 64;
   const int threads = kVbdBlockThreads;
   const int n_dofs = n_coef_ * 3;
 
