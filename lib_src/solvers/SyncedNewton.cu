@@ -669,6 +669,21 @@ __global__ void cudss_solve_compute_p(ElementType *d_data,
   }
 }
 
+template <int Material>
+__global__ void cudss_solve_compute_p_feat10(
+    GPU_FEAT10_Data *d_data, SyncedNewtonSolver *d_newton_solver) {
+  int tid = blockIdx.x * blockDim.x + threadIdx.x;
+
+  if (tid < d_newton_solver->get_n_beam() * d_newton_solver->gpu_n_total_qp()) {
+    int idx      = tid;
+    int elem_idx = idx / d_newton_solver->gpu_n_total_qp();
+    int qp_idx   = idx % d_newton_solver->gpu_n_total_qp();
+    compute_p_impl<Material>(elem_idx, qp_idx, d_data,
+                             d_newton_solver->v_guess().data(),
+                             d_newton_solver->solver_time_step());
+  }
+}
+
 template <typename ElementType>
 __global__ void cudss_solve_clear_internal_force(ElementType *d_data) {
   int tid = blockIdx.x * blockDim.x + threadIdx.x;
@@ -962,8 +977,15 @@ void SyncedNewtonSolver::OneStepNewtonCuDSS() {
       for (int newton_iter = 0; newton_iter < h_max_inner_; ++newton_iter) {
         std::cout << "  Newton iter " << newton_iter << std::endl;
 
-        cudss_solve_compute_p<<<numBlocks_compute_p, threadsPerBlock>>>(
-            typed_data, d_newton_solver_);
+        if (h_material_model_ == MATERIAL_MODEL_MOONEY_RIVLIN) {
+          cudss_solve_compute_p_feat10<MATERIAL_MODEL_MOONEY_RIVLIN>
+              <<<numBlocks_compute_p, threadsPerBlock>>>(typed_data,
+                                                         d_newton_solver_);
+        } else {
+          cudss_solve_compute_p_feat10<MATERIAL_MODEL_SVK>
+              <<<numBlocks_compute_p, threadsPerBlock>>>(typed_data,
+                                                         d_newton_solver_);
+        }
 
         cudss_solve_clear_internal_force<<<numBlocks_clear_internal_force,
                                            threadsPerBlock>>>(typed_data);

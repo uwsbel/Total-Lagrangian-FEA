@@ -250,6 +250,9 @@ int main() {
   std::cout << "done retrieving internal force vector" << std::endl;
 
   SyncedNewtonParams params = {1e-4, 1e-4, 1e-4, 1e14, 5, 10, 1e-3};
+  params.material_model =
+      (material == MAT_MOONEY_RIVLIN) ? MATERIAL_MODEL_MOONEY_RIVLIN
+                                      : MATERIAL_MODEL_SVK;
   SyncedNewtonSolver solver(&gpu_t10_data, gpu_t10_data.get_n_constraint());
   solver.Setup();
   solver.SetParameters(&params);

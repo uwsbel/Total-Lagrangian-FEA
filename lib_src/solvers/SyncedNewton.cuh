@@ -30,6 +30,7 @@ struct SyncedNewtonParams {
   double inner_atol, inner_rtol, outer_tol, rho;
   int max_outer, max_inner;
   double time_step;
+  int material_model = MATERIAL_MODEL_SVK;
 };
 
 class SyncedNewtonSolver : public SolverBase {
@@ -209,6 +210,7 @@ class SyncedNewtonSolver : public SolverBase {
 
     h_max_outer_ = p->max_outer;
     h_max_inner_ = p->max_inner;
+    h_material_model_ = p->material_model;
 
     cudaMemcpy(d_inner_atol_, &p->inner_atol, sizeof(double),
                cudaMemcpyHostToDevice);
@@ -368,6 +370,7 @@ class SyncedNewtonSolver : public SolverBase {
       *d_solver_rho_;
   double h_inner_atol_, h_outer_tol_, h_inner_rtol_;
   int h_max_outer_, h_max_inner_;
+  int h_material_model_ = MATERIAL_MODEL_SVK;
   int *d_max_inner_, *d_max_outer_;
   double *d_delta_v_, *d_r_;
   double *d_r_dot_r_;                // Scalar for dot product storage
