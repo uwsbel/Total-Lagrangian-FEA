@@ -148,8 +148,6 @@ __device__ __forceinline__ void ancf3443_db_dzeta(double xi, double eta,
                                                   double *out) {
   double u = 0.5 * L * xi;
   double v = 0.5 * W * eta;
-  // NOTE: removed for performance and suppress warning
-  // double w = 0.5 * H * zeta;
 
   // db_dw as in your Python code
   out[0]  = 0.0;
@@ -169,7 +167,7 @@ __device__ __forceinline__ void ancf3443_db_dzeta(double xi, double eta,
   out[14] = 0.0;
   out[15] = 0.0;
 
-// Chain rule: db/dzeta = 0.5 * H * db/dw
+  // Chain rule: db/dzeta = 0.5 * H * db/dw
 #pragma unroll
   for (int i = 0; i < Quadrature::N_SHAPE_3443; ++i)
     out[i] *= 0.5 * H;
@@ -244,7 +242,7 @@ __device__ __forceinline__ void compute_p(int elem_idx, int qp_idx,
     Eigen::Map<Eigen::VectorXd> y_local(y_local_arr, Quadrature::N_SHAPE_3443);
     Eigen::Map<Eigen::VectorXd> z_local(z_local_arr, Quadrature::N_SHAPE_3443);
 
-    double e[Quadrature::N_SHAPE_3443][3]; 
+    double e[Quadrature::N_SHAPE_3443][3];
     #pragma unroll
     for (int i = 0; i < Quadrature::N_SHAPE_3443; i++)
     {
@@ -369,7 +367,7 @@ __device__ __forceinline__ void compute_p(int elem_idx, int qp_idx,
           }
 
     double FtF[3][3] = {0.0};
-    
+
     #pragma unroll
     for (int i = 0; i < 3; ++i)
         #pragma unroll
@@ -490,6 +488,112 @@ __device__ __forceinline__ void compute_constraint_data(
         d_data->z12()(d_data->fixed_nodes()[thread_idx]) -
         d_data->z12_jac()(d_data->fixed_nodes()[thread_idx]);
   }
+}
+
+__device__ __forceinline__ void vbd_accumulate_residual_and_hessian_diag(
+    int elem_idx, int qp_idx, int local_node, GPU_ANCF3443_Data *d_data,
+    double dt, double &r0, double &r1, double &r2, double &h00, double &h01,
+    double &h02, double &h10, double &h11, double &h12, double &h20,
+    double &h21, double &h22) {
+  const double ha0 = d_data->ds_du_pre(qp_idx)(local_node, 0);
+  const double ha1 = d_data->ds_du_pre(qp_idx)(local_node, 1);
+  const double ha2 = d_data->ds_du_pre(qp_idx)(local_node, 2);
+
+  const double geom = (d_data->L() * d_data->W() * d_data->H()) / 8.0;
+  const double scale =
+      d_data->weight_xi()(qp_idx / (Quadrature::N_QP_4 * Quadrature::N_QP_3)) *
+      d_data->weight_eta()((qp_idx / Quadrature::N_QP_3) % Quadrature::N_QP_4) *
+      d_data->weight_zeta()(qp_idx % Quadrature::N_QP_3);
+  const double dV = scale * geom;
+
+  const double P00 = d_data->P(elem_idx, qp_idx)(0, 0);
+  const double P01 = d_data->P(elem_idx, qp_idx)(0, 1);
+  const double P02 = d_data->P(elem_idx, qp_idx)(0, 2);
+  const double P10 = d_data->P(elem_idx, qp_idx)(1, 0);
+  const double P11 = d_data->P(elem_idx, qp_idx)(1, 1);
+  const double P12 = d_data->P(elem_idx, qp_idx)(1, 2);
+  const double P20 = d_data->P(elem_idx, qp_idx)(2, 0);
+  const double P21 = d_data->P(elem_idx, qp_idx)(2, 1);
+  const double P22 = d_data->P(elem_idx, qp_idx)(2, 2);
+
+  r0 += (P00 * ha0 + P01 * ha1 + P02 * ha2) * dV;
+  r1 += (P10 * ha0 + P11 * ha1 + P12 * ha2) * dV;
+  r2 += (P20 * ha0 + P21 * ha1 + P22 * ha2) * dV;
+
+  const double F00 = d_data->F(elem_idx, qp_idx)(0, 0);
+  const double F01 = d_data->F(elem_idx, qp_idx)(0, 1);
+  const double F02 = d_data->F(elem_idx, qp_idx)(0, 2);
+  const double F10 = d_data->F(elem_idx, qp_idx)(1, 0);
+  const double F11 = d_data->F(elem_idx, qp_idx)(1, 1);
+  const double F12 = d_data->F(elem_idx, qp_idx)(1, 2);
+  const double F20 = d_data->F(elem_idx, qp_idx)(2, 0);
+  const double F21 = d_data->F(elem_idx, qp_idx)(2, 1);
+  const double F22 = d_data->F(elem_idx, qp_idx)(2, 2);
+
+  const double trFtF = F00 * F00 + F01 * F01 + F02 * F02 + F10 * F10 +
+                       F11 * F11 + F12 * F12 + F20 * F20 + F21 * F21 +
+                       F22 * F22;
+  const double trE = 0.5 * (trFtF - 3.0);
+
+  const double FFT00 = F00 * F00 + F01 * F01 + F02 * F02;
+  const double FFT01 = F00 * F10 + F01 * F11 + F02 * F12;
+  const double FFT02 = F00 * F20 + F01 * F21 + F02 * F22;
+  const double FFT10 = FFT01;
+  const double FFT11 = F10 * F10 + F11 * F11 + F12 * F12;
+  const double FFT12 = F10 * F20 + F11 * F21 + F12 * F22;
+  const double FFT20 = FFT02;
+  const double FFT21 = FFT12;
+  const double FFT22 = F20 * F20 + F21 * F21 + F22 * F22;
+
+  const double Fh0 = F00 * ha0 + F01 * ha1 + F02 * ha2;
+  const double Fh1 = F10 * ha0 + F11 * ha1 + F12 * ha2;
+  const double Fh2 = F20 * ha0 + F21 * ha1 + F22 * ha2;
+
+  const double hij        = ha0 * ha0 + ha1 * ha1 + ha2 * ha2;
+  const double Fh_dot_Fh  = Fh0 * Fh0 + Fh1 * Fh1 + Fh2 * Fh2;
+  const double weight_k   = dt * dV;
+
+  double Kblock[3][3];
+  if (d_data->material_model() == MATERIAL_MODEL_MOONEY_RIVLIN) {
+    double F_local[3][3] = {{F00, F01, F02}, {F10, F11, F12}, {F20, F21, F22}};
+    double A_mr[3][3][3][3];
+    mr_compute_tangent_tensor(F_local, d_data->mu10(), d_data->mu01(),
+                              d_data->kappa(), A_mr);
+#pragma unroll
+    for (int d = 0; d < 3; ++d) {
+#pragma unroll
+      for (int e = 0; e < 3; ++e) {
+        double sum = 0.0;
+#pragma unroll
+        for (int J = 0; J < 3; ++J) {
+#pragma unroll
+          for (int L = 0; L < 3; ++L) {
+            const double giJ = (J == 0 ? ha0 : (J == 1 ? ha1 : ha2));
+            const double giL = (L == 0 ? ha0 : (L == 1 ? ha1 : ha2));
+            sum += A_mr[d][J][e][L] * giJ * giL;
+          }
+        }
+        Kblock[d][e] = sum * weight_k;
+      }
+    }
+  } else {
+    const double Fh_vec[3] = {Fh0, Fh1, Fh2};
+    const double FFT[3][3] = {{FFT00, FFT01, FFT02},
+                              {FFT10, FFT11, FFT12},
+                              {FFT20, FFT21, FFT22}};
+    svk_compute_tangent_block(Fh_vec, Fh_vec, hij, trE, Fh_dot_Fh, FFT,
+                              d_data->lambda(), d_data->mu(), weight_k, Kblock);
+  }
+
+  h00 += Kblock[0][0];
+  h01 += Kblock[0][1];
+  h02 += Kblock[0][2];
+  h10 += Kblock[1][0];
+  h11 += Kblock[1][1];
+  h12 += Kblock[1][2];
+  h20 += Kblock[2][0];
+  h21 += Kblock[2][1];
+  h22 += Kblock[2][2];
 }
 
 __device__ __forceinline__ void clear_internal_force(

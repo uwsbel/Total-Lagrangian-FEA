@@ -1,65 +1,39 @@
 /**
- * FEAT10 Soft Beam Resolution Study (AdamW)
+ * FEAT10 Cube Nesterov Test
  *
  * Author: Json Zhou
  * Email:  zzhou292@wisc.edu
  *
- * This variant of the FEAT10 beam resolution test uses soft TPU/EVA-like
- * material parameters and smaller end loads, advanced with the synchronized
- * AdamW solver. It studies how mesh resolution (RES_0, RES_2, RES_4)
- * affects the deflection history of a tracked node and writes its motion to
- * CSV for comparison.
+ * This driver loads a FEAT10 cube mesh, clamps nodes on the base plane,
+ * applies a point load, and advances the system using the synchronized
+ * Nesterov solver. It is intended to test FEAT10 mass and internal force
+ * assembly together with the Nesterov integrator on a simple solid block.
  */
 
 #include <cuda_runtime.h>
 
 #include <Eigen/Dense>
-#include <fstream>
 #include <iomanip>
 #include <iostream>
 
 #include "../../lib_utils/quadrature_utils.h"
-#include "../lib_src/elements/FEAT10Data.cuh"
-#include "../lib_src/solvers/SyncedAdamW.cuh"
-#include "../lib_utils/cpu_utils.h"
+#include "../../lib_src/elements/FEAT10Data.cuh"
+#include "../../lib_src/solvers/SyncedNesterov.cuh"
+#include "../../lib_utils/cpu_utils.h"
 
-// TPU/EVA syntactic elastomer foam (dense elastomer + hollow
-// microspheres)
-// this struggles at RES_0
-const double E    = 5.0e7;   // Pa
-const double nu   = 0.28;    // -
-const double rho0 = 1200.0;  // kg/m^3
-
-enum MESH_RESOLUTION { RES_0, RES_2, RES_4 };
+const double E    = 7e8;   // Young's modulus
+const double nu   = 0.33;  // Poisson's ratio
+const double rho0 = 2700;  // Density
 
 int main() {
   // Read mesh data
   Eigen::MatrixXd nodes;
   Eigen::MatrixXi elements;
-  int plot_target_node;
-  int n_nodes, n_elems;
 
-  MESH_RESOLUTION resolution = RES_0;
-
-  if (resolution == RES_0) {
-    n_nodes = ANCFCPUUtils::FEAT10_read_nodes(
-        "data/meshes/T10/resolution/beam_3x2x1_res0.1.node", nodes);
-    n_elems = ANCFCPUUtils::FEAT10_read_elements(
-        "data/meshes/T10/resolution/beam_3x2x1_res0.1.ele", elements);
-    plot_target_node = 23;
-  } else if (resolution == RES_2) {
-    n_nodes = ANCFCPUUtils::FEAT10_read_nodes(
-        "data/meshes/T10/resolution/beam_3x2x1_res2.1.node", nodes);
-    n_elems = ANCFCPUUtils::FEAT10_read_elements(
-        "data/meshes/T10/resolution/beam_3x2x1_res2.1.ele", elements);
-    plot_target_node = 89;
-  } else if (resolution == RES_4) {
-    n_nodes = ANCFCPUUtils::FEAT10_read_nodes(
-        "data/meshes/T10/resolution/beam_3x2x1_res4.1.node", nodes);
-    n_elems = ANCFCPUUtils::FEAT10_read_elements(
-        "data/meshes/T10/resolution/beam_3x2x1_res4.1.ele", elements);
-    plot_target_node = 353;
-  }
+  int n_nodes =
+      ANCFCPUUtils::FEAT10_read_nodes("data/meshes/T10/cube.1.node", nodes);
+  int n_elems = ANCFCPUUtils::FEAT10_read_elements("data/meshes/T10/cube.1.ele",
+                                                   elements);
 
   std::cout << "mesh read nodes: " << n_nodes << std::endl;
   std::cout << "mesh read elements: " << n_elems << std::endl;
@@ -88,10 +62,10 @@ int main() {
 
   // ==========================================================================
 
-  // Find all nodes with x == 0
+  // Find all nodes with z == 0
   std::vector<int> fixed_node_indices;
-  for (int i = 0; i < h_x12.size(); ++i) {
-    if (std::abs(h_x12(i)) < 1e-8) {  // tolerance for floating point
+  for (int i = 0; i < h_z12.size(); ++i) {
+    if (std::abs(h_z12(i)) < 1e-8) {  // tolerance for floating point
       fixed_node_indices.push_back(i);
     }
   }
@@ -113,27 +87,10 @@ int main() {
   gpu_t10_data.SetNodalFixed(h_fixed_nodes);
 
   // set external force
-  // set 5000N force in x direction for all nodes with x = 3(count all number of
-  // nodes and equally distribute)
   Eigen::VectorXd h_f_ext(gpu_t10_data.get_n_coef() * 3);
+  // set external force applied at the end of the beam to be 0,0,3100
   h_f_ext.setZero();
-
-  // Find all nodes with x == 3
-  std::vector<int> force_node_indices;
-  for (int i = 0; i < h_x12.size(); ++i) {
-    if (std::abs(h_x12(i) - 3.0) < 1e-8) {  // tolerance for floating point
-      force_node_indices.push_back(i);
-    }
-  }
-
-  // Distribute 5000N equally across these nodes in x direction
-  if (force_node_indices.size() > 0) {
-    double force_per_node = 50.0 / force_node_indices.size();
-    for (int node_idx : force_node_indices) {
-      h_f_ext(3 * node_idx + 0) = force_per_node;  // x direction
-    }
-  }
-
+  h_f_ext(3 * 6 + 0) = 1000.0;
   gpu_t10_data.SetExternalForce(h_f_ext);
 
   // Get quadrature data from quadrature_utils.h
@@ -221,39 +178,14 @@ int main() {
   std::cout << f_int.transpose() << std::endl;
   std::cout << "done retrieving internal force vector" << std::endl;
 
-  SyncedAdamWParams params = {2e-4, 0.9,  0.999, 1e-8, 1e-4, 0.995, 1e-1,
-                              1e-6, 1e14, 5,     500,  1e-3, 20, 0.0};
-  SyncedAdamWSolver solver(&gpu_t10_data, gpu_t10_data.get_n_constraint());
+  SyncedNesterovParams params = {1.0e-8, 1e14, 1.0e-6, 1.0e-6, 5, 300, 1.0e-3};
+  SyncedNesterovSolver solver(&gpu_t10_data, gpu_t10_data.get_n_constraint());
+
   solver.Setup();
   solver.SetParameters(&params);
-
-  // Vector to store x position of node 353 at each step
-  std::vector<double> node_x_history;
-
   for (int i = 0; i < 50; i++) {
     solver.Solve();
-
-    // Retrieve current positions
-    Eigen::VectorXd x12_current, y12_current, z12_current;
-    gpu_t10_data.RetrievePositionToCPU(x12_current, y12_current, z12_current);
-
-    if (plot_target_node < x12_current.size()) {
-      node_x_history.push_back(x12_current(plot_target_node));
-      std::cout << "Step " << i << ": node " << plot_target_node
-                << " x = " << x12_current(plot_target_node) << std::endl;
-    }
   }
-
-  // Write to CSV file
-  std::ofstream csv_file("node_x_history.csv");
-  csv_file << std::fixed << std::setprecision(17);
-  csv_file << "step,x_position\n";
-  for (size_t i = 0; i < node_x_history.size(); i++) {
-    csv_file << i << "," << node_x_history[i] << "\n";
-  }
-  csv_file.close();
-  std::cout << "Wrote node " << plot_target_node
-            << " x-position history to node_x_history.csv" << std::endl;
 
   // // Set highest precision for cout
   std::cout << std::fixed << std::setprecision(17);

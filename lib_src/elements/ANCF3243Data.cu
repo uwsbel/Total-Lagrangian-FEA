@@ -98,8 +98,7 @@ __global__ void set_last_offset_3243_kernel(int *d_offsets, int n_rows,
 }
 
 // Kernel: one thread per quadrature point, computes 8x3 ds_du_pre
-__global__ void ds_du_pre_kernel(double L, double W, double H,
-                                 GPU_ANCF3243_Data *d_data) {
+__global__ void ds_du_pre_kernel(GPU_ANCF3243_Data *d_data) {
   int ixi   = blockIdx.x;
   int ieta  = blockIdx.y;
   int izeta = threadIdx.x;
@@ -109,6 +108,11 @@ __global__ void ds_du_pre_kernel(double L, double W, double H,
   double xi   = d_data->gauss_xi()(ixi);
   double eta  = d_data->gauss_eta()(ieta);
   double zeta = d_data->gauss_zeta()(izeta);
+
+  // Use the element geometry stored on device (set during Setup()).
+  const double L = d_data->L();
+  const double W = d_data->W();
+  const double H = d_data->H();
 
   double u = L * xi / 2.0;
   double v = W * eta / 2.0;
@@ -245,7 +249,7 @@ void GPU_ANCF3243_Data::CalcDsDuPre() {
   // Launch kernel
   dim3 blocks_pre(Quadrature::N_QP_3, Quadrature::N_QP_2);
   dim3 threads_pre(Quadrature::N_QP_2);
-  ds_du_pre_kernel<<<blocks_pre, threads_pre>>>(2.0, 1.0, 1.0, d_data);
+  ds_du_pre_kernel<<<blocks_pre, threads_pre>>>(d_data);
   cudaDeviceSynchronize();
 }
 
@@ -532,6 +536,20 @@ void GPU_ANCF3243_Data::ConvertToCSR_ConstraintJac() {
   is_j_csr_setup = true;
   HANDLE_ERROR(cudaMemcpy(d_data, this, sizeof(GPU_ANCF3243_Data),
                           cudaMemcpyHostToDevice));
+}
+
+void GPU_ANCF3243_Data::RetrieveConnectivityToCPU(
+    Eigen::MatrixXi &connectivity) {
+  // `d_element_connectivity` is stored as a flat row-major (n_beam × 2) array
+  // (see Setup(), which accepts a RowMajor matrix). `Eigen::MatrixXi` is
+  // column-major by default, so copying directly into it would scramble the
+  // connectivity. Use a row-major staging matrix, then assign.
+  Eigen::Matrix<int, Eigen::Dynamic, 2, Eigen::RowMajor> connectivity_row_major;
+  connectivity_row_major.resize(n_beam, 2);
+  HANDLE_ERROR(cudaMemcpy(connectivity_row_major.data(), d_element_connectivity,
+                          static_cast<size_t>(n_beam) * 2 * sizeof(int),
+                          cudaMemcpyDeviceToHost));
+  connectivity = connectivity_row_major;
 }
 
 void GPU_ANCF3243_Data::RetrieveMassCSRToCPU(std::vector<int> &offsets,

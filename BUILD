@@ -281,231 +281,53 @@ cuda_library(
 # ========================================
 # cc binary section
 cc_binary(
-    name = "test_ancf3243_nesterov",
-    srcs = ["lib_bin/test_ancf3243_nesterov.cc"],
+    name = "test_ancf3243",
+    srcs = ["lib_bin/beam_sag/test_ancf3243.cc"],
     copts = ["--std=c++17"],
     linkopts = [
         "-L/usr/local/cuda/lib64",
-        "-lcusparse",
-        "-lcudart",
-    ],
-    deps = [
-        ":ANCF3243Data",
-        ":cpu_utils",
-        ":solvers_syncednesterov",
-        ":solvers_syncedadamw",
-        ":solvers_syncednewton",
-        "@eigen//:eigen",
-        ":mesh_utils",
-    ],
-)
-
-
-cc_binary(
-    name = "test_ancf3243_newton",
-    srcs = ["lib_bin/test_ancf3243_newton.cc"],
-    copts = ["--std=c++17"],
-    linkopts = [
-        "-L/usr/local/cuda/lib64",
-        "-lcusparse",
-        "-lcudart",
-        "-lcudss",  
         "-lcublas",
-    ],
-    deps = [
-        ":ANCF3243Data",
-        ":cpu_utils",
-        ":solvers_syncednesterov",
-        ":solvers_syncedadamw",
-        ":solvers_syncednewton",
-        "@eigen//:eigen",
-        ":mesh_utils",
-    ],
-)
-
-
-cc_binary(
-    name = "test_ancf3443_nesterov",
-    srcs = ["lib_bin/test_ancf3443_nesterov.cc"],
-    copts = ["--std=c++17"],
-    linkopts = [
-        "-L/usr/local/cuda/lib64",
         "-lcusparse",
         "-lcudart",
-    ],
-    deps = [
-        ":ANCF3443Data",
-        ":cpu_utils",
-        ":solvers_syncednesterov",
-        ":solvers_syncedadamw",
-        ":solvers_syncednewton",
-        "@eigen//:eigen",
-    ],
-)
-
-cc_binary(
-    name = "test_ancf3243_adamw",
-    srcs = ["lib_bin/test_ancf3243_adamw.cc"],
-    copts = ["--std=c++17"],
-    linkopts = [
-        "-L/usr/local/cuda/lib64",
-        "-lcusparse",
-        "-lcudart",
+        "-lcudss",
     ],
     deps = [
         ":ANCF3243Data",
         ":cpu_utils",
         ":mesh_utils",
-        ":solvers_syncednesterov",
-        ":solvers_syncedadamw",
-        ":solvers_syncednewton",
-        "@eigen//:eigen",
-    ],
-)
-
-cc_binary(
-    name = "test_ancf3443_adamw",
-    srcs = ["lib_bin/test_ancf3443_adamw.cc"],
-    copts = ["--std=c++17"],
-    linkopts = [
-        "-L/usr/local/cuda/lib64",
-        "-lcusparse",
-        "-lcudart",
-    ],
-    deps = [
-        ":ANCF3443Data",
-        ":cpu_utils",
-        ":solvers_syncednesterov",
-        ":solvers_syncedadamw",
-        ":solvers_syncednewton",
-        "@eigen//:eigen",
-    ],
-)
-
-cc_binary(
-    name = "test_ancf3443_newton",
-    srcs = ["lib_bin/test_ancf3443_newton.cc"],
-    copts = ["--std=c++17"],
-    linkopts = [
-        "-L/usr/local/cuda/lib64",
-        "-lcusparse",
-        "-lcudart",
-        "-lcudss",  
-        "-lcublas",
-    ],
-    deps = [
-        ":ANCF3443Data",
-        ":cpu_utils",
-        ":solvers_syncednesterov",
-        ":solvers_syncedadamw",
-        ":solvers_syncednewton",
-        "@eigen//:eigen",
-    ],
-)
-
-
-cc_binary(
-    name = "test_feat10_adamw",
-    srcs = ["lib_bin/test_feat10_adamw.cc"],
-    copts = ["--std=c++17"],
-    linkopts = [
-        "-L/usr/local/cuda/lib64",
-        "-lcusparse",
-        "-lcudart",
-    ],
-    deps = [
-        ":FEAT10Data",
-        ":cpu_utils",
-        ":solvers_syncednesterov",
-        ":solvers_syncedadamw",
-        ":solvers_syncednewton",
-        "@eigen//:eigen",
-    ],
-)
-
-cc_binary(
-    name = "test_feat10_resolution_adamw",
-    srcs = ["lib_bin/test_feat10_resolution_adamw.cc"],
-    copts = ["--std=c++17"],
-    linkopts = [
-        "-L/usr/local/cuda/lib64",
-        "-lcusparse",
-        "-lcudart",
-    ],
-    deps = [
-        ":FEAT10Data",
-        ":cpu_utils",
-        ":solvers_syncednesterov",
-        ":solvers_syncedadamw",
-        ":solvers_syncednewton",
-        "@eigen//:eigen",
-    ],
-)
-
-cc_binary(
-    name = "test_feat10_resolution_adamw_nocoop",
-    srcs = ["lib_bin/test_feat10_resolution_adamw_nocoop.cc"],
-    copts = ["--std=c++17"],
-    linkopts = [
-        "-L/usr/local/cuda/lib64",
-        "-lcusparse",
-        "-lcudart",
-        "-lcublas",
-    ],
-    deps = [
-        ":FEAT10Data",
-        ":cpu_utils",
-        ":solvers_syncednesterov",
         ":solvers_syncedadamwnocoop",
-        ":solvers_syncednewton",
-        "@eigen//:eigen",
-    ],
-)
-
-cc_binary(
-    name = "test_feat10_resolution_newton",
-    srcs = ["lib_bin/test_feat10_resolution_newton.cc"],
-    copts = ["--std=c++17"],
-    linkopts = [
-        "-L/usr/local/cuda/lib64",
-        "-lcusparse",
-        "-lcudart",
-        "-lcudss",  
-        "-lcublas",
-    ],
-    deps = [
-        ":FEAT10Data",
-        ":cpu_utils",
         ":solvers_syncednesterov",
-        ":solvers_syncedadamw",
         ":solvers_syncednewton",
-        "@eigen//:eigen",
-    ],
-)
-
-cc_binary(
-    name = "test_feat10_resolution_vbd",
-    srcs = ["lib_bin/test_feat10_resolution_vbd.cc"],
-    copts = ["--std=c++17"],
-    linkopts = [
-        "-L/usr/local/cuda/lib64",
-        "-lcublas",
-        "-lcusparse",
-        "-lcudart",
-    ],
-    deps = [
-        ":FEAT10Data",
-        ":cpu_utils",
         ":solvers_syncedvbd",
         "@eigen//:eigen",
     ],
 )
 
-
+cc_binary(
+    name = "test_ancf3443",
+    srcs = ["lib_bin/beam_sag/test_ancf3443.cc"],
+    copts = ["--std=c++17"],
+    linkopts = [
+        "-L/usr/local/cuda/lib64",
+        "-lcublas",
+        "-lcusparse",
+        "-lcudart",
+        "-lcudss",
+    ],
+    deps = [
+        ":ANCF3443Data",
+        ":cpu_utils",
+        ":solvers_syncedadamwnocoop",
+        ":solvers_syncednesterov",
+        ":solvers_syncednewton",
+        ":solvers_syncedvbd",
+        "@eigen//:eigen",
+    ],
+)
 
 cc_binary(
-    name = "test_feat10_resolution_adamw_soft",
-    srcs = ["lib_bin/test_feat10_resolution_adamw_soft.cc"],
+    name = "test_feat10_adamw",
+    srcs = ["lib_bin/beam_sag/test_feat10_adamw.cc"],
     copts = ["--std=c++17"],
     linkopts = [
         "-L/usr/local/cuda/lib64",
@@ -522,10 +344,29 @@ cc_binary(
     ],
 )
 
-
+cc_binary(
+    name = "test_feat10_resolution",
+    srcs = ["lib_bin/beam_sag/test_feat10_resolution.cc"],
+    copts = ["--std=c++17"],
+    linkopts = [
+        "-L/usr/local/cuda/lib64",
+        "-lcublas",
+        "-lcusparse",
+        "-lcudart",
+        "-lcudss",
+    ],
+    deps = [
+        ":FEAT10Data",
+        ":cpu_utils",
+        ":solvers_syncedadamwnocoop",
+        ":solvers_syncednewton",
+        ":solvers_syncedvbd",
+        "@eigen//:eigen",
+    ],
+)
 cc_binary(
     name = "test_feat10_nesterov",
-    srcs = ["lib_bin/test_feat10_nesterov.cc"],
+    srcs = ["lib_bin/beam_sag/test_feat10_nesterov.cc"],
     copts = ["--std=c++17"],
     linkopts = [
         "-L/usr/local/cuda/lib64",
@@ -544,7 +385,7 @@ cc_binary(
 
 cc_binary(
     name = "test_feat10_bunny_adamw",
-    srcs = ["lib_bin/test_feat10_bunny_adamw.cc"],
+    srcs = ["lib_bin/mesh_deform/test_feat10_bunny_adamw.cc"],
     copts = ["--std=c++17"],
     linkopts = [
         "-L/usr/local/cuda/lib64",
@@ -564,7 +405,7 @@ cc_binary(
 
 cc_binary(
     name = "test_feat10_bunny_newton",
-    srcs = ["lib_bin/test_feat10_bunny_newton.cc"],
+    srcs = ["lib_bin/mesh_deform/test_feat10_bunny_newton.cc"],
     copts = ["--std=c++17"],
     linkopts = [
         "-L/usr/local/cuda/lib64",
@@ -585,7 +426,7 @@ cc_binary(
 
 cc_binary(
     name = "test_sphere_drop_collision",
-    srcs = ["lib_bin/test_sphere_drop_collision.cc"],
+    srcs = ["lib_bin/collision_system/test_sphere_drop_collision.cc"],
     copts = ["--std=c++17"],
     linkopts = [
         "-L/usr/local/cuda/lib64",
@@ -610,7 +451,7 @@ cc_binary(
 
 cc_binary(
     name = "test_bubble_gripper_bunny",
-    srcs = ["lib_bin/test_bubble_gripper_bunny.cc"],
+    srcs = ["lib_bin/collision_system/test_bubble_gripper_bunny.cc"],
     copts = ["--std=c++17"],
     linkopts = [
         "-L/usr/local/cuda/lib64",
@@ -642,7 +483,7 @@ cc_test(
     linkopts = [
         "-L/usr/local/cuda/lib64",
         "-lcusparse",
-        "-lcudart",                
+        "-lcudart",
     ],
     data = glob([
         "data/utest/**/*",
@@ -695,7 +536,7 @@ cc_test(
     linkopts = [
         "-L/usr/local/cuda/lib64",
         "-lcusparse",
-        "-lcudart",                
+        "-lcudart",
     ],
     data = glob([
         "data/utest/**/*",
@@ -721,7 +562,7 @@ cc_test(
     linkopts = [
         "-L/usr/local/cuda/lib64",
         "-lcusparse",
-        "-lcudart",                
+        "-lcudart",
     ],
     data = glob([
         "data/utest/**/*",
