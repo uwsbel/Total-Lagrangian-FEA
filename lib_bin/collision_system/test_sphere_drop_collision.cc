@@ -17,14 +17,14 @@
 #include <iomanip>
 #include <iostream>
 
-#include "../lib_src/collision/Broadphase.cuh"
-#include "../lib_src/collision/Narrowphase.cuh"
-#include "../lib_src/elements/FEAT10Data.cuh"
-#include "../lib_src/solvers/SyncedNewton.cuh"
-#include "../lib_utils/cpu_utils.h"
-#include "../lib_utils/mesh_manager.h"
-#include "../lib_utils/quadrature_utils.h"
-#include "../lib_utils/visualization_utils.h"
+#include "../../lib_src/collision/Broadphase.cuh"
+#include "../../lib_src/collision/Narrowphase.cuh"
+#include "../../lib_src/elements/FEAT10Data.cuh"
+#include "../../lib_src/solvers/SyncedNewton.cuh"
+#include "../../lib_utils/cpu_utils.h"
+#include "../../lib_utils/mesh_manager.h"
+#include "../../lib_utils/quadrature_utils.h"
+#include "../../lib_utils/visualization_utils.h"
 
 // Material properties
 const double E    = 4e6;     // Young's modulus (softer for visible deformation)

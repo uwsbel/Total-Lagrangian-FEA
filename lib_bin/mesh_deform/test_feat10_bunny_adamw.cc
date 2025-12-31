@@ -19,9 +19,9 @@
 #include <iostream>
 
 #include "../../lib_utils/quadrature_utils.h"
-#include "../lib_src/elements/FEAT10Data.cuh"
-#include "../lib_src/solvers/SyncedAdamW.cuh"
-#include "../lib_utils/cpu_utils.h"
+#include "../../lib_src/elements/FEAT10Data.cuh"
+#include "../../lib_src/solvers/SyncedAdamW.cuh"
+#include "../../lib_utils/cpu_utils.h"
 
 const double E    = 5.0e7;   // Pa
 const double nu   = 0.28;    // -

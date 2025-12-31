@@ -741,8 +741,12 @@ struct GPU_ANCF3243_Data : public ElementBase {
 
     HANDLE_ERROR(cudaFree(d_F));
     HANDLE_ERROR(cudaFree(d_P));
+    HANDLE_ERROR(cudaFree(d_Fdot));
+    HANDLE_ERROR(cudaFree(d_P_vis));
     HANDLE_ERROR(cudaFree(d_f_int));
     HANDLE_ERROR(cudaFree(d_f_ext));
+    HANDLE_ERROR(cudaFree(d_eta_damp));
+    HANDLE_ERROR(cudaFree(d_lambda_damp));
 
     HANDLE_ERROR(cudaFree(d_H));
     HANDLE_ERROR(cudaFree(d_W));
@@ -789,6 +793,8 @@ struct GPU_ANCF3243_Data : public ElementBase {
   void CalcConstraintData() override;
 
   void PrintDsDuPre();
+
+  void RetrieveConnectivityToCPU(Eigen::MatrixXi &connectivity);
 
   void RetrieveMassCSRToCPU(std::vector<int> &offsets,
                             std::vector<int> &columns,

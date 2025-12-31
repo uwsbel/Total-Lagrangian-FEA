@@ -830,6 +830,8 @@ struct GPU_ANCF3443_Data : public ElementBase {
 
   void PrintDsDuPre();
 
+  void RetrieveConnectivityToCPU(Eigen::MatrixXi &connectivity);
+
   void RetrieveMassCSRToCPU(std::vector<int> &offsets,
                             std::vector<int> &columns,
                             std::vector<double> &values);

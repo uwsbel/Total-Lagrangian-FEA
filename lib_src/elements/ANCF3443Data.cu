@@ -91,8 +91,7 @@ __global__ void set_last_offset_3443_kernel(int *d_offsets, int n_rows,
   }
 }
 
-__global__ void ds_du_pre_kernel(double L, double W, double H,
-                                 GPU_ANCF3443_Data *d_data) {
+__global__ void ds_du_pre_kernel(GPU_ANCF3443_Data *d_data) {
   int ixi   = blockIdx.x;
   int ieta  = blockIdx.y;
   int izeta = threadIdx.x;
@@ -102,6 +101,11 @@ __global__ void ds_du_pre_kernel(double L, double W, double H,
   double xi   = d_data->gauss_xi()(ixi);
   double eta  = d_data->gauss_eta()(ieta);
   double zeta = d_data->gauss_zeta()(izeta);
+
+  // Use the element geometry stored on device (set during Setup()).
+  const double L = d_data->L();
+  const double W = d_data->W();
+  const double H = d_data->H();
 
   double u = L * xi / 2.0;
   double v = W * eta / 2.0;
@@ -272,7 +276,7 @@ void GPU_ANCF3443_Data::CalcDsDuPre() {
   // Launch kernel
   dim3 blocks_pre(Quadrature::N_QP_4, Quadrature::N_QP_4);
   dim3 threads_pre(Quadrature::N_QP_3);
-  ds_du_pre_kernel<<<blocks_pre, threads_pre>>>(2.0, 1.0, 1.0, d_data);
+  ds_du_pre_kernel<<<blocks_pre, threads_pre>>>(d_data);
   cudaDeviceSynchronize();
 }
 
@@ -559,6 +563,14 @@ void GPU_ANCF3443_Data::ConvertToCSR_ConstraintJac() {
   is_j_csr_setup = true;
   HANDLE_ERROR(cudaMemcpy(d_data, this, sizeof(GPU_ANCF3443_Data),
                           cudaMemcpyHostToDevice));
+}
+
+void GPU_ANCF3443_Data::RetrieveConnectivityToCPU(
+    Eigen::MatrixXi &connectivity) {
+  connectivity.resize(n_beam, 4);
+  HANDLE_ERROR(cudaMemcpy(connectivity.data(), d_element_connectivity,
+                          static_cast<size_t>(n_beam) * 4 * sizeof(int),
+                          cudaMemcpyDeviceToHost));
 }
 
 void GPU_ANCF3443_Data::RetrieveMassCSRToCPU(std::vector<int> &offsets,

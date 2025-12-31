@@ -16,6 +16,7 @@
 #include <cstdint>
 #include <cstring>
 #include <iomanip>
+#include <type_traits>
 #include <thrust/device_ptr.h>
 #include <thrust/execution_policy.h>
 #include <thrust/scan.h>
@@ -139,7 +140,7 @@ __device__ __forceinline__ double solver_grad_L_vbd(int tid, ElementType *data,
 }
 
 // =====================================================
-// VBD Update Kernel for FEAT10 Elements
+// VBD Update Kernel (per-color, one block per node)
 // =====================================================
 
 template <typename ElementType>
@@ -158,8 +159,8 @@ __global__ void vbd_build_fixed_map_kernel(ElementType *d_data,
 // Reduction and the 3×3 solve happen in shared memory.
 //
 // Uses a fixed block size so shared memory can be statically allocated.
-template <int kBlockSize>
-__global__ void vbd_update_color_block_kernel(GPU_FEAT10_Data *d_data,
+template <typename ElementType, int kBlockSize>
+__global__ void vbd_update_color_block_kernel(ElementType *d_data,
                                               SyncedVBDSolver *d_solver,
                                               int color_start,
                                               int color_count) {
@@ -214,15 +215,7 @@ __global__ void vbd_update_color_block_kernel(GPU_FEAT10_Data *d_data,
     const int inc_end   = d_solver->incidence_offsets()[node_i + 1];
     const int n_inc     = inc_end - inc_start;
 
-    const double lambda = d_data->lambda();
-    const double mu     = d_data->mu();
-
-    constexpr int n_qp = Quadrature::N_QP_T10_5;
-    double wq_cache[n_qp];
-#pragma unroll
-    for (int q = 0; q < n_qp; ++q) {
-      wq_cache[q] = d_data->tet5pt_weights(q);
-    }
+    const int n_qp = d_solver->gpu_n_total_qp();
     const int work_count = n_inc * n_qp;
 
     for (int w = tid; w < work_count; w += blockDim.x) {
@@ -232,78 +225,9 @@ __global__ void vbd_update_color_block_kernel(GPU_FEAT10_Data *d_data,
       const int2 inc       = d_solver->incidence_data()[inc_idx];
       const int elem_idx   = inc.x;
       const int local_node = inc.y;
-
-      const double ha0 = d_data->grad_N_ref(elem_idx, qp_idx)(local_node, 0);
-      const double ha1 = d_data->grad_N_ref(elem_idx, qp_idx)(local_node, 1);
-      const double ha2 = d_data->grad_N_ref(elem_idx, qp_idx)(local_node, 2);
-
-      const double detJ = d_data->detJ_ref(elem_idx, qp_idx);
-      const double wq   = wq_cache[qp_idx];
-      const double dV   = detJ * wq;
-
-      // Internal force: (P @ h_a) * dV
-      const double P00 = d_data->P(elem_idx, qp_idx)(0, 0);
-      const double P01 = d_data->P(elem_idx, qp_idx)(0, 1);
-      const double P02 = d_data->P(elem_idx, qp_idx)(0, 2);
-      const double P10 = d_data->P(elem_idx, qp_idx)(1, 0);
-      const double P11 = d_data->P(elem_idx, qp_idx)(1, 1);
-      const double P12 = d_data->P(elem_idx, qp_idx)(1, 2);
-      const double P20 = d_data->P(elem_idx, qp_idx)(2, 0);
-      const double P21 = d_data->P(elem_idx, qp_idx)(2, 1);
-      const double P22 = d_data->P(elem_idx, qp_idx)(2, 2);
-
-      r0 += (P00 * ha0 + P01 * ha1 + P02 * ha2) * dV;
-      r1 += (P10 * ha0 + P11 * ha1 + P12 * ha2) * dV;
-      r2 += (P20 * ha0 + P21 * ha1 + P22 * ha2) * dV;
-
-      // Diagonal tangent block K_ii contribution (SVK diagonal block).
-      const double F00 = d_data->F(elem_idx, qp_idx)(0, 0);
-      const double F01 = d_data->F(elem_idx, qp_idx)(0, 1);
-      const double F02 = d_data->F(elem_idx, qp_idx)(0, 2);
-      const double F10 = d_data->F(elem_idx, qp_idx)(1, 0);
-      const double F11 = d_data->F(elem_idx, qp_idx)(1, 1);
-      const double F12 = d_data->F(elem_idx, qp_idx)(1, 2);
-      const double F20 = d_data->F(elem_idx, qp_idx)(2, 0);
-      const double F21 = d_data->F(elem_idx, qp_idx)(2, 1);
-      const double F22 = d_data->F(elem_idx, qp_idx)(2, 2);
-
-      const double trFtF = F00 * F00 + F01 * F01 + F02 * F02 + F10 * F10 +
-                           F11 * F11 + F12 * F12 + F20 * F20 + F21 * F21 +
-                           F22 * F22;
-
-      const double FFT00 = F00 * F00 + F01 * F01 + F02 * F02;
-      const double FFT01 = F00 * F10 + F01 * F11 + F02 * F12;
-      const double FFT02 = F00 * F20 + F01 * F21 + F02 * F22;
-      const double FFT10 = FFT01;
-      const double FFT11 = F10 * F10 + F11 * F11 + F12 * F12;
-      const double FFT12 = F10 * F20 + F11 * F21 + F12 * F22;
-      const double FFT20 = FFT02;
-      const double FFT21 = FFT12;
-      const double FFT22 = F20 * F20 + F21 * F21 + F22 * F22;
-
-      const double g0 = F00 * ha0 + F01 * ha1 + F02 * ha2;
-      const double g1 = F10 * ha0 + F11 * ha1 + F12 * ha2;
-      const double g2 = F20 * ha0 + F21 * ha1 + F22 * ha2;
-
-      const double s    = ha0 * ha0 + ha1 * ha1 + ha2 * ha2;
-      const double g_sq = g0 * g0 + g1 * g1 + g2 * g2;
-      const double trE  = 0.5 * (trFtF - 3.0);
-
-      const double t1 = (lambda + mu);
-      const double t2 = lambda * trE * s;
-      const double t3 = mu * g_sq;
-      const double t4 = mu * s;
-      const double wK = h * dV;
-
-      h00 += wK * (t1 * g0 * g0 + (t2 + t3) + t4 * (FFT00 - 1.0));
-      h01 += wK * (t1 * g0 * g1 + t4 * (FFT01));
-      h02 += wK * (t1 * g0 * g2 + t4 * (FFT02));
-      h10 += wK * (t1 * g1 * g0 + t4 * (FFT10));
-      h11 += wK * (t1 * g1 * g1 + (t2 + t3) + t4 * (FFT11 - 1.0));
-      h12 += wK * (t1 * g1 * g2 + t4 * (FFT12));
-      h20 += wK * (t1 * g2 * g0 + t4 * (FFT20));
-      h21 += wK * (t1 * g2 * g1 + t4 * (FFT21));
-      h22 += wK * (t1 * g2 * g2 + (t2 + t3) + t4 * (FFT22 - 1.0));
+      vbd_accumulate_residual_and_hessian_diag(
+          elem_idx, qp_idx, local_node, d_data, h, r0, r1, r2, h00, h01, h02,
+          h10, h11, h12, h20, h21, h22);
     }
   }
 
@@ -842,27 +766,30 @@ void SyncedVBDSolver::InitializeColoring() {
     typed_data->RetrieveConnectivityToCPU(h_connectivity);
     nodes_per_elem = 10;
   } else if (type_ == TYPE_3243) {
-    // For ANCF elements, connectivity is different
-    // Build connectivity from element_node
-    // ANCF3243 has 2 physical nodes per element, 4 DOFs each = 8 shape functions
     nodes_per_elem = 8;
     h_connectivity.resize(n_beam_, nodes_per_elem);
-    // Need to reconstruct connectivity - for now use simplified version
+    auto *typed_data = static_cast<GPU_ANCF3243_Data *>(h_data_);
+    Eigen::MatrixXi h_elem_nodes;
+    typed_data->RetrieveConnectivityToCPU(h_elem_nodes);
     for (int e = 0; e < n_beam_; ++e) {
-      for (int i = 0; i < 4; ++i) {
-        h_connectivity(e, i) = e * 4 + i;  // Node 0's DOFs
-        h_connectivity(e, 4 + i) = (e + 1) * 4 + i;  // Node 1's DOFs
+      const int node0 = h_elem_nodes(e, 0);
+      const int node1 = h_elem_nodes(e, 1);
+      for (int d = 0; d < 4; ++d) {
+        h_connectivity(e, 0 * 4 + d) = node0 * 4 + d;
+        h_connectivity(e, 1 * 4 + d) = node1 * 4 + d;
       }
     }
   } else if (type_ == TYPE_3443) {
-    // ANCF3443 has 4 physical nodes per element, 4 DOFs each = 16 shape functions
     nodes_per_elem = 16;
     h_connectivity.resize(n_beam_, nodes_per_elem);
-    // Simplified connectivity
+    auto *typed_data = static_cast<GPU_ANCF3443_Data *>(h_data_);
+    Eigen::MatrixXi h_elem_nodes;
+    typed_data->RetrieveConnectivityToCPU(h_elem_nodes);
     for (int e = 0; e < n_beam_; ++e) {
       for (int n = 0; n < 4; ++n) {
+        const int node = h_elem_nodes(e, n);
         for (int d = 0; d < 4; ++d) {
-          h_connectivity(e, n * 4 + d) = n * 4 + d;  // Placeholder
+          h_connectivity(e, n * 4 + d) = node * 4 + d;
         }
       }
     }
@@ -1094,54 +1021,45 @@ void SyncedVBDSolver::InitializeMassDiagBlocks() {
   HANDLE_ERROR(cudaMalloc(&d_mass_diag_blocks_, n_coef_ * 9 * sizeof(double)));
   HANDLE_ERROR(cudaMemset(d_mass_diag_blocks_, 0, n_coef_ * 9 * sizeof(double)));
 
-  // For consistent mass, we need to extract diagonal blocks from the CSR mass matrix
-  // The mass matrix has already been built by CalcMassMatrix()
+  // For consistent mass, extract diagonal blocks from the CSR mass matrix.
+  std::vector<int> offsets, columns;
+  std::vector<double> values;
 
   if (type_ == TYPE_T10) {
     auto *typed_data = static_cast<GPU_FEAT10_Data *>(h_data_);
-
-    // Retrieve mass CSR to CPU
-    std::vector<int> offsets, columns;
-    std::vector<double> values;
+    typed_data->CalcMassMatrix();
     typed_data->RetrieveMassCSRToCPU(offsets, columns, values);
+  } else if (type_ == TYPE_3243) {
+    auto *typed_data = static_cast<GPU_ANCF3243_Data *>(h_data_);
+    typed_data->CalcMassMatrix();
+    typed_data->RetrieveMassCSRToCPU(offsets, columns, values);
+  } else if (type_ == TYPE_3443) {
+    auto *typed_data = static_cast<GPU_ANCF3443_Data *>(h_data_);
+    typed_data->CalcMassMatrix();
+    typed_data->RetrieveMassCSRToCPU(offsets, columns, values);
+  } else {
+    std::cerr << "InitializeMassDiagBlocks: unsupported element type."
+              << std::endl;
+    exit(EXIT_FAILURE);
+  }
 
-    // Extract diagonal blocks (M_ii for each node)
-    std::vector<double> h_mass_diag(n_coef_ * 9, 0.0);
-
-    for (int i = 0; i < n_coef_; ++i) {
-      // Find diagonal entry M(i,i)
-      for (int idx = offsets[i]; idx < offsets[i + 1]; ++idx) {
-        if (columns[idx] == i) {
-          // This is the diagonal entry - mass is scalar * I_3
-          double m_ii = values[idx];
-          // Set 3x3 block as m_ii * I_3
-          h_mass_diag[i * 9 + 0] = m_ii;  // (0,0)
-          h_mass_diag[i * 9 + 4] = m_ii;  // (1,1)
-          h_mass_diag[i * 9 + 8] = m_ii;  // (2,2)
-          break;
-        }
+  std::vector<double> h_mass_diag(n_coef_ * 9, 0.0);
+  for (int i = 0; i < n_coef_; ++i) {
+    for (int idx = offsets[static_cast<size_t>(i)];
+         idx < offsets[static_cast<size_t>(i + 1)]; ++idx) {
+      if (columns[static_cast<size_t>(idx)] == i) {
+        const double m_ii = values[static_cast<size_t>(idx)];
+        h_mass_diag[static_cast<size_t>(i) * 9 + 0] = m_ii;
+        h_mass_diag[static_cast<size_t>(i) * 9 + 4] = m_ii;
+        h_mass_diag[static_cast<size_t>(i) * 9 + 8] = m_ii;
+        break;
       }
     }
-
-    HANDLE_ERROR(cudaMemcpy(d_mass_diag_blocks_, h_mass_diag.data(),
-                            n_coef_ * 9 * sizeof(double),
-                            cudaMemcpyHostToDevice));
-  } else {
-    // For ANCF elements, use simplified lumped mass
-    // TODO: Implement proper consistent mass extraction for ANCF
-    std::vector<double> h_mass_diag(n_coef_ * 9, 0.0);
-    // Use lumped mass approximation
-    double total_mass_approx = 1.0;  // Placeholder
-    double m_per_node = total_mass_approx / n_coef_;
-    for (int i = 0; i < n_coef_; ++i) {
-      h_mass_diag[i * 9 + 0] = m_per_node;
-      h_mass_diag[i * 9 + 4] = m_per_node;
-      h_mass_diag[i * 9 + 8] = m_per_node;
-    }
-    HANDLE_ERROR(cudaMemcpy(d_mass_diag_blocks_, h_mass_diag.data(),
-                            n_coef_ * 9 * sizeof(double),
-                            cudaMemcpyHostToDevice));
   }
+
+  HANDLE_ERROR(cudaMemcpy(d_mass_diag_blocks_, h_mass_diag.data(),
+                          n_coef_ * 9 * sizeof(double),
+                          cudaMemcpyHostToDevice));
 
   // Update device copy
   HANDLE_ERROR(cudaMemcpy(d_vbd_solver_, this, sizeof(SyncedVBDSolver),
@@ -1167,7 +1085,15 @@ void SyncedVBDSolver::InitializeFixedMap() {
 
     if (type_ == TYPE_T10) {
       vbd_build_fixed_map_kernel<<<blocks, threads>>>(
-          static_cast<GPU_FEAT10_Data *>(d_data_), d_fixed_map_);
+          reinterpret_cast<GPU_FEAT10_Data *>(d_data_), d_fixed_map_);
+      HANDLE_ERROR(cudaGetLastError());
+    } else if (type_ == TYPE_3243) {
+      vbd_build_fixed_map_kernel<<<blocks, threads>>>(
+          reinterpret_cast<GPU_ANCF3243_Data *>(d_data_), d_fixed_map_);
+      HANDLE_ERROR(cudaGetLastError());
+    } else if (type_ == TYPE_3443) {
+      vbd_build_fixed_map_kernel<<<blocks, threads>>>(
+          reinterpret_cast<GPU_ANCF3443_Data *>(d_data_), d_fixed_map_);
       HANDLE_ERROR(cudaGetLastError());
     }
     HANDLE_ERROR(cudaDeviceSynchronize());
@@ -1214,11 +1140,6 @@ void SyncedVBDSolver::DestroyCudaGraphs() {
 }
 
 bool SyncedVBDSolver::EnsureInnerSweepGraph(int threads, int blocks_p) {
-  if (type_ != TYPE_T10) {
-    std::cerr << "EnsureInnerSweepGraph is only implemented for TYPE_T10."
-              << std::endl;
-    exit(EXIT_FAILURE);
-  }
   if (!coloring_initialized_ || !fixed_map_initialized_) {
     std::cerr << "EnsureInnerSweepGraph requires InitializeColoring() and "
                  "InitializeFixedMap() first."
@@ -1278,7 +1199,7 @@ bool SyncedVBDSolver::EnsureInnerSweepGraph(int threads, int blocks_p) {
 
   if (threads != kVbdBlockThreads) {
     std::cerr << "CUDA graph init expects threads=" << kVbdBlockThreads
-              << " for vbd_update_color_block_kernel<" << kVbdBlockThreads
+              << " for vbd_update_color_block_kernel<*, " << kVbdBlockThreads
               << ">."
               << std::endl;
     exit(EXIT_FAILURE);
@@ -1290,88 +1211,106 @@ bool SyncedVBDSolver::EnsureInnerSweepGraph(int threads, int blocks_p) {
     exit(EXIT_FAILURE);
   }
 
-  auto *typed_data = static_cast<GPU_FEAT10_Data *>(d_data_);
+  auto capture_typed = [&](auto *typed_data) {
+    using T = std::remove_pointer_t<decltype(typed_data)>;
 
-  // Stream capture executes the recorded kernels once. We only call this at the
-  // first inner sweep so that execution counts as sweep 0.
-  cudaGraph_t graph = nullptr;
-  cudaError_t err = cudaStreamSynchronize(0);
-  if (err != cudaSuccess) {
-    std::cerr << "cudaStreamSynchronize(default) failed during graph init: "
-              << cudaGetErrorString(err) << std::endl;
-    exit(EXIT_FAILURE);
-  }
-  err = cudaStreamSynchronize(graph_capture_stream_);
-  if (err != cudaSuccess) {
-    std::cerr << "cudaStreamSynchronize(capture) failed during graph init: "
-              << cudaGetErrorString(err) << std::endl;
-    exit(EXIT_FAILURE);
-  }
-
-  err = cudaStreamBeginCapture(graph_capture_stream_,
-                               cudaStreamCaptureModeRelaxed);
-  if (err != cudaSuccess) {
-    std::cerr << "cudaStreamBeginCapture failed: "
-              << cudaGetErrorString(err) << std::endl;
-    exit(EXIT_FAILURE);
-  }
-
-  for (int g = 0; g < n_color_groups_; ++g) {
-    const int group_begin = h_color_group_offsets_cache_[g];
-    const int group_end = h_color_group_offsets_cache_[g + 1];
-    for (int gi = group_begin; gi < group_end; ++gi) {
-      const int c = h_color_group_colors_cache_[gi];
-      const int color_start = h_color_offsets_cache_[c];
-      const int color_count =
-          h_color_offsets_cache_[c + 1] - h_color_offsets_cache_[c];
-      if (color_count <= 0) continue;
-
-      const int blocks = color_count;
-      vbd_update_color_block_kernel<kVbdBlockThreads>
-          <<<blocks, threads, 0, graph_capture_stream_>>>(
-              typed_data, d_vbd_solver_, color_start, color_count);
-
-      const int blocks_color = (color_count + threads - 1) / threads;
-      vbd_update_pos_from_vel_color<<<blocks_color, threads, 0,
-                                     graph_capture_stream_>>>(
-          d_vbd_solver_, typed_data, color_start, color_count);
+    // Stream capture executes the recorded kernels once. We only call this at
+    // the first inner sweep so that execution counts as sweep 0.
+    cudaGraph_t graph = nullptr;
+    cudaError_t err = cudaStreamSynchronize(0);
+    if (err != cudaSuccess) {
+      std::cerr << "cudaStreamSynchronize(default) failed during graph init: "
+                << cudaGetErrorString(err) << std::endl;
+      exit(EXIT_FAILURE);
+    }
+    err = cudaStreamSynchronize(graph_capture_stream_);
+    if (err != cudaSuccess) {
+      std::cerr << "cudaStreamSynchronize(capture) failed during graph init: "
+                << cudaGetErrorString(err) << std::endl;
+      exit(EXIT_FAILURE);
     }
 
-    // Refresh global element cache once per group.
-    vbd_compute_p_kernel<<<blocks_p, threads, 0, graph_capture_stream_>>>(
-        typed_data, d_vbd_solver_);
-  }
+    err = cudaStreamBeginCapture(graph_capture_stream_,
+                                 cudaStreamCaptureModeRelaxed);
+    if (err != cudaSuccess) {
+      std::cerr << "cudaStreamBeginCapture failed: "
+                << cudaGetErrorString(err) << std::endl;
+      exit(EXIT_FAILURE);
+    }
 
-  err = cudaStreamEndCapture(graph_capture_stream_, &graph);
-  if (err != cudaSuccess) {
-    std::cerr << "cudaStreamEndCapture(inner sweep) failed: "
-              << cudaGetErrorString(err) << std::endl;
-    exit(EXIT_FAILURE);
-  }
+    for (int g = 0; g < n_color_groups_; ++g) {
+      const int group_begin = h_color_group_offsets_cache_[g];
+      const int group_end = h_color_group_offsets_cache_[g + 1];
+      for (int gi = group_begin; gi < group_end; ++gi) {
+        const int c = h_color_group_colors_cache_[gi];
+        const int color_start = h_color_offsets_cache_[c];
+        const int color_count =
+            h_color_offsets_cache_[c + 1] - h_color_offsets_cache_[c];
+        if (color_count <= 0) continue;
 
-  // Ensure the sweep executed during capture completes before continuing on the
-  // default stream.
-  err = cudaStreamSynchronize(graph_capture_stream_);
-  if (err != cudaSuccess) {
-    std::cerr << "cudaStreamSynchronize(capture) failed after capture: "
-              << cudaGetErrorString(err) << std::endl;
+        const int blocks = color_count;
+        vbd_update_color_block_kernel<T, kVbdBlockThreads>
+            <<<blocks, threads, 0, graph_capture_stream_>>>(
+                typed_data, d_vbd_solver_, color_start, color_count);
+
+        const int blocks_color = (color_count + threads - 1) / threads;
+        vbd_update_pos_from_vel_color<<<blocks_color, threads, 0,
+                                       graph_capture_stream_>>>(
+            d_vbd_solver_, typed_data, color_start, color_count);
+      }
+
+      // Refresh global element cache once per group.
+      vbd_compute_p_kernel<<<blocks_p, threads, 0, graph_capture_stream_>>>(
+          typed_data, d_vbd_solver_);
+    }
+
+    err = cudaStreamEndCapture(graph_capture_stream_, &graph);
+    if (err != cudaSuccess) {
+      std::cerr << "cudaStreamEndCapture(inner sweep) failed: "
+                << cudaGetErrorString(err) << std::endl;
+      exit(EXIT_FAILURE);
+    }
+
+    // Ensure the sweep executed during capture completes before continuing on
+    // the default stream.
+    err = cudaStreamSynchronize(graph_capture_stream_);
+    if (err != cudaSuccess) {
+      std::cerr << "cudaStreamSynchronize(capture) failed after capture: "
+                << cudaGetErrorString(err) << std::endl;
+      HANDLE_ERROR(cudaGraphDestroy(graph));
+      exit(EXIT_FAILURE);
+    }
+
+    cudaGraphNode_t error_node = nullptr;
+    char log_buffer[4096] = {0};
+    const cudaError_t inst_err =
+        cudaGraphInstantiate(&inner_sweep_graph_exec_, graph, &error_node,
+                             log_buffer, sizeof(log_buffer));
+    if (inst_err != cudaSuccess) {
+      std::cerr << "cudaGraphInstantiate(inner sweep) failed: "
+                << cudaGetErrorString(inst_err) << "\n"
+                << log_buffer << std::endl;
+      HANDLE_ERROR(cudaGraphDestroy(graph));
+      exit(EXIT_FAILURE);
+    }
     HANDLE_ERROR(cudaGraphDestroy(graph));
-    exit(EXIT_FAILURE);
-  }
+  };
 
-  cudaGraphNode_t error_node = nullptr;
-  char log_buffer[4096] = {0};
-  const cudaError_t inst_err =
-      cudaGraphInstantiate(&inner_sweep_graph_exec_, graph, &error_node,
-                           log_buffer, sizeof(log_buffer));
-  if (inst_err != cudaSuccess) {
-    std::cerr << "cudaGraphInstantiate(inner sweep) failed: "
-              << cudaGetErrorString(inst_err) << "\n"
-              << log_buffer << std::endl;
-    HANDLE_ERROR(cudaGraphDestroy(graph));
-    exit(EXIT_FAILURE);
+  switch (type_) {
+    case TYPE_3243:
+      capture_typed(reinterpret_cast<GPU_ANCF3243_Data *>(d_data_));
+      break;
+    case TYPE_3443:
+      capture_typed(reinterpret_cast<GPU_ANCF3443_Data *>(d_data_));
+      break;
+    case TYPE_T10:
+      capture_typed(reinterpret_cast<GPU_FEAT10_Data *>(d_data_));
+      break;
+    default:
+      std::cerr << "EnsureInnerSweepGraph: unsupported element type."
+                << std::endl;
+      exit(EXIT_FAILURE);
   }
-  HANDLE_ERROR(cudaGraphDestroy(graph));
 
   graph_threads_ = threads;
   graph_blocks_p_ = blocks_p;
@@ -1383,11 +1322,6 @@ bool SyncedVBDSolver::EnsureInnerSweepGraph(int threads, int blocks_p) {
 }
 
 bool SyncedVBDSolver::EnsurePostOuterGraph(int threads, int blocks_coef) {
-  if (type_ != TYPE_T10) {
-    std::cerr << "EnsurePostOuterGraph is only implemented for TYPE_T10."
-              << std::endl;
-    exit(EXIT_FAILURE);
-  }
   if (!coloring_initialized_ || !fixed_map_initialized_) {
     std::cerr << "EnsurePostOuterGraph requires InitializeColoring() and "
                  "InitializeFixedMap() first."
@@ -1431,67 +1365,83 @@ bool SyncedVBDSolver::EnsurePostOuterGraph(int threads, int blocks_coef) {
     exit(EXIT_FAILURE);
   }
 
-  auto *typed_data = static_cast<GPU_FEAT10_Data *>(d_data_);
+  auto capture_typed = [&](auto *typed_data) {
+    cudaGraph_t graph = nullptr;
+    cudaError_t err = cudaStreamSynchronize(0);
+    if (err != cudaSuccess) {
+      std::cerr << "cudaStreamSynchronize(default) failed during graph init: "
+                << cudaGetErrorString(err) << std::endl;
+      exit(EXIT_FAILURE);
+    }
+    err = cudaStreamSynchronize(graph_capture_stream_);
+    if (err != cudaSuccess) {
+      std::cerr << "cudaStreamSynchronize(capture) failed during graph init: "
+                << cudaGetErrorString(err) << std::endl;
+      exit(EXIT_FAILURE);
+    }
 
-  cudaGraph_t graph = nullptr;
-  cudaError_t err = cudaStreamSynchronize(0);
-  if (err != cudaSuccess) {
-    std::cerr << "cudaStreamSynchronize(default) failed during graph init: "
-              << cudaGetErrorString(err) << std::endl;
-    exit(EXIT_FAILURE);
-  }
-  err = cudaStreamSynchronize(graph_capture_stream_);
-  if (err != cudaSuccess) {
-    std::cerr << "cudaStreamSynchronize(capture) failed during graph init: "
-              << cudaGetErrorString(err) << std::endl;
-    exit(EXIT_FAILURE);
-  }
+    err = cudaStreamBeginCapture(graph_capture_stream_,
+                                 cudaStreamCaptureModeRelaxed);
+    if (err != cudaSuccess) {
+      std::cerr << "cudaStreamBeginCapture failed: "
+                << cudaGetErrorString(err) << std::endl;
+      exit(EXIT_FAILURE);
+    }
 
-  err = cudaStreamBeginCapture(graph_capture_stream_,
-                               cudaStreamCaptureModeRelaxed);
-  if (err != cudaSuccess) {
-    std::cerr << "cudaStreamBeginCapture failed: "
-              << cudaGetErrorString(err) << std::endl;
-    exit(EXIT_FAILURE);
-  }
+    vbd_update_pos_from_vel<<<blocks_coef, threads, 0, graph_capture_stream_>>>(
+        d_vbd_solver_, typed_data);
+    if (n_constraints_ > 0) {
+      const int n_fixed = n_constraints_ / 3;
+      const int blocks_c = (n_fixed + threads - 1) / threads;
+      vbd_compute_constraint<<<blocks_c, threads, 0, graph_capture_stream_>>>(
+          typed_data, d_vbd_solver_);
+    }
 
-  vbd_update_pos_from_vel<<<blocks_coef, threads, 0, graph_capture_stream_>>>(
-      d_vbd_solver_, typed_data);
-  if (n_constraints_ > 0) {
-    const int n_fixed = n_constraints_ / 3;
-    const int blocks_c = (n_fixed + threads - 1) / threads;
-    vbd_compute_constraint<<<blocks_c, threads, 0, graph_capture_stream_>>>(
-        typed_data, d_vbd_solver_);
-  }
+    err = cudaStreamEndCapture(graph_capture_stream_, &graph);
+    if (err != cudaSuccess) {
+      std::cerr << "cudaStreamEndCapture(post outer) failed: "
+                << cudaGetErrorString(err) << std::endl;
+      exit(EXIT_FAILURE);
+    }
 
-  err = cudaStreamEndCapture(graph_capture_stream_, &graph);
-  if (err != cudaSuccess) {
-    std::cerr << "cudaStreamEndCapture(post outer) failed: "
-              << cudaGetErrorString(err) << std::endl;
-    exit(EXIT_FAILURE);
-  }
+    err = cudaStreamSynchronize(graph_capture_stream_);
+    if (err != cudaSuccess) {
+      std::cerr << "cudaStreamSynchronize(capture) failed after capture: "
+                << cudaGetErrorString(err) << std::endl;
+      HANDLE_ERROR(cudaGraphDestroy(graph));
+      exit(EXIT_FAILURE);
+    }
 
-  err = cudaStreamSynchronize(graph_capture_stream_);
-  if (err != cudaSuccess) {
-    std::cerr << "cudaStreamSynchronize(capture) failed after capture: "
-              << cudaGetErrorString(err) << std::endl;
+    cudaGraphNode_t error_node = nullptr;
+    char log_buffer[4096] = {0};
+    const cudaError_t inst_err =
+        cudaGraphInstantiate(&post_outer_graph_exec_, graph, &error_node,
+                             log_buffer, sizeof(log_buffer));
+    if (inst_err != cudaSuccess) {
+      std::cerr << "cudaGraphInstantiate(post outer) failed: "
+                << cudaGetErrorString(inst_err) << "\n"
+                << log_buffer << std::endl;
+      HANDLE_ERROR(cudaGraphDestroy(graph));
+      exit(EXIT_FAILURE);
+    }
     HANDLE_ERROR(cudaGraphDestroy(graph));
-    exit(EXIT_FAILURE);
-  }
+  };
 
-  cudaGraphNode_t error_node = nullptr;
-  char log_buffer[4096] = {0};
-  const cudaError_t inst_err =
-      cudaGraphInstantiate(&post_outer_graph_exec_, graph, &error_node,
-                           log_buffer, sizeof(log_buffer));
-  if (inst_err != cudaSuccess) {
-    std::cerr << "cudaGraphInstantiate(post outer) failed: "
-              << cudaGetErrorString(inst_err) << "\n"
-              << log_buffer << std::endl;
-    HANDLE_ERROR(cudaGraphDestroy(graph));
-    exit(EXIT_FAILURE);
+  switch (type_) {
+    case TYPE_3243:
+      capture_typed(reinterpret_cast<GPU_ANCF3243_Data *>(d_data_));
+      break;
+    case TYPE_3443:
+      capture_typed(reinterpret_cast<GPU_ANCF3443_Data *>(d_data_));
+      break;
+    case TYPE_T10:
+      capture_typed(reinterpret_cast<GPU_FEAT10_Data *>(d_data_));
+      break;
+    default:
+      std::cerr << "EnsurePostOuterGraph: unsupported element type."
+                << std::endl;
+      exit(EXIT_FAILURE);
   }
-  HANDLE_ERROR(cudaGraphDestroy(graph));
 
   graph_threads_ = threads;
   graph_blocks_coef_ = blocks_coef;
@@ -1527,91 +1477,79 @@ void SyncedVBDSolver::OneStepVBD() {
   const int threads = kVbdBlockThreads;
   const int n_dofs = n_coef_ * 3;
 
-  GPU_FEAT10_Data *typed_data = nullptr;
-  int blocks_coef = 0;
-  int blocks_dof = 0;
-  int blocks_p = 0;
-  int blocks_if = 0;
-  int blocks_fixed = 0;
+  auto one_step_typed = [&](auto *typed_data) {
+    const int blocks_coef = (n_coef_ + threads - 1) / threads;
+    const int blocks_dof = (n_dofs + threads - 1) / threads;
 
-  if (type_ == TYPE_T10) {
-    typed_data = static_cast<GPU_FEAT10_Data *>(d_data_);
-    blocks_coef = (n_coef_ + threads - 1) / threads;
-    blocks_dof = (n_dofs + threads - 1) / threads;
+    int blocks_p = 0;
+    {
+      const int total_qp = n_beam_ * n_total_qp_;
+      blocks_p = (total_qp + threads - 1) / threads;
+      blocks_p = std::max(1, std::min(blocks_p, max_grid_stride_blocks));
+    }
 
-    const int total_qp = n_beam_ * n_total_qp_;
-    blocks_p = (total_qp + threads - 1) / threads;
-    blocks_p = std::max(1, std::min(blocks_p, max_grid_stride_blocks));
+    int blocks_if = 0;
+    {
+      const int total_if = n_beam_ * n_shape_;
+      blocks_if = (total_if + threads - 1) / threads;
+      blocks_if = std::max(1, std::min(blocks_if, max_grid_stride_blocks));
+    }
 
-    const int total_if = n_beam_ * n_shape_;
-    blocks_if = (total_if + threads - 1) / threads;
-    blocks_if = std::max(1, std::min(blocks_if, max_grid_stride_blocks));
-
-    blocks_fixed =
+    const int blocks_fixed =
         ((n_constraints_ > 0 ? (n_constraints_ / 3) : 1) + threads - 1) /
         threads;
-  }
 
-  if (type_ != TYPE_T10) {
-    std::cerr << "SyncedVBDSolver::OneStepVBD is only implemented for TYPE_T10."
-              << std::endl;
-    exit(EXIT_FAILURE);
-  }
-
-  auto launch_grad_l_residual_check = [&]() {
-    // Evaluate the same residual/gradient used by AdamW/Newton formulation,
-    // using cached F/P and (re)assembled f_int.
-    vbd_clear_internal_force_kernel<<<blocks_dof, threads>>>(typed_data);
-    vbd_compute_internal_force_kernel<<<blocks_if, threads>>>(typed_data,
-                                                              d_vbd_solver_);
-    if (n_constraints_ > 0) {
-      vbd_constraints_eval_kernel<<<blocks_fixed, threads>>>(typed_data,
-                                                             d_vbd_solver_);
-    }
-    vbd_compute_grad_l_kernel<<<blocks_dof, threads>>>(typed_data, d_vbd_solver_);
-  };
-
-  // Store previous positions
-  HANDLE_ERROR(cudaEventRecord(start));
-  vbd_update_pos_prev<<<blocks_coef, threads>>>(
-      static_cast<GPU_FEAT10_Data *>(d_data_), d_vbd_solver_);
-
-  // ALM outer loop
-  for (int outer_iter = 0; outer_iter < h_max_outer_; ++outer_iter) {
-    double R0 = -1.0;
-
-    // Build initial x12/F/P caches for the current v_guess before running the
-    // colored inner sweeps in this outer iteration.
-    vbd_update_pos_from_vel<<<blocks_coef, threads>>>(d_vbd_solver_, typed_data);
-    vbd_compute_p_kernel<<<blocks_p, threads>>>(typed_data, d_vbd_solver_);
-
-    if (h_conv_check_interval_ > 0 && type_ == TYPE_T10) {
-      launch_grad_l_residual_check();
-      R0 = compute_l2_norm_cublas(d_g_, n_dofs);
-      std::cout << "    [VBD check] init: ||g||=" << std::scientific << R0
+    if (n_constraints_ > 0 && d_constraint_ptr_ == nullptr) {
+      std::cerr << "SyncedVBDSolver: n_constraints_ > 0 but constraint buffer "
+                   "is unavailable (did you call element constraint setup?)"
                 << std::endl;
+      exit(EXIT_FAILURE);
     }
 
-    // VBD inner loop (colored Gauss-Seidel sweeps)
-    const bool sweep0_already_executed =
-        EnsureInnerSweepGraph(threads, blocks_p);
-    for (int inner_iter = 0; inner_iter < h_max_inner_; ++inner_iter) {
-      if (!(inner_iter == 0 && sweep0_already_executed)) {
-        HANDLE_ERROR(cudaGraphLaunch(inner_sweep_graph_exec_, 0));
+    auto launch_grad_l_residual_check = [&]() {
+      vbd_clear_internal_force_kernel<<<blocks_dof, threads>>>(typed_data);
+      vbd_compute_internal_force_kernel<<<blocks_if, threads>>>(typed_data,
+                                                                d_vbd_solver_);
+      if (n_constraints_ > 0) {
+        vbd_constraints_eval_kernel<<<blocks_fixed, threads>>>(typed_data,
+                                                               d_vbd_solver_);
+      }
+      vbd_compute_grad_l_kernel<<<blocks_dof, threads>>>(typed_data,
+                                                         d_vbd_solver_);
+    };
+
+    HANDLE_ERROR(cudaEventRecord(start));
+    vbd_update_pos_prev<<<blocks_coef, threads>>>(typed_data, d_vbd_solver_);
+
+    for (int outer_iter = 0; outer_iter < h_max_outer_; ++outer_iter) {
+      double R0 = -1.0;
+
+      vbd_update_pos_from_vel<<<blocks_coef, threads>>>(d_vbd_solver_,
+                                                        typed_data);
+      vbd_compute_p_kernel<<<blocks_p, threads>>>(typed_data, d_vbd_solver_);
+
+      if (h_conv_check_interval_ > 0) {
+        launch_grad_l_residual_check();
+        R0 = compute_l2_norm_cublas(d_g_, n_dofs);
+        std::cout << "    [VBD check] init: ||g||=" << std::scientific << R0
+                  << std::endl;
       }
 
-      // Compute and print residual every convergence_check_interval sweeps (like Python)
-      // Python: if verbose and (sweep % 5 == 0 or sweep == max_sweeps-1)
-      if (h_conv_check_interval_ > 0 &&
-          (inner_iter % h_conv_check_interval_ == 0 ||
-           inner_iter == h_max_inner_ - 1)) {
-        if (type_ == TYPE_T10) {
+      const bool sweep0_already_executed =
+          EnsureInnerSweepGraph(threads, blocks_p);
+      for (int inner_iter = 0; inner_iter < h_max_inner_; ++inner_iter) {
+        if (!(inner_iter == 0 && sweep0_already_executed)) {
+          HANDLE_ERROR(cudaGraphLaunch(inner_sweep_graph_exec_, 0));
+        }
+
+        if (h_conv_check_interval_ > 0 &&
+            (inner_iter % h_conv_check_interval_ == 0 ||
+             inner_iter == h_max_inner_ - 1)) {
           launch_grad_l_residual_check();
           const double R_norm = compute_l2_norm_cublas(d_g_, n_dofs);
 
-          std::cout << "    VBD sweep " << std::setw(3) << inner_iter 
-                    << ": ||g|| = " << std::scientific << R_norm;
-          std::cout << std::endl;
+          std::cout << "    VBD sweep " << std::setw(3) << inner_iter
+                    << ": ||g|| = " << std::scientific << R_norm << std::endl;
 
           const double stop_thresh =
               fmax(h_inner_tol_, h_inner_rtol_ * (R0 >= 0.0 ? R0 : R_norm));
@@ -1620,63 +1558,63 @@ void SyncedVBDSolver::OneStepVBD() {
           }
         }
       }
-    }
 
-    // Update positions from final velocities after all sweeps
-    if (type_ == TYPE_T10) {
       const bool post_already_executed =
           EnsurePostOuterGraph(threads, blocks_coef);
       if (!post_already_executed) {
         HANDLE_ERROR(cudaGraphLaunch(post_outer_graph_exec_, 0));
       }
-    }
 
-    // Compute constraint violation and update multipliers
-    if (n_constraints_ > 0) {
-      // Check constraint norm
-      double c_norm = 0.0;
-      if (d_constraint_ptr_ != nullptr) {
-        c_norm = compute_l2_norm_cublas(d_constraint_ptr_, n_constraints_);
-      } else if (type_ == TYPE_T10) {
-        auto *typed_data = static_cast<GPU_FEAT10_Data *>(h_data_);
-        c_norm = compute_l2_norm_cublas(typed_data->Get_Constraint_Ptr(),
-                                        n_constraints_);
-      }
+      if (n_constraints_ > 0) {
+        double c_norm = 0.0;
+        if (d_constraint_ptr_ != nullptr) {
+          c_norm = compute_l2_norm_cublas(d_constraint_ptr_, n_constraints_);
+        }
 
-      std::cout << "VBD outer " << outer_iter << ": ||c|| = " << c_norm
-                << std::endl;
-
-      if (c_norm < h_outer_tol_) {
-        std::cout << "VBD converged at outer iteration " << outer_iter
+        std::cout << "VBD outer " << outer_iter << ": ||c|| = " << c_norm
                   << std::endl;
-        break;
-      }
 
-      // Update dual variables
-      int blocks_d = (n_constraints_ + threads - 1) / threads;
-      if (type_ == TYPE_T10) {
-        vbd_update_dual<<<blocks_d, threads>>>(
-            static_cast<GPU_FEAT10_Data *>(d_data_), d_vbd_solver_);
+        if (c_norm < h_outer_tol_) {
+          std::cout << "VBD converged at outer iteration " << outer_iter
+                    << std::endl;
+          break;
+        }
+
+        const int blocks_d = (n_constraints_ + threads - 1) / threads;
+        vbd_update_dual<<<blocks_d, threads>>>(typed_data, d_vbd_solver_);
       }
     }
-  }
 
-  // Update v_prev for next time step
-  {
-    int blocks = (n_dofs + threads - 1) / threads;
-    vbd_update_v_prev<<<blocks, threads>>>(d_vbd_solver_);
-  }
+    {
+      const int blocks = (n_dofs + threads - 1) / threads;
+      vbd_update_v_prev<<<blocks, threads>>>(d_vbd_solver_);
+    }
 
-  // Refresh global F/P caches for postprocessing/debug (matches updated x12)
-  if (type_ == TYPE_T10) {
-    int total = n_beam_ * n_total_qp_;
-    int blocks = (total + threads - 1) / threads;
-    vbd_compute_p_kernel<<<blocks, threads>>>(
-        static_cast<GPU_FEAT10_Data *>(d_data_), d_vbd_solver_);
-  }
+    {
+      const int total = n_beam_ * n_total_qp_;
+      const int blocks = (total + threads - 1) / threads;
+      vbd_compute_p_kernel<<<blocks, threads>>>(typed_data, d_vbd_solver_);
+    }
 
-  HANDLE_ERROR(cudaEventRecord(stop));
-  HANDLE_ERROR(cudaDeviceSynchronize());
+    HANDLE_ERROR(cudaEventRecord(stop));
+    HANDLE_ERROR(cudaDeviceSynchronize());
+  };
+
+  switch (type_) {
+    case TYPE_3243:
+      one_step_typed(reinterpret_cast<GPU_ANCF3243_Data *>(d_data_));
+      break;
+    case TYPE_3443:
+      one_step_typed(reinterpret_cast<GPU_ANCF3443_Data *>(d_data_));
+      break;
+    case TYPE_T10:
+      one_step_typed(reinterpret_cast<GPU_FEAT10_Data *>(d_data_));
+      break;
+    default:
+      std::cerr << "SyncedVBDSolver::OneStepVBD: unsupported element type."
+                << std::endl;
+      exit(EXIT_FAILURE);
+  }
 
   float milliseconds = 0.0f;
   HANDLE_ERROR(cudaEventElapsedTime(&milliseconds, start, stop));

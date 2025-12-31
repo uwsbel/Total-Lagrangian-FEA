@@ -649,6 +649,13 @@ void SyncedNewtonSolver::AnalyzeHessianSparsity() {
 }
 
 void SyncedNewtonSolver::OneStepNewtonCuDSS() {
+  // CuDSS solve requires a pre-built sparse Hessian CSR pattern
+  // (`d_csr_row_offsets_`, `d_csr_col_indices_`, and `h_nnz_`).
+  // Lazily build the sparsity pattern on first use if needed.
+  if (!sparse_hessian_initialized_) {
+    AnalyzeHessianSparsity();
+  }
+
   // Determine element-specific constants
   int n_qp_per_elem;
   if (type_ == TYPE_T10) {

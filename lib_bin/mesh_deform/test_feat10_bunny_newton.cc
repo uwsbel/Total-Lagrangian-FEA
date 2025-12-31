@@ -1,14 +1,14 @@
 /**
- * FEAT10 Cube AdamW Test
+ * FEAT10 Bunny Newton Test
  *
  * Author: Json Zhou
  * Email:  zzhou292@wisc.edu
  *
- * This driver reads a FEAT10 tetrahedral cube mesh, fixes nodes on the
- * support plane, applies a concentrated load to a selected node, and runs
- * the synchronized AdamW solver. It is used to verify FEAT10 mass and
- * internal force assembly, constraint handling, and basic AdamW time
- * integration on a small solid.
+ * This simulation loads a FEAT10 bunny mesh, clamps nodes near the base,
+ * applies strong downward loads on nodes near the ears, and advances the
+ * configuration with the synchronized Newton solver. It is used to stress
+ * test FEAT10 internal force assembly, constraint handling, Newton
+ * convergence, and VTK output under large deformations.
  */
 
 #include <cuda_runtime.h>
@@ -16,25 +16,28 @@
 #include <Eigen/Dense>
 #include <iomanip>
 #include <iostream>
+#include <vector>
 
 #include "../../lib_utils/quadrature_utils.h"
-#include "../lib_src/elements/FEAT10Data.cuh"
-#include "../lib_src/solvers/SyncedAdamW.cuh"
-#include "../lib_utils/cpu_utils.h"
+#include "../../lib_src/elements/FEAT10Data.cuh"
+#include "../../lib_src/solvers/SyncedNewton.cuh"
+#include "../../lib_utils/cpu_utils.h"
 
-const double E    = 7e8;   // Young's modulus
-const double nu   = 0.33;  // Poisson's ratio
-const double rho0 = 2700;  // Density
+const double E    = 3.0e8;  // Pa  (~0.3 GPa, between 0.7 GPa and 0.13 GPa)
+const double nu   = 0.40;   // polymers tend to be higher than metals
+const double rho0 = 920.0;  // kg/m^3, typical polyethylene density
+
+enum MATERIAL_MODEL { MAT_SVK, MAT_MOONEY_RIVLIN };
 
 int main() {
   // Read mesh data
   Eigen::MatrixXd nodes;
   Eigen::MatrixXi elements;
 
-  int n_nodes =
-      ANCFCPUUtils::FEAT10_read_nodes("data/meshes/T10/cube.1.node", nodes);
-  int n_elems = ANCFCPUUtils::FEAT10_read_elements("data/meshes/T10/cube.1.ele",
-                                                   elements);
+  int n_nodes = ANCFCPUUtils::FEAT10_read_nodes(
+      "data/meshes/T10/bunny_ascii_26.1.node", nodes);
+  int n_elems = ANCFCPUUtils::FEAT10_read_elements(
+      "data/meshes/T10/bunny_ascii_26.1.ele", elements);
 
   std::cout << "mesh read nodes: " << n_nodes << std::endl;
   std::cout << "mesh read elements: " << n_elems << std::endl;
@@ -44,6 +47,8 @@ int main() {
   std::cout << nodes << std::endl;
   std::cout << "elements matrix:" << std::endl;
   std::cout << elements << std::endl;
+
+  MATERIAL_MODEL material = MAT_SVK;
 
   GPU_FEAT10_Data gpu_t10_data(n_elems, n_nodes);
 
@@ -61,12 +66,10 @@ int main() {
     h_z12(i) = nodes(i, 2);  // Z coordinates
   }
 
-  // ==========================================================================
-
-  // Find all nodes with z == 0
+  // Find all nodes with z < -4
   std::vector<int> fixed_node_indices;
   for (int i = 0; i < h_z12.size(); ++i) {
-    if (std::abs(h_z12(i)) < 1e-8) {  // tolerance for floating point
+    if (h_z12(i) < -4.0) {  // Fix nodes with z coordinate less than -4
       fixed_node_indices.push_back(i);
     }
   }
@@ -78,7 +81,7 @@ int main() {
   }
 
   // print fixed nodes
-  std::cout << "Fixed nodes (z == 0):" << std::endl;
+  std::cout << "Fixed nodes (z < -4.0):" << std::endl;
   for (int i = 0; i < h_fixed_nodes.size(); ++i) {
     std::cout << h_fixed_nodes(i) << " ";
   }
@@ -87,11 +90,15 @@ int main() {
   // Set fixed nodes
   gpu_t10_data.SetNodalFixed(h_fixed_nodes);
 
-  // set external force
+  // set external force: -1000N in z direction for all nodes above z=4
   Eigen::VectorXd h_f_ext(gpu_t10_data.get_n_coef() * 3);
-  // set external force applied at the end of the beam to be 0,0,3100
   h_f_ext.setZero();
-  h_f_ext(3 * 6 + 0) = 1000.0;
+
+  for (int i = 0; i < h_z12.size(); ++i) {
+    if (h_z12(i) > 4.0) {
+      h_f_ext(3 * i + 2) = -35000.0;  // z direction
+    }
+  }
   gpu_t10_data.SetExternalForce(h_f_ext);
 
   // Get quadrature data from quadrature_utils.h
@@ -107,9 +114,18 @@ int main() {
   gpu_t10_data.SetDensity(rho0);
   gpu_t10_data.SetDamping(0.0, 0.0);
 
-  gpu_t10_data.SetSVK(E, nu);
-
-  // =========================================================================
+  if (material == MAT_SVK) {
+    gpu_t10_data.SetSVK(E, nu);
+    std::cout << "Material: SVK" << std::endl;
+  } else {
+    const double mu    = E / (2.0 * (1.0 + nu));
+    const double K     = E / (3.0 * (1.0 - 2.0 * nu));
+    const double kappa = 1.5 * K;
+    const double mu10  = 0.30 * mu;
+    const double mu01  = 0.20 * mu;
+    gpu_t10_data.SetMooneyRivlin(mu10, mu01, kappa);
+    std::cout << "Material: Mooney-Rivlin" << std::endl;
+  }
 
   gpu_t10_data.CalcDnDuPre();
 
@@ -148,6 +164,11 @@ int main() {
 
   std::cout << "done ConvertToCSR_ConstraintJacT" << std::endl;
 
+  gpu_t10_data.BuildConstraintJacobianCSR();
+
+  std::cout << "done BuildConstraintJacobianCSR" << std::endl;
+
+
   // calculate p
   gpu_t10_data.CalcP();
 
@@ -178,14 +199,32 @@ int main() {
             << "):" << std::endl;
   std::cout << f_int.transpose() << std::endl;
   std::cout << "done retrieving internal force vector" << std::endl;
-
-  SyncedAdamWParams params = {2e-4, 0.9,  0.999, 1e-8, 1e-4, 0.995, 1e-1,
-                              1e-6, 1e14, 5,     500,  1e-3, 10, 0.0};
-  SyncedAdamWSolver solver(&gpu_t10_data, gpu_t10_data.get_n_constraint());
+  SyncedNewtonParams params = {1e-4, 1e-6, 1e-4, 1e14, 5, 10, 1e-3};
+  SyncedNewtonSolver solver(&gpu_t10_data, gpu_t10_data.get_n_constraint());
   solver.Setup();
   solver.SetParameters(&params);
-  for (int i = 0; i < 50; i++) {
+
+  solver.AnalyzeHessianSparsity();
+  solver.SetFixedSparsityPattern(true);  // Enable analysis reuse for fixed structure
+
+  int output_interval = 10;  // 10 vtk per seconds
+  int output_frame    = 0;
+
+  for (int i = 0; i < 8000; i++) {
+    // Reset external force to zero after 5000 steps
+    if (i == 1000) {
+      Eigen::VectorXd h_zero(gpu_t10_data.get_n_coef() * 3);
+      h_zero.setZero();
+      gpu_t10_data.SetExternalForce(h_zero);
+      std::cout << "External force reset to zero at step " << i << std::endl;
+    }
+
     solver.Solve();
+    if (i % output_interval == 0) {
+      gpu_t10_data.WriteOutputVTK("output/bunny_newton_step_" +
+                                  std::to_string(output_frame) + ".vtk");
+      output_frame++;
+    }
   }
 
   // // Set highest precision for cout
