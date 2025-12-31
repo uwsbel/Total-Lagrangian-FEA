@@ -474,6 +474,31 @@ cc_binary(
     ],
 )
 
+cc_binary(
+    name = "test_bubble_gripper_bunny_floor",
+    srcs = ["lib_bin/collision_system/test_bubble_gripper_bunny_floor.cc"],
+    copts = ["--std=c++17"],
+    linkopts = [
+        "-L/usr/local/cuda/lib64",
+        "-lcusparse",
+        "-lcudart",
+        "-lcudss",
+        "-lcublas",
+    ],
+    deps = [
+        ":FEAT10Data",
+        ":cpu_utils",
+        ":collision_broadphase",
+        ":collision_narrowphase",
+        ":mesh_manager",
+        ":visualization_utils",
+        ":solvers_syncednesterov",
+        ":solvers_syncedadamw",
+        ":solvers_syncednewton",
+        "@eigen//:eigen",
+    ],
+)
+
 # ========================================
 # unit test section
 cc_test(
