@@ -45,30 +45,12 @@ const double grip_speed =
 
 // Contact parameters (softer for stability)
 const double contact_damping  = 0.0;  // no Drake-style damping amplification
-const double contact_friction = 0.3;  // moderate friction
+const double contact_friction = 0.7;  // moderate friction
 
 using ANCFCPUUtils::VisualizationUtils;
-
-// Helper: create rotation matrix around X-axis
-Eigen::Matrix4d rotationX(double angle_rad) {
-  Eigen::Matrix4d R = Eigen::Matrix4d::Identity();
-  double c          = std::cos(angle_rad);
-  double s          = std::sin(angle_rad);
-  R(1, 1)           = c;
-  R(1, 2)           = -s;
-  R(2, 1)           = s;
-  R(2, 2)           = c;
-  return R;
-}
-
-// Helper: create translation matrix
-Eigen::Matrix4d translation(double dx, double dy, double dz) {
-  Eigen::Matrix4d T = Eigen::Matrix4d::Identity();
-  T(0, 3)           = dx;
-  T(1, 3)           = dy;
-  T(2, 3)           = dz;
-  return T;
-}
+using ANCFCPUUtils::rotationX;
+using ANCFCPUUtils::translation;
+using ANCFCPUUtils::uniformScale;
 
 int main(int argc, char** argv) {
   std::cout << "========================================" << std::endl;
@@ -112,12 +94,17 @@ int main(int argc, char** argv) {
 
   // Load scaled bunny (center)
   int mesh_bunny =
-      mesh_manager.LoadMesh(mesh_path + "bunny_26_scaled_0p01.1.node",
-                            mesh_path + "bunny_26_scaled_0p01.1.ele", "bunny");
+      mesh_manager.LoadMesh(mesh_path + "bunny_3k.1.node",
+                            mesh_path + "bunny_3k.1.ele", "bunny");
   if (mesh_bunny < 0) {
     std::cerr << "Failed to load bunny mesh" << std::endl;
     return 1;
   }
+
+  // The `bunny_3k.1` mesh is in a much larger unit scale than the grippers and
+  // floor. Scale it down to meters-ish to avoid huge gravity forces and NaNs.
+  const double bunny_scale = 1e-4;
+  mesh_manager.TransformMesh(mesh_bunny, uniformScale(bunny_scale));
 
   // Load floor slab (table)
   int mesh_floor = mesh_manager.LoadMesh(mesh_path + "1_1_01_floor.1.node",
@@ -152,7 +139,7 @@ int main(int argc, char** argv) {
   bool ok2 = mesh_manager.LoadScalarFieldFromNpz(
       mesh_gripper2, mesh_path + "bubble_mirror_xy.npz", "p_vertex");
   bool ok3 = mesh_manager.LoadScalarFieldFromNpz(
-      mesh_bunny, mesh_path + "bunny_26_scaled_0p01.npz", "p_vertex");
+      mesh_bunny, mesh_path + "bunny_3k.1.npz", "p_vertex");
   bool ok4 = mesh_manager.LoadScalarFieldFromNpz(
       mesh_floor, mesh_path + "1_1_01_floor.1.npz", "p_vertex");
 
@@ -200,10 +187,10 @@ int main(int argc, char** argv) {
   // one gripper below the bunny (dome facing +y) and one above (dome facing
   // -y), so the spherical faces look at each other along the y axis.
 
-  double gap        = 0.005;  // Gap between gripper dome and bunny (closer)
+  double gap        = 0.000;  // Gap between gripper dome and bunny (closer)
   double dome_depth = 0.037;  // Approximate dome depth
   double extra_bottom_offset =
-      0.005;  // Move bottom gripper slightly further in -y
+      0.00;  // Move bottom gripper slightly further in -y
   double extra_top_offset = 0.015;  // Move top gripper further toward -y
   double x_shift          = 0.02;   // Shift both grippers toward -x
 
@@ -507,13 +494,13 @@ int main(int argc, char** argv) {
 
     // ---------------------------------------------------------------------
     // 4. Update gripper positions (prescribed motion)
-    //    - Close until step 1700
+    //    - Close until step 1100
     //    - Hold for 200 steps, then reopen back to original positions by final
     //    step
     // ---------------------------------------------------------------------
     double move_amount;
-    const int close_steps = 1700;
-    const int hold_steps  = 200;  // hold closed before reopening
+    const int close_steps = 1100;
+    const int hold_steps  = 50;  // hold closed before reopening
     if (step <= close_steps) {
       // Closing phase: move inward linearly with step
       move_amount = grip_speed * step;

@@ -477,6 +477,20 @@ __global__ void computeContactPatchesKernel(Narrowphase* np,
   if (idx >= numPairs)
     return;
 
+  // Always initialize patch first so any early return leaves it invalid.
+  ContactPatch& patch      = patches[idx];
+  patch.numVertices        = 0;
+  patch.area               = 0.0;
+  patch.g_A                = 0.0;
+  patch.g_B                = 0.0;
+  patch.p_equilibrium      = 0.0;
+  patch.tetA_idx           = -1;
+  patch.tetB_idx           = -1;
+  patch.isValid            = false;
+  patch.validOrientation   = false;
+  patch.normal             = make_double3(0.0, 0.0, 0.0);
+  patch.centroid           = make_double3(0.0, 0.0, 0.0);
+
   // Get tet pair indices
   int tetA = collisionPairs[idx].idA;
   int tetB = collisionPairs[idx].idB;
@@ -507,11 +521,9 @@ __global__ void computeContactPatchesKernel(Narrowphase* np,
     meshIdB    = tempId;
   }
 
-  // Initialize output patch
-  ContactPatch& patch = patches[idx];
-  patch.tetA_idx      = tetA;
-  patch.tetB_idx      = tetB;
-  patch.isValid       = false;
+  // Store pair indices for debugging/visualization
+  patch.tetA_idx = tetA;
+  patch.tetB_idx = tetB;
 
   // Get tet A vertices and pressures (first 4 nodes = corners)
   double3 vA[4];

@@ -103,11 +103,13 @@ struct Narrowphase {
 
   // Device data
   ContactPatch* d_contactPatches;
+  int contactPatchCapacity;
 
   // Mesh data pointers (shared with Broadphase or copied)
   double* d_nodes;     // (n_nodes * 3) node coordinates
   int* d_elements;     // (n_elems * nodesPerElement) element connectivity
   double* d_pressure;  // (n_nodes) pressure values at each node
+  bool ownsNodes;
   int n_nodes;
   int n_elems;
   int nodesPerElement;  // Should be 4 for linear tets (corners only)
@@ -120,6 +122,7 @@ struct Narrowphase {
   // If false, same-mesh collision pairs are skipped in narrowphase.
   // Broadphase is expected to do this filtering first; this is a safety guard.
   bool enableSelfCollision;
+  bool verbose;
 
   // Collision pair data (from broadphase)
   CollisionPair* d_collisionPairs;
@@ -161,6 +164,13 @@ struct Narrowphase {
   // pressure field, and element-mesh IDs. Expects the same n_nodes and 3
   // columns as passed to Initialize.
   void UpdateNodes(const Eigen::MatrixXd& nodes);
+
+  // Bind an externally-managed device node buffer (column-major, length 3*n_nodes)
+  // to avoid per-step host->device copies. Caller owns the buffer lifetime.
+  void BindNodesDevicePtr(double* d_nodes_external);
+  void SetVerbose(bool enable) {
+    verbose = enable;
+  }
 
   /**
    * Set collision pairs from broadphase results.
@@ -214,6 +224,12 @@ struct Narrowphase {
   Eigen::VectorXd ComputeExternalForcesGPU(const double* d_vel = nullptr,
                                            double damping       = 0.0,
                                            double friction      = 0.0);
+
+  // Compute external forces on the device without copying back to the host.
+  // Populates the internal `d_f_ext` buffer.
+  void ComputeExternalForcesGPUDevice(const double* d_vel = nullptr,
+                                      double damping       = 0.0,
+                                      double friction      = 0.0);
 
   /**
    * Get device pointer to external forces buffer.

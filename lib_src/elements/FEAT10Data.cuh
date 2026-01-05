@@ -645,6 +645,26 @@ struct GPU_FEAT10_Data : public ElementBase {
                             cudaMemcpyHostToDevice));
   }
 
+  const double *GetX12DevicePtr() const {
+    return d_h_x12;
+  }
+
+  const double *GetY12DevicePtr() const {
+    return d_h_y12;
+  }
+
+  const double *GetZ12DevicePtr() const {
+    return d_h_z12;
+  }
+
+  double *GetExternalForceDevicePtr() {
+    return d_f_ext;
+  }
+
+  const double *GetExternalForceDevicePtr() const {
+    return d_f_ext;
+  }
+
   /**
    * Update node positions on GPU (for prescribed motion of fixed nodes).
    */

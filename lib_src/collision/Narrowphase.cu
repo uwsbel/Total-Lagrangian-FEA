@@ -26,14 +26,17 @@
 Narrowphase::Narrowphase()
     : numPatches(0),
       d_contactPatches(nullptr),
+      contactPatchCapacity(0),
       d_nodes(nullptr),
       d_elements(nullptr),
       d_pressure(nullptr),
+      ownsNodes(true),
       n_nodes(0),
       n_elems(0),
       nodesPerElement(4),
       d_elementMeshIds(nullptr),
       enableSelfCollision(true),
+      verbose(false),
       d_collisionPairs(nullptr),
       numCollisionPairs(0),
       ownsCollisionPairs(false),
@@ -115,6 +118,27 @@ void Narrowphase::UpdateNodes(const Eigen::MatrixXd& nodes) {
              cudaMemcpyHostToDevice);
 }
 
+void Narrowphase::BindNodesDevicePtr(double* d_nodes_external) {
+  if (n_nodes == 0 || d_np == nullptr) {
+    std::cerr << "Narrowphase::BindNodesDevicePtr called before Initialize"
+              << std::endl;
+    return;
+  }
+  if (d_nodes_external == nullptr) {
+    std::cerr << "Narrowphase::BindNodesDevicePtr: null device pointer"
+              << std::endl;
+    return;
+  }
+
+  if (d_nodes && ownsNodes) {
+    cudaFree(d_nodes);
+  }
+  d_nodes   = d_nodes_external;
+  ownsNodes = false;
+
+  cudaMemcpy(d_np, this, sizeof(Narrowphase), cudaMemcpyHostToDevice);
+}
+
 void Narrowphase::SetCollisionPairs(
     const std::vector<std::pair<int, int>>& pairs) {
   if (d_collisionPairs && ownsCollisionPairs) {
@@ -126,11 +150,9 @@ void Narrowphase::SetCollisionPairs(
 
   if (numCollisionPairs == 0) {
     ownsCollisionPairs = false;
-    if (d_contactPatches) {
-      cudaFree(d_contactPatches);
-      d_contactPatches = nullptr;
+    if (verbose) {
+      std::cout << "Narrowphase: No collision pairs to process\n";
     }
-    std::cout << "Narrowphase: No collision pairs to process" << std::endl;
     return;
   }
 
@@ -146,16 +168,18 @@ void Narrowphase::SetCollisionPairs(
   cudaMemcpy(d_collisionPairs, devicePairs.data(),
              numCollisionPairs * sizeof(CollisionPair), cudaMemcpyHostToDevice);
 
-  // Allocate contact patches
-  if (d_contactPatches)
-    cudaFree(d_contactPatches);
-  cudaMalloc(&d_contactPatches, numCollisionPairs * sizeof(ContactPatch));
+  // Allocate contact patches (reuse capacity)
+  if (d_contactPatches == nullptr || contactPatchCapacity < numCollisionPairs) {
+    if (d_contactPatches) {
+      cudaFree(d_contactPatches);
+    }
+    cudaMalloc(&d_contactPatches, numCollisionPairs * sizeof(ContactPatch));
+    contactPatchCapacity = numCollisionPairs;
+  }
 
-  // Initialize patches to invalid (zero-init)
-  cudaMemset(d_contactPatches, 0, numCollisionPairs * sizeof(ContactPatch));
-
-  std::cout << "Narrowphase: Set " << numCollisionPairs << " collision pairs"
-            << std::endl;
+  if (verbose) {
+    std::cout << "Narrowphase: Set " << numCollisionPairs << " collision pairs\n";
+  }
 }
 
 void Narrowphase::SetCollisionPairsDevice(const CollisionPair* d_pairs,
@@ -169,29 +193,34 @@ void Narrowphase::SetCollisionPairsDevice(const CollisionPair* d_pairs,
 
   if (numCollisionPairs == 0) {
     d_collisionPairs = nullptr;
-    if (d_contactPatches) {
-      cudaFree(d_contactPatches);
-      d_contactPatches = nullptr;
+    if (verbose) {
+      std::cout << "Narrowphase: No collision pairs to process\n";
     }
-    std::cout << "Narrowphase: No collision pairs to process" << std::endl;
     return;
   }
 
   d_collisionPairs = const_cast<CollisionPair*>(d_pairs);
 
-  // Allocate contact patches
-  if (d_contactPatches)
-    cudaFree(d_contactPatches);
-  cudaMalloc(&d_contactPatches, numCollisionPairs * sizeof(ContactPatch));
-  cudaMemset(d_contactPatches, 0, numCollisionPairs * sizeof(ContactPatch));
+  // Allocate contact patches (reuse capacity)
+  if (d_contactPatches == nullptr || contactPatchCapacity < numCollisionPairs) {
+    if (d_contactPatches) {
+      cudaFree(d_contactPatches);
+    }
+    cudaMalloc(&d_contactPatches, numCollisionPairs * sizeof(ContactPatch));
+    contactPatchCapacity = numCollisionPairs;
+  }
 
-  std::cout << "Narrowphase: Set " << numCollisionPairs
-            << " collision pairs (device)" << std::endl;
+  if (verbose) {
+    std::cout << "Narrowphase: Set " << numCollisionPairs
+              << " collision pairs (device)\n";
+  }
 }
 
 void Narrowphase::ComputeContactPatches() {
   if (numCollisionPairs == 0) {
-    std::cout << "Narrowphase: No collision pairs to compute" << std::endl;
+    if (verbose) {
+      std::cout << "Narrowphase: No collision pairs to compute\n";
+    }
     return;
   }
 
@@ -210,11 +239,8 @@ void Narrowphase::ComputeContactPatches() {
 
   computeContactPatchesKernel<<<gridSize, blockSize>>>(
       d_np, d_contactPatches, d_collisionPairs, numCollisionPairs);
-
-  cudaDeviceSynchronize();
-
-  // Check for errors
-  cudaError_t err = cudaGetLastError();
+  // Check for launch errors without forcing a full device sync.
+  cudaError_t err = cudaPeekAtLastError();
   if (err != cudaSuccess) {
     std::cerr << "Narrowphase kernel error: " << cudaGetErrorString(err)
               << std::endl;
@@ -299,10 +325,14 @@ void Narrowphase::Destroy() {
     cudaFree(d_contactPatches);
     d_contactPatches = nullptr;
   }
+  contactPatchCapacity = 0;
 
   if (d_nodes) {
-    cudaFree(d_nodes);
-    d_nodes = nullptr;
+    if (ownsNodes) {
+      cudaFree(d_nodes);
+    }
+    d_nodes   = nullptr;
+    ownsNodes = true;
   }
 
   if (d_elements) {
@@ -349,11 +379,18 @@ Eigen::VectorXd Narrowphase::ComputeExternalForcesGPU(const double* d_vel,
                                                       double damping,
                                                       double friction) {
   Eigen::VectorXd f_ext = Eigen::VectorXd::Zero(3 * n_nodes);
-
-  if (numCollisionPairs == 0 || d_contactPatches == nullptr) {
+  ComputeExternalForcesGPUDevice(d_vel, damping, friction);
+  if (d_f_ext == nullptr || f_ext_size != 3 * n_nodes) {
     return f_ext;
   }
+  cudaMemcpy(f_ext.data(), d_f_ext, f_ext_size * sizeof(double),
+             cudaMemcpyDeviceToHost);
+  return f_ext;
+}
 
+void Narrowphase::ComputeExternalForcesGPUDevice(const double* d_vel,
+                                                 double damping,
+                                                 double friction) {
   // Allocate or reallocate d_f_ext if needed
   int required_size = 3 * n_nodes;
   if (d_f_ext == nullptr || f_ext_size != required_size) {
@@ -367,6 +404,10 @@ Eigen::VectorXd Narrowphase::ComputeExternalForcesGPU(const double* d_vel,
   // Zero the force buffer
   cudaMemset(d_f_ext, 0, required_size * sizeof(double));
 
+  if (numCollisionPairs == 0 || d_contactPatches == nullptr) {
+    return;
+  }
+
   // Launch kernel - one thread per collision pair (patch)
   int blockSize = 256;
   int gridSize  = (numCollisionPairs + blockSize - 1) / blockSize;
@@ -374,19 +415,10 @@ Eigen::VectorXd Narrowphase::ComputeExternalForcesGPU(const double* d_vel,
   computeExternalForcesKernel<<<gridSize, blockSize>>>(
       d_contactPatches, numCollisionPairs, d_nodes, d_vel, d_elements, n_nodes,
       n_elems, damping, friction, d_f_ext);
-
-  cudaDeviceSynchronize();
-
-  // Check for errors
-  cudaError_t err = cudaGetLastError();
+  // Check for launch errors without forcing a full device sync.
+  cudaError_t err = cudaPeekAtLastError();
   if (err != cudaSuccess) {
-    std::cerr << "ComputeExternalForcesGPU kernel error: "
+    std::cerr << "ComputeExternalForcesGPUDevice kernel error: "
               << cudaGetErrorString(err) << std::endl;
   }
-
-  // Copy result back to host
-  cudaMemcpy(f_ext.data(), d_f_ext, required_size * sizeof(double),
-             cudaMemcpyDeviceToHost);
-
-  return f_ext;
 }

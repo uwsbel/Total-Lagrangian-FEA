@@ -329,11 +329,21 @@ bool MeshManager::LoadScalarFieldFromNpz(int mesh_id,
           reinterpret_cast<const int64_t*>(ids_data.data() + ids_offset);
       size_t n_ids = ids_shape.empty() ? 0 : ids_shape[0];
 
+      // Some meshes store 1-based vertex IDs; adaptively shift to 0-based.
+      // (This mirrors FEAT10_read_nodes/FEAT10_read_elements behavior.)
+      bool has_zero  = false;
+      int64_t min_id = INT64_MAX;
+      for (size_t i = 0; i < n_ids; ++i) {
+        has_zero = has_zero || (ids_ptr[i] == 0);
+        min_id   = std::min(min_id, ids_ptr[i]);
+      }
+      const int64_t base = (!has_zero && min_id == 1) ? 1 : 0;
+
       // Map values using original_vertex_ids
       for (size_t i = 0; i < n_values && i < n_ids; ++i) {
-        int64_t target_idx = ids_ptr[i];
+        int64_t target_idx = ids_ptr[i] - base;
         if (target_idx >= 0 && target_idx < instance.num_nodes) {
-          field(target_idx) = src[i];
+          field(static_cast<int>(target_idx)) = src[i];
         }
       }
       std::cout << "MeshManager: Loaded scalar field '" << field_key

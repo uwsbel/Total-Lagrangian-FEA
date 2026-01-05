@@ -42,39 +42,9 @@ const double contact_damping  = 0.0;  // no Drake-style damping amplification
 const double contact_friction = 0.3;  // moderate friction
 
 using ANCFCPUUtils::VisualizationUtils;
-
-// Helper: create rotation matrix around Y-axis
-Eigen::Matrix4d rotationY(double angle_rad) {
-  Eigen::Matrix4d R = Eigen::Matrix4d::Identity();
-  double c          = std::cos(angle_rad);
-  double s          = std::sin(angle_rad);
-  R(0, 0)           = c;
-  R(0, 2)           = s;
-  R(2, 0)           = -s;
-  R(2, 2)           = c;
-  return R;
-}
-
-// Helper: create rotation matrix around X-axis
-Eigen::Matrix4d rotationX(double angle_rad) {
-  Eigen::Matrix4d R = Eigen::Matrix4d::Identity();
-  double c          = std::cos(angle_rad);
-  double s          = std::sin(angle_rad);
-  R(1, 1)           = c;
-  R(1, 2)           = -s;
-  R(2, 1)           = s;
-  R(2, 2)           = c;
-  return R;
-}
-
-// Helper: create translation matrix
-Eigen::Matrix4d translation(double dx, double dy, double dz) {
-  Eigen::Matrix4d T = Eigen::Matrix4d::Identity();
-  T(0, 3)           = dx;
-  T(1, 3)           = dy;
-  T(2, 3)           = dz;
-  return T;
-}
+using ANCFCPUUtils::rotationX;
+using ANCFCPUUtils::rotationY;
+using ANCFCPUUtils::translation;
 
 int main(int argc, char** argv) {
   std::cout << "========================================" << std::endl;
