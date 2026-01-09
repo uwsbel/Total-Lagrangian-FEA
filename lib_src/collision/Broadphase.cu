@@ -473,7 +473,13 @@ void Broadphase::PrintSortedAABBs(int axis) {
   }
 }
 
-// Build neighbor connectivity map (CPU) - Optimized using node-to-element map
+// Build neighbor connectivity map (CPU).
+// Optimized using a node-to-element map:
+//   - Previous approach: O(n_elems^2) all-pairs element neighbor search.
+//   - Current approach: O(n_nodes * avg_elements_per_node^2),
+//     since we only compare elements that share a node.
+// For typical tetrahedral meshes where each node belongs to few elements,
+// this yields a substantial reduction in work compared to the naive method.
 void Broadphase::BuildNeighborMap() {
   h_neighborPairs.clear();
 
