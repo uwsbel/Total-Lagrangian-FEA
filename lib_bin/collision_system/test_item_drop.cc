@@ -1,10 +1,13 @@
 /**
- * Item Drop Into Open Box Simulation
+ * Item Drop Onto Floor Simulation
  * Author: Json Zhou (zzhou292@wisc.edu)
  *
- * Drops 2 armadilos and 2 dragons into an open-top box (no lid). The box is
- * fixed; items fall under gravity and interact via broadphase+narrowphase
- * contact forces.
+ * Drops a deformable item onto a deformable floor slab with its bottom layer
+ * vertices fixed. The item falls under gravity and interacts via broadphase +
+ * narrowphase contact forces.
+ *
+ * Solver:
+ *   Newton (cuDSS) only.
  */
 
 #include <cuda_runtime.h>
@@ -12,12 +15,16 @@
 #include <cublas_v2.h>
 
 #include <chrono>
+#include <cmath>
 #include <Eigen/Dense>
 #include <cstdlib>
 #include <filesystem>
 #include <iomanip>
 #include <iostream>
+#include <limits>
+#include <memory>
 #include <sstream>
+#include <string>
 #include <vector>
 
 #include "../../lib_src/collision/Broadphase.cuh"
@@ -31,8 +38,8 @@
 
 // Material properties (for deformable items)
 const double E_val = 2e6;    // Young's modulus (Pa)
-const double nu    = 0.35;   // Poisson's ratio
-const double rho0  = 1000.0; // Density (kg/m^3)
+const double nu    = 0.3;   // Poisson's ratio
+const double rho0  = 500.0; // Density (kg/m^3)
 
 // Simulation parameters
 const double gravity = -9.81; // Gravity acceleration (m/s^2)
@@ -81,6 +88,111 @@ static void PrintBBox(const std::string& label, const BBox& bb) {
             << "    ctr = [" << c(0) << ", " << c(1) << ", " << c(2) << "]\n";
 }
 
+static bool BBoxOverlaps(const BBox& a, const BBox& b, double eps = 0.0) {
+  const bool overlap_x = (a.min(0) <= b.max(0) + eps) && (a.max(0) + eps >= b.min(0));
+  const bool overlap_y = (a.min(1) <= b.max(1) + eps) && (a.max(1) + eps >= b.min(1));
+  const bool overlap_z = (a.min(2) <= b.max(2) + eps) && (a.max(2) + eps >= b.min(2));
+  return overlap_x && overlap_y && overlap_z;
+}
+
+namespace {
+
+struct Options {
+  double contact_damping  = contact_damping_default;
+  double contact_friction = contact_friction_default;
+  bool enable_self_collision = false;
+  int max_steps = num_steps_default;
+  int export_interval = 10;
+};
+
+bool StartsWith(const std::string& s, const std::string& prefix) {
+  return s.rfind(prefix, 0) == 0;
+}
+
+bool ParseInt(const std::string& s, int& out) {
+  try {
+    size_t idx = 0;
+    int v      = std::stoi(s, &idx);
+    if (idx != s.size()) return false;
+    out = v;
+    return true;
+  } catch (...) {
+    return false;
+  }
+}
+
+bool ParseDouble(const std::string& s, double& out) {
+  try {
+    size_t idx = 0;
+    double v   = std::stod(s, &idx);
+    if (idx != s.size()) return false;
+    out = v;
+    return true;
+  } catch (...) {
+    return false;
+  }
+}
+
+void PrintUsage(const char* argv0) {
+  std::cout
+      << "Usage:\n"
+      << "  " << argv0
+      << " [contact_damping] [contact_friction] [self_collision(0/1)] [max_steps] [export_interval]\n"
+      << "  " << argv0 << " [positional args...] [--help]\n";
+}
+
+bool ParseArgs(int argc, char** argv, Options& opt) {
+  int positional_index = 0;
+  for (int i = 1; i < argc; ++i) {
+    const std::string arg(argv[i]);
+    if (arg == "--help" || arg == "-h") {
+      PrintUsage(argv[0]);
+      return false;
+    }
+    if (StartsWith(arg, "--")) {
+      std::cerr << "Unknown argument: " << arg << "\n";
+      return false;
+    }
+
+    // Backward-compatible positional args.
+    switch (positional_index) {
+      case 0: {
+        if (!ParseDouble(arg, opt.contact_damping)) return false;
+        break;
+      }
+      case 1: {
+        if (!ParseDouble(arg, opt.contact_friction)) return false;
+        break;
+      }
+      case 2: {
+        int v = 0;
+        if (!ParseInt(arg, v)) return false;
+        opt.enable_self_collision = (v != 0);
+        break;
+      }
+      case 3: {
+        int v = 0;
+        if (!ParseInt(arg, v) || v <= 0) return false;
+        opt.max_steps = v;
+        break;
+      }
+      case 4: {
+        int v = 0;
+        if (!ParseInt(arg, v)) return false;
+        opt.export_interval = v;
+        break;
+      }
+      default:
+        std::cerr << "Too many positional arguments: " << arg << "\n";
+        return false;
+    }
+    ++positional_index;
+  }
+  return true;
+}
+
+}  // namespace
+
 static void CheckCublas(cublasStatus_t status, const char* what) {
   if (status != CUBLAS_STATUS_SUCCESS) {
     std::cerr << "cuBLAS error (" << what << "): status=" << int(status) << "\n";
@@ -90,30 +202,21 @@ static void CheckCublas(cublasStatus_t status, const char* what) {
 
 int main(int argc, char** argv) {
   std::cout << "========================================\n";
-  std::cout << "Item Drop Into Open Box Simulation\n";
+  std::cout << "Item Drop Onto Floor Simulation\n";
   std::cout << "========================================\n";
 
-  double contact_damping  = contact_damping_default;
-  double contact_friction = contact_friction_default;
-  bool enable_self_collision = false;
-  int max_steps = num_steps_default;
-  int export_interval = 10;
-
-  if (argc > 1) contact_damping  = std::atof(argv[1]);
-  if (argc > 2) contact_friction = std::atof(argv[2]);
-  if (argc > 3) enable_self_collision = (std::atoi(argv[3]) != 0);
-  if (argc > 4) {
-    int v = std::atoi(argv[4]);
-    if (v > 0) max_steps = v;
+  Options opt;
+  if (!ParseArgs(argc, argv, opt)) {
+    return 1;
   }
-  if (argc > 5) export_interval = std::atoi(argv[5]);
 
-  std::cout << "Contact damping: " << contact_damping << "\n";
-  std::cout << "Contact friction: " << contact_friction << "\n";
-  std::cout << "Enable self collision: " << (enable_self_collision ? 1 : 0)
+  std::cout << "Solver: newton\n";
+  std::cout << "Contact damping: " << opt.contact_damping << "\n";
+  std::cout << "Contact friction: " << opt.contact_friction << "\n";
+  std::cout << "Enable self collision: " << (opt.enable_self_collision ? 1 : 0)
             << "\n";
-  std::cout << "Max steps: " << max_steps << "\n";
-  std::cout << "Export interval: " << export_interval << "\n";
+  std::cout << "Max steps: " << opt.max_steps << "\n";
+  std::cout << "Export interval: " << opt.export_interval << "\n";
 
   std::filesystem::create_directories("output/item_drop");
 
@@ -121,68 +224,62 @@ int main(int argc, char** argv) {
   // Load meshes using MeshManager
   // =========================================================================
   ANCFCPUUtils::MeshManager mesh_manager;
-  const std::string mesh_path = "data/meshes/T10/item_drop/";
+  const std::string item_mesh_path  = "data/meshes/T10/item_drop/";
+  const std::string floor_mesh_path = "data/meshes/T10/bubble_gripper_bunny/";
 
-  const int mesh_openbox =
-      mesh_manager.LoadMesh(mesh_path + "openbox.node", mesh_path + "openbox.ele",
-                            "openbox_fixed");
+  const int mesh_floor =
+      mesh_manager.LoadMesh(floor_mesh_path + "1_1_01_floor.1.node",
+                            floor_mesh_path + "1_1_01_floor.1.ele", "floor");
   const int mesh_dragon1 =
-      mesh_manager.LoadMesh(mesh_path + "dragon.node", mesh_path + "dragon.ele",
+      mesh_manager.LoadMesh(item_mesh_path + "dragon.node",
+                            item_mesh_path + "dragon.ele",
                             "dragon_1");
-  const int mesh_arm1 =
-      mesh_manager.LoadMesh(mesh_path + "armadilo.node", mesh_path + "armadilo.ele",
-                            "armadilo_1");
-
-  if (mesh_openbox < 0 || mesh_dragon1 < 0 || mesh_arm1 < 0) {
-    std::cerr << "Failed to load one or more meshes from " << mesh_path << "\n";
+  if (mesh_floor < 0 || mesh_dragon1 < 0) {
+    std::cerr << "Failed to load one or more meshes.\n"
+              << "  floor path: " << floor_mesh_path << "\n"
+              << "  item path:  " << item_mesh_path << "\n";
     return 1;
   }
 
-  const auto& inst_box     = mesh_manager.GetMeshInstance(mesh_openbox);
+  const auto& inst_floor   = mesh_manager.GetMeshInstance(mesh_floor);
   const auto& inst_dragon1 = mesh_manager.GetMeshInstance(mesh_dragon1);
-  const auto& inst_arm1    = mesh_manager.GetMeshInstance(mesh_arm1);
 
   std::cout << "Loaded meshes:\n";
-  std::cout << "  Open box:     " << inst_box.num_nodes << " nodes, "
-            << inst_box.num_elements << " elements\n";
+  std::cout << "  Floor:        " << inst_floor.num_nodes << " nodes, "
+            << inst_floor.num_elements << " elements\n";
   std::cout << "  Dragon 1:     " << inst_dragon1.num_nodes << " nodes, "
             << inst_dragon1.num_elements << " elements\n";
-  std::cout << "  Armadilo 1:   " << inst_arm1.num_nodes << " nodes, "
-            << inst_arm1.num_elements << " elements\n";
 
   // =========================================================================
   // Load pressure fields for collision detection
   // =========================================================================
-  bool ok0 = mesh_manager.LoadScalarFieldFromNpz(mesh_openbox,
-                                                mesh_path + "openbox.npz",
-                                                "p_vertex");
+  bool ok0 = mesh_manager.LoadScalarFieldFromNpz(
+      mesh_floor, floor_mesh_path + "1_1_01_floor.1.npz", "p_vertex");
   bool ok1 = mesh_manager.LoadScalarFieldFromNpz(mesh_dragon1,
-                                                mesh_path + "dragon.npz",
-                                                "p_vertex");
-  bool ok3 = mesh_manager.LoadScalarFieldFromNpz(mesh_arm1,
-                                                mesh_path + "armadilo.npz",
-                                                "p_vertex");
-  if (!ok0 || !ok1 || !ok3) {
+                                                 item_mesh_path + "dragon.npz",
+                                                 "p_vertex");
+  if (!ok0 || !ok1) {
     std::cerr << "Failed to load pressure fields from NPZ\n";
     return 1;
   }
 
   // =========================================================================
-  // Compute mesh dimensions and place items above the box opening
+  // Scale + place floor and drop items above it
   // =========================================================================
   {
+    // The item_drop assets are ~2x2x1 scale (matching the old open-box).
+    // Upscale the 1x1 floor slab to better match that footprint.
+    const double floor_scale = 2.0;
+    mesh_manager.TransformMesh(mesh_floor,
+                               ANCFCPUUtils::uniformScale(floor_scale));
+
     const Eigen::MatrixXd& nodes0 = mesh_manager.GetAllNodes();
-    const BBox bb_box = ComputeBBox(nodes0, inst_box);
+    const BBox bb_floor = ComputeBBox(nodes0, inst_floor);
     const BBox bb_d1  = ComputeBBox(nodes0, inst_dragon1);
-    const BBox bb_a1  = ComputeBBox(nodes0, inst_arm1);
 
     std::cout << "Initial bounding boxes:\n";
-    PrintBBox("openbox", bb_box);
+    PrintBBox("floor", bb_floor);
     PrintBBox("dragon_1", bb_d1);
-    PrintBBox("armadilo_1", bb_a1);
-
-    const Eigen::Vector3d box_center = bb_box.center();
-    const double box_top_z           = bb_box.max(2);
 
     auto centerMeshAt = [&](int mesh_id,
                             const ANCFCPUUtils::MeshInstance& inst,
@@ -195,26 +292,33 @@ int main(int argc, char** argv) {
                                                           delta(2)));
     };
 
+    // Place the floor so its top surface is at z=0 and centered at (0,0).
+    const double floor_thickness = bb_floor.size()(2);
+    centerMeshAt(mesh_floor, inst_floor,
+                 Eigen::Vector3d(0.0, 0.0, -0.5 * floor_thickness));
+
+    const Eigen::MatrixXd& nodes_floor_placed = mesh_manager.GetAllNodes();
+    const BBox bb_floor_placed = ComputeBBox(nodes_floor_placed, inst_floor);
+    const Eigen::Vector3d floor_center = bb_floor_placed.center();
+    const double floor_top_z = bb_floor_placed.max(2);
+
     const double xy_offset = 0.05;  // small lateral offsets (stay near center)
-    const double base_gap  = 0.05;  // initial clearance above box rim
+    const double base_gap  = 0.05;  // initial clearance above the floor
 
     const double dz_d = 0.5 * bb_d1.size()(2);
-    const double dz_a = 0.5 * bb_a1.size()(2);
 
     centerMeshAt(mesh_dragon1, inst_dragon1,
-                 Eigen::Vector3d(box_center(0) + xy_offset,
-                                 box_center(1) + xy_offset,
-                                 box_top_z + base_gap + dz_d - 0.8));
-    centerMeshAt(mesh_arm1, inst_arm1,
-                 Eigen::Vector3d(box_center(0) - xy_offset,
-                                 box_center(1) - xy_offset,
-                                 box_top_z + base_gap + dz_a - 0.2));
+                 Eigen::Vector3d(floor_center(0) + xy_offset,
+                                 floor_center(1) + xy_offset,
+                                 floor_top_z + base_gap + dz_d));
 
     const Eigen::MatrixXd& nodes1 = mesh_manager.GetAllNodes();
-    std::cout << "Placed items above box opening:\n";
-    PrintBBox("openbox", ComputeBBox(nodes1, inst_box));
-    PrintBBox("dragon_1", ComputeBBox(nodes1, inst_dragon1));
-    PrintBBox("armadilo_1", ComputeBBox(nodes1, inst_arm1));
+    BBox bb_floor_final  = ComputeBBox(nodes1, inst_floor);
+    BBox bb_dragon_final = ComputeBBox(nodes1, inst_dragon1);
+
+    std::cout << "Placed floor and item:\n";
+    PrintBBox("floor", bb_floor_final);
+    PrintBBox("dragon_1", bb_dragon_final);
   }
 
   // =========================================================================
@@ -246,17 +350,26 @@ int main(int argc, char** argv) {
     h_z12(i) = initial_nodes(i, 2);
   }
 
-  // Fix all box nodes (static container)
+  // Fix floor bottom layer nodes (static support)
   std::vector<int> fixed_node_indices;
-  fixed_node_indices.reserve(inst_box.num_nodes);
-  for (int i = 0; i < inst_box.num_nodes; ++i) {
-    fixed_node_indices.push_back(inst_box.node_offset + i);
+  fixed_node_indices.reserve(inst_floor.num_nodes);
+  double floor_z_min = 1e30;
+  for (int i = 0; i < inst_floor.num_nodes; ++i) {
+    const int idx = inst_floor.node_offset + i;
+    floor_z_min = std::min(floor_z_min, initial_nodes(idx, 2));
+  }
+  const double floor_z_fix_threshold = floor_z_min + 1e-6;
+  for (int i = 0; i < inst_floor.num_nodes; ++i) {
+    const int idx = inst_floor.node_offset + i;
+    if (initial_nodes(idx, 2) <= floor_z_fix_threshold) {
+      fixed_node_indices.push_back(idx);
+    }
   }
   Eigen::VectorXi h_fixed_nodes(fixed_node_indices.size());
   for (size_t i = 0; i < fixed_node_indices.size(); ++i) {
     h_fixed_nodes(i) = fixed_node_indices[i];
   }
-  std::cout << "Fixed " << h_fixed_nodes.size() << " box nodes\n";
+  std::cout << "Fixed " << h_fixed_nodes.size() << " floor bottom nodes\n";
   gpu_t10_data.SetNodalFixed(h_fixed_nodes);
 
   const Eigen::VectorXd& tet5pt_x       = Quadrature::tet5pt_x;
@@ -302,13 +415,22 @@ int main(int argc, char** argv) {
   }
 
   // =========================================================================
-  // Newton solver
+  // Solver setup
   // =========================================================================
-  SyncedNewtonParams params = {1e-6, 0.0, 1e-6, 1e10, 3, 5, dt};
-  SyncedNewtonSolver solver(&gpu_t10_data, gpu_t10_data.get_n_constraint());
-  solver.Setup();
-  solver.SetParameters(&params);
-  solver.AnalyzeHessianSparsity();
+  SyncedNewtonParams params = {1e-4, 0.0, 1e-6, 1e12, 3, 10, dt};
+  auto newton_solver = std::make_unique<SyncedNewtonSolver>(
+      &gpu_t10_data, gpu_t10_data.get_n_constraint());
+  newton_solver->Setup();
+  newton_solver->SetParameters(&params);
+  newton_solver->AnalyzeHessianSparsity();
+  double* d_vel_guess = newton_solver->GetVelocityGuessDevicePtr();
+  if (d_vel_guess == nullptr) {
+    std::cerr << "Error: solver velocity guess pointer is null.\n";
+    return 1;
+  }
+  // Contact friction/damping uses this velocity buffer; initialize it so
+  // narrowphase doesn't read uninitialized device memory on step 0.
+  cudaMemset(d_vel_guess, 0, n_nodes * 3 * sizeof(double));
 
   // =========================================================================
   // Collision detection setup
@@ -325,11 +447,11 @@ int main(int argc, char** argv) {
   }
 
   broadphase.Initialize(mesh_manager);
-  broadphase.EnableSelfCollision(enable_self_collision);
+  broadphase.EnableSelfCollision(opt.enable_self_collision);
   broadphase.BuildNeighborMap();
 
   narrowphase.Initialize(initial_nodes, elements, pressure, elementMeshIds);
-  narrowphase.EnableSelfCollision(enable_self_collision);
+  narrowphase.EnableSelfCollision(opt.enable_self_collision);
 
   // Shared device node buffer for collision (column-major: [x... y... z...]).
   // Updated from the dynamics state each step via device-to-device copies.
@@ -357,7 +479,6 @@ int main(int argc, char** argv) {
     }
   };
   addGravityForInstance(inst_dragon1);
-  addGravityForInstance(inst_arm1);
 
   double* d_f_gravity = nullptr;
   cudaMalloc(&d_f_gravity, n_nodes * 3 * sizeof(double));
@@ -370,9 +491,9 @@ int main(int argc, char** argv) {
   // =========================================================================
   // Simulation loop
   // =========================================================================
-  std::cout << "\nStarting simulation (" << max_steps << " steps)\n\n";
+  std::cout << "\nStarting simulation (" << opt.max_steps << " steps)\n\n";
 
-  for (int step = 0; step < max_steps; ++step) {
+  for (int step = 0; step < opt.max_steps; ++step) {
     auto t0 = std::chrono::high_resolution_clock::now();
 
     // 1) Update collision node buffer from the solver state (device->device)
@@ -394,9 +515,8 @@ int main(int argc, char** argv) {
     narrowphase.ComputeContactPatches();
 
     // 3) External forces: contact + gravity
-    narrowphase.ComputeExternalForcesGPUDevice(solver.GetVelocityGuessDevicePtr(),
-                                               contact_damping,
-                                               contact_friction);
+    narrowphase.ComputeExternalForcesGPUDevice(d_vel_guess, opt.contact_damping,
+                                               opt.contact_friction);
 
     cudaMemcpy(gpu_t10_data.GetExternalForceDevicePtr(), d_f_gravity,
                n_nodes * 3 * sizeof(double), cudaMemcpyDeviceToDevice);
@@ -411,10 +531,10 @@ int main(int argc, char** argv) {
     }
 
     // 4) Solve one step
-    solver.Solve();
+    newton_solver->Solve();
 
     // 5) Export (host copies only when writing output)
-    if (export_interval > 0 && step % export_interval == 0) {
+    if (opt.export_interval > 0 && step % opt.export_interval == 0) {
       Eigen::VectorXd x12_current, y12_current, z12_current;
       gpu_t10_data.RetrievePositionToCPU(x12_current, y12_current, z12_current);
 
