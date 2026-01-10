@@ -210,7 +210,8 @@ struct Narrowphase {
   /**
    * Compute external forces from contact patches on GPU.
    * Uses already-on-device patch data (d_contactPatches) without CPU transfer.
-   * Forces are computed using atomicAdd and returned as Eigen vector.
+   * Forces are computed on the device (atomicAdd into `d_f_ext`) and then copied
+   * back to the host as an Eigen vector.
    *
    * @param d_vel   Optional device pointer to nodal velocities laid out as
    *                [vx0, vy0, vz0, vx1, ...]. If nullptr, no velocity-dependent
@@ -225,15 +226,22 @@ struct Narrowphase {
                                            double damping       = 0.0,
                                            double friction      = 0.0);
 
-  // Compute external forces on the device without copying back to the host.
-  // Populates the internal `d_f_ext` buffer.
+  /**
+   * Compute external forces on the device without copying back to the host.
+   * Populates/overwrites the internal `d_f_ext` buffer, which can be accessed
+   * via GetExternalForcesDevicePtr().
+   *
+   * Use this when you want to accumulate contact forces directly into another
+   * device buffer (e.g., a solver's external force vector) without a host round-trip.
+   */
   void ComputeExternalForcesGPUDevice(const double* d_vel = nullptr,
                                       double damping       = 0.0,
                                       double friction      = 0.0);
 
   /**
    * Get device pointer to external forces buffer.
-   * Call ComputeExternalForcesGPU() first to populate the buffer.
+   * Call ComputeExternalForcesGPUDevice() (or ComputeExternalForcesGPU()) first
+   * to populate the buffer.
    * Buffer layout: [fx0, fy0, fz0, fx1, fy1, fz1, ...]
    *
    * @return Device pointer to external forces (3 * n_nodes doubles)

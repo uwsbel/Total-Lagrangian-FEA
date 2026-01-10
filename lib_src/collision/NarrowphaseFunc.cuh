@@ -477,19 +477,20 @@ __global__ void computeContactPatchesKernel(Narrowphase* np,
   if (idx >= numPairs)
     return;
 
-  // Always initialize patch first so any early return leaves it invalid.
+  // Always initialize the minimal patch state first so any early return leaves it
+  // invalid. We intentionally defer writing derived fields (e.g., centroid/normal)
+  // until the patch is confirmed valid to avoid extra global-memory stores for
+  // collision pairs that quickly early-out.
   ContactPatch& patch      = patches[idx];
-  patch.numVertices        = 0;
-  patch.area               = 0.0;
-  patch.g_A                = 0.0;
-  patch.g_B                = 0.0;
-  patch.p_equilibrium      = 0.0;
-  patch.tetA_idx           = -1;
-  patch.tetB_idx           = -1;
-  patch.isValid            = false;
-  patch.validOrientation   = false;
-  patch.normal             = make_double3(0.0, 0.0, 0.0);
-  patch.centroid           = make_double3(0.0, 0.0, 0.0);
+  patch.isValid          = false;
+  patch.validOrientation = false;
+  patch.numVertices      = 0;
+  patch.area             = 0.0;
+  patch.tetA_idx         = -1;
+  patch.tetB_idx         = -1;
+  patch.g_A              = 0.0;
+  patch.g_B              = 0.0;
+  patch.p_equilibrium    = 0.0;
 
   // Get tet pair indices
   int tetA = collisionPairs[idx].idA;

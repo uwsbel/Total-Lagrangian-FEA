@@ -33,6 +33,7 @@ cuda_library(
     copts = ["--std=c++17", "-O3", "--use_fast_math", "--extra-device-vectorization"],
     linkopts = ["-lcudart"],
     deps = [
+        ":cuda_utils",
         "@eigen//:eigen",
     ],
     visibility = ["//visibility:public"],

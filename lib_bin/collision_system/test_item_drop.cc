@@ -31,6 +31,7 @@
 #include "../../lib_src/collision/Narrowphase.cuh"
 #include "../../lib_src/elements/FEAT10Data.cuh"
 #include "../../lib_src/solvers/SyncedNewton.cuh"
+#include "../../lib_utils/cuda_utils.h"
 #include "../../lib_utils/cpu_utils.h"
 #include "../../lib_utils/mesh_manager.h"
 #include "../../lib_utils/quadrature_utils.h"
@@ -430,7 +431,7 @@ int main(int argc, char** argv) {
   }
   // Contact friction/damping uses this velocity buffer; initialize it so
   // narrowphase doesn't read uninitialized device memory on step 0.
-  cudaMemset(d_vel_guess, 0, n_nodes * 3 * sizeof(double));
+  HANDLE_ERROR(cudaMemset(d_vel_guess, 0, n_nodes * 3 * sizeof(double)));
 
   // =========================================================================
   // Collision detection setup
@@ -456,13 +457,15 @@ int main(int argc, char** argv) {
   // Shared device node buffer for collision (column-major: [x... y... z...]).
   // Updated from the dynamics state each step via device-to-device copies.
   double* d_nodes_collision = nullptr;
-  cudaMalloc(&d_nodes_collision, n_nodes * 3 * sizeof(double));
-  cudaMemcpy(d_nodes_collision, gpu_t10_data.GetX12DevicePtr(),
-             n_nodes * sizeof(double), cudaMemcpyDeviceToDevice);
-  cudaMemcpy(d_nodes_collision + n_nodes, gpu_t10_data.GetY12DevicePtr(),
-             n_nodes * sizeof(double), cudaMemcpyDeviceToDevice);
-  cudaMemcpy(d_nodes_collision + 2 * n_nodes, gpu_t10_data.GetZ12DevicePtr(),
-             n_nodes * sizeof(double), cudaMemcpyDeviceToDevice);
+  HANDLE_ERROR(cudaMalloc(&d_nodes_collision, n_nodes * 3 * sizeof(double)));
+  HANDLE_ERROR(cudaMemcpy(d_nodes_collision, gpu_t10_data.GetX12DevicePtr(),
+                          n_nodes * sizeof(double), cudaMemcpyDeviceToDevice));
+  HANDLE_ERROR(
+      cudaMemcpy(d_nodes_collision + n_nodes, gpu_t10_data.GetY12DevicePtr(),
+                 n_nodes * sizeof(double), cudaMemcpyDeviceToDevice));
+  HANDLE_ERROR(cudaMemcpy(d_nodes_collision + 2 * n_nodes,
+                          gpu_t10_data.GetZ12DevicePtr(), n_nodes * sizeof(double),
+                          cudaMemcpyDeviceToDevice));
 
   broadphase.BindNodesDevicePtr(d_nodes_collision);
   narrowphase.BindNodesDevicePtr(d_nodes_collision);
@@ -481,9 +484,10 @@ int main(int argc, char** argv) {
   addGravityForInstance(inst_dragon1);
 
   double* d_f_gravity = nullptr;
-  cudaMalloc(&d_f_gravity, n_nodes * 3 * sizeof(double));
-  cudaMemcpy(d_f_gravity, h_f_gravity.data(), n_nodes * 3 * sizeof(double),
-             cudaMemcpyHostToDevice);
+  HANDLE_ERROR(cudaMalloc(&d_f_gravity, n_nodes * 3 * sizeof(double)));
+  HANDLE_ERROR(cudaMemcpy(d_f_gravity, h_f_gravity.data(),
+                          n_nodes * 3 * sizeof(double),
+                          cudaMemcpyHostToDevice));
 
   cublasHandle_t cublas_handle = nullptr;
   CheckCublas(cublasCreate(&cublas_handle), "cublasCreate");
@@ -497,12 +501,15 @@ int main(int argc, char** argv) {
     auto t0 = std::chrono::high_resolution_clock::now();
 
     // 1) Update collision node buffer from the solver state (device->device)
-    cudaMemcpy(d_nodes_collision, gpu_t10_data.GetX12DevicePtr(),
-               n_nodes * sizeof(double), cudaMemcpyDeviceToDevice);
-    cudaMemcpy(d_nodes_collision + n_nodes, gpu_t10_data.GetY12DevicePtr(),
-               n_nodes * sizeof(double), cudaMemcpyDeviceToDevice);
-    cudaMemcpy(d_nodes_collision + 2 * n_nodes, gpu_t10_data.GetZ12DevicePtr(),
-               n_nodes * sizeof(double), cudaMemcpyDeviceToDevice);
+    HANDLE_ERROR(cudaMemcpy(d_nodes_collision, gpu_t10_data.GetX12DevicePtr(),
+                            n_nodes * sizeof(double),
+                            cudaMemcpyDeviceToDevice));
+    HANDLE_ERROR(
+        cudaMemcpy(d_nodes_collision + n_nodes, gpu_t10_data.GetY12DevicePtr(),
+                   n_nodes * sizeof(double), cudaMemcpyDeviceToDevice));
+    HANDLE_ERROR(cudaMemcpy(d_nodes_collision + 2 * n_nodes,
+                            gpu_t10_data.GetZ12DevicePtr(), n_nodes * sizeof(double),
+                            cudaMemcpyDeviceToDevice));
 
     // 2) Collision detection
     broadphase.CreateAABB();
@@ -518,8 +525,9 @@ int main(int argc, char** argv) {
     narrowphase.ComputeExternalForcesGPUDevice(d_vel_guess, opt.contact_damping,
                                                opt.contact_friction);
 
-    cudaMemcpy(gpu_t10_data.GetExternalForceDevicePtr(), d_f_gravity,
-               n_nodes * 3 * sizeof(double), cudaMemcpyDeviceToDevice);
+    HANDLE_ERROR(cudaMemcpy(gpu_t10_data.GetExternalForceDevicePtr(), d_f_gravity,
+                            n_nodes * 3 * sizeof(double),
+                            cudaMemcpyDeviceToDevice));
 
     if (num_collision_pairs > 0) {
       const double alpha = 1.0;
@@ -577,8 +585,8 @@ int main(int argc, char** argv) {
   }
 
   CheckCublas(cublasDestroy(cublas_handle), "cublasDestroy");
-  cudaFree(d_f_gravity);
-  cudaFree(d_nodes_collision);
+  HANDLE_ERROR(cudaFree(d_f_gravity));
+  HANDLE_ERROR(cudaFree(d_nodes_collision));
 
   std::cout << "Done.\n";
   return 0;
