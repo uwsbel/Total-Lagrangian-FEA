@@ -1,6 +1,7 @@
 test-scripts
 .bazel_output
 .bazel_output_base
+.bazel_output_user_root
 .bazel_home
 .bazel_tmp
 .bazel_user_root

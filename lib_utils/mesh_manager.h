@@ -1,10 +1,49 @@
 #pragma once
 
 #include <Eigen/Dense>
+#include <cmath>
 #include <string>
 #include <vector>
 
 namespace ANCFCPUUtils {
+
+inline Eigen::Matrix4d rotationX(double angle_rad) {
+  Eigen::Matrix4d R = Eigen::Matrix4d::Identity();
+  double c          = std::cos(angle_rad);
+  double s          = std::sin(angle_rad);
+  R(1, 1)           = c;
+  R(1, 2)           = -s;
+  R(2, 1)           = s;
+  R(2, 2)           = c;
+  return R;
+}
+
+inline Eigen::Matrix4d rotationY(double angle_rad) {
+  Eigen::Matrix4d R = Eigen::Matrix4d::Identity();
+  double c          = std::cos(angle_rad);
+  double s          = std::sin(angle_rad);
+  R(0, 0)           = c;
+  R(0, 2)           = s;
+  R(2, 0)           = -s;
+  R(2, 2)           = c;
+  return R;
+}
+
+inline Eigen::Matrix4d translation(double dx, double dy, double dz) {
+  Eigen::Matrix4d T = Eigen::Matrix4d::Identity();
+  T(0, 3)           = dx;
+  T(1, 3)           = dy;
+  T(2, 3)           = dz;
+  return T;
+}
+
+inline Eigen::Matrix4d uniformScale(double s) {
+  Eigen::Matrix4d S = Eigen::Matrix4d::Identity();
+  S(0, 0)           = s;
+  S(1, 1)           = s;
+  S(2, 2)           = s;
+  return S;
+}
 
 /**
  * Structure representing a single mesh instance with offset information

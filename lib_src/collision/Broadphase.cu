@@ -47,11 +47,31 @@ Broadphase::Broadphase()
       numNeighborPairs(0),
       n_nodes(0),
       n_elems(0),
-      nodesPerElement(0) {}
+      nodesPerElement(0),
+      ownsNodes(true),
+      d_collisionCounts(nullptr),
+      d_collisionOffsets(nullptr),
+      collisionCountCapacity(0),
+      d_scanTempStorage(nullptr),
+      scanTempStorageBytes(0),
+      collisionPairsCapacity(0),
+      verbose(false) {}
 
 // Destructor
 Broadphase::~Broadphase() {
   Destroy();
+}
+
+static void BestEffortCudaFree(void *ptr, const char *name) {
+  if (!ptr) {
+    return;
+  }
+  cudaError_t err = cudaFree(ptr);
+  if (err == cudaSuccess || err == cudaErrorCudartUnloading) {
+    return;
+  }
+  std::cerr << "cudaFree(" << name << ") failed: " << cudaGetErrorString(err)
+            << std::endl;
 }
 
 // Initialize GPU resources with mesh data
@@ -71,32 +91,34 @@ void Broadphase::Initialize(const Eigen::MatrixXd& nodes,
   numObjects = n_elems;
 
   // Allocate device memory for AABBs (one per element)
-  cudaMalloc(&d_aabbs, n_elems * sizeof(AABB));
+  HANDLE_ERROR(cudaMalloc(&d_aabbs, n_elems * sizeof(AABB)));
 
   // Allocate sorting arrays (input and output buffers)
-  cudaMalloc(&d_sortKeys, n_elems * sizeof(double));
-  cudaMalloc(&d_sortIndices, n_elems * sizeof(int));
-  cudaMalloc(&d_sortedKeys, n_elems * sizeof(double));
-  cudaMalloc(&d_sortedIndices, n_elems * sizeof(int));
-  cudaMalloc(&d_sortedAABBs, n_elems * sizeof(AABB));
+  HANDLE_ERROR(cudaMalloc(&d_sortKeys, n_elems * sizeof(double)));
+  HANDLE_ERROR(cudaMalloc(&d_sortIndices, n_elems * sizeof(int)));
+  HANDLE_ERROR(cudaMalloc(&d_sortedKeys, n_elems * sizeof(double)));
+  HANDLE_ERROR(cudaMalloc(&d_sortedIndices, n_elems * sizeof(int)));
+  HANDLE_ERROR(cudaMalloc(&d_sortedAABBs, n_elems * sizeof(AABB)));
 
   // Allocate temporary storage for CUB sorting
   d_tempStorage = nullptr;
-  cub::DeviceRadixSort::SortPairs(d_tempStorage, tempStorageBytes, d_sortKeys,
-                                  d_sortedKeys, d_sortIndices, d_sortedIndices,
-                                  n_elems);
-  cudaMalloc(&d_tempStorage, tempStorageBytes);
+  HANDLE_ERROR(cub::DeviceRadixSort::SortPairs(
+      d_tempStorage, tempStorageBytes, d_sortKeys, d_sortedKeys, d_sortIndices,
+      d_sortedIndices, n_elems));
+  HANDLE_ERROR(cudaMalloc(&d_tempStorage, tempStorageBytes));
 
   // Allocate and copy mesh data to device
   // Nodes: n_nodes x 3 (column-major)
-  cudaMalloc(&d_nodes, n_nodes * 3 * sizeof(double));
-  cudaMemcpy(d_nodes, nodes.data(), n_nodes * 3 * sizeof(double),
-             cudaMemcpyHostToDevice);
+  HANDLE_ERROR(cudaMalloc(&d_nodes, n_nodes * 3 * sizeof(double)));
+  HANDLE_ERROR(cudaMemcpy(d_nodes, nodes.data(), n_nodes * 3 * sizeof(double),
+                          cudaMemcpyHostToDevice));
+  ownsNodes = true;
 
   // Elements: n_elems x nodesPerElement (column-major)
-  cudaMalloc(&d_elements, n_elems * nodesPerElement * sizeof(int));
-  cudaMemcpy(d_elements, elements.data(),
-             n_elems * nodesPerElement * sizeof(int), cudaMemcpyHostToDevice);
+  HANDLE_ERROR(cudaMalloc(&d_elements, n_elems * nodesPerElement * sizeof(int)));
+  HANDLE_ERROR(cudaMemcpy(d_elements, elements.data(),
+                          n_elems * nodesPerElement * sizeof(int),
+                          cudaMemcpyHostToDevice));
 
   // Allocate and copy element mesh IDs
   h_elementMeshIds.assign(n_elems, 0);
@@ -106,16 +128,17 @@ void Broadphase::Initialize(const Eigen::MatrixXd& nodes,
     }
   }
 
-  cudaMalloc(&d_elementMeshIds, n_elems * sizeof(int));
-  cudaMemcpy(d_elementMeshIds, h_elementMeshIds.data(), n_elems * sizeof(int),
-             cudaMemcpyHostToDevice);
+  HANDLE_ERROR(cudaMalloc(&d_elementMeshIds, n_elems * sizeof(int)));
+  HANDLE_ERROR(cudaMemcpy(d_elementMeshIds, h_elementMeshIds.data(),
+                          n_elems * sizeof(int), cudaMemcpyHostToDevice));
 
   // Allocate device copy of this struct and copy to device
-  cudaMalloc(&d_bp, sizeof(Broadphase));
-  cudaMemcpy(d_bp, this, sizeof(Broadphase), cudaMemcpyHostToDevice);
+  HANDLE_ERROR(cudaMalloc(&d_bp, sizeof(Broadphase)));
+  HANDLE_ERROR(cudaMemcpy(d_bp, this, sizeof(Broadphase),
+                          cudaMemcpyHostToDevice));
 
   if (d_sameMeshPairsCount == nullptr) {
-    cudaMalloc(&d_sameMeshPairsCount, sizeof(int));
+    HANDLE_ERROR(cudaMalloc(&d_sameMeshPairsCount, sizeof(int)));
   }
 
   std::cout << "Broadphase initialized with " << n_nodes << " nodes and "
@@ -126,79 +149,100 @@ void Broadphase::EnableSelfCollision(bool enable) {
   enableSelfCollision = enable;
 
   if (d_bp) {
-    cudaMemcpy(d_bp, this, sizeof(Broadphase), cudaMemcpyHostToDevice);
+    HANDLE_ERROR(cudaMemcpy(d_bp, this, sizeof(Broadphase),
+                            cudaMemcpyHostToDevice));
   }
 }
 
 // Destroy/cleanup GPU resources
 void Broadphase::Destroy() {
   if (d_aabbs) {
-    cudaFree(d_aabbs);
+    BestEffortCudaFree(d_aabbs, "d_aabbs");
     d_aabbs = nullptr;
   }
 
   if (d_sortKeys) {
-    cudaFree(d_sortKeys);
+    BestEffortCudaFree(d_sortKeys, "d_sortKeys");
     d_sortKeys = nullptr;
   }
 
   if (d_sortIndices) {
-    cudaFree(d_sortIndices);
+    BestEffortCudaFree(d_sortIndices, "d_sortIndices");
     d_sortIndices = nullptr;
   }
 
   if (d_sortedKeys) {
-    cudaFree(d_sortedKeys);
+    BestEffortCudaFree(d_sortedKeys, "d_sortedKeys");
     d_sortedKeys = nullptr;
   }
 
   if (d_sortedIndices) {
-    cudaFree(d_sortedIndices);
+    BestEffortCudaFree(d_sortedIndices, "d_sortedIndices");
     d_sortedIndices = nullptr;
   }
 
   if (d_sortedAABBs) {
-    cudaFree(d_sortedAABBs);
+    BestEffortCudaFree(d_sortedAABBs, "d_sortedAABBs");
     d_sortedAABBs = nullptr;
   }
 
   if (d_tempStorage) {
-    cudaFree(d_tempStorage);
+    BestEffortCudaFree(d_tempStorage, "d_tempStorage");
     d_tempStorage = nullptr;
   }
 
   if (d_collisionPairs) {
-    cudaFree(d_collisionPairs);
+    BestEffortCudaFree(d_collisionPairs, "d_collisionPairs");
     d_collisionPairs = nullptr;
   }
+  collisionPairsCapacity = 0;
 
   if (d_sameMeshPairsCount) {
-    cudaFree(d_sameMeshPairsCount);
+    BestEffortCudaFree(d_sameMeshPairsCount, "d_sameMeshPairsCount");
     d_sameMeshPairsCount = nullptr;
   }
 
   if (d_neighborPairHashes) {
-    cudaFree(d_neighborPairHashes);
+    BestEffortCudaFree(d_neighborPairHashes, "d_neighborPairHashes");
     d_neighborPairHashes = nullptr;
   }
 
+  if (d_collisionCounts) {
+    BestEffortCudaFree(d_collisionCounts, "d_collisionCounts");
+    d_collisionCounts = nullptr;
+  }
+  if (d_collisionOffsets) {
+    BestEffortCudaFree(d_collisionOffsets, "d_collisionOffsets");
+    d_collisionOffsets = nullptr;
+  }
+  collisionCountCapacity = 0;
+
+  if (d_scanTempStorage) {
+    BestEffortCudaFree(d_scanTempStorage, "d_scanTempStorage");
+    d_scanTempStorage = nullptr;
+  }
+  scanTempStorageBytes = 0;
+
   if (d_nodes) {
-    cudaFree(d_nodes);
-    d_nodes = nullptr;
+    if (ownsNodes) {
+      BestEffortCudaFree(d_nodes, "d_nodes");
+    }
+    d_nodes    = nullptr;
+    ownsNodes  = true;
   }
 
   if (d_elementMeshIds) {
-    cudaFree(d_elementMeshIds);
+    BestEffortCudaFree(d_elementMeshIds, "d_elementMeshIds");
     d_elementMeshIds = nullptr;
   }
 
   if (d_elements) {
-    cudaFree(d_elements);
+    BestEffortCudaFree(d_elements, "d_elements");
     d_elements = nullptr;
   }
 
   if (d_bp) {
-    cudaFree(d_bp);
+    BestEffortCudaFree(d_bp, "d_bp");
     d_bp = nullptr;
   }
 
@@ -243,12 +287,12 @@ void Broadphase::UpdateNodes(const Eigen::MatrixXd& nodes) {
   h_nodes = nodes;
 
   // Copy updated positions to device; connectivity and neighbor map are reused
-  cudaMemcpy(d_nodes, nodes.data(), n_nodes * 3 * sizeof(double),
-             cudaMemcpyHostToDevice);
+  HANDLE_ERROR(cudaMemcpy(d_nodes, nodes.data(), n_nodes * 3 * sizeof(double),
+                          cudaMemcpyHostToDevice));
 }
 
 // Create/update AABBs from mesh data
-void Broadphase::CreateAABB() {
+void Broadphase::CreateAABB(bool copyToHost) {
   if (n_elems == 0 || d_nodes == nullptr || d_elements == nullptr) {
     std::cerr << "Error: Mesh data not initialized" << std::endl;
     return;
@@ -258,25 +302,34 @@ void Broadphase::CreateAABB() {
   int blockSize = 256;
   int gridSize  = (n_elems + blockSize - 1) / blockSize;
   computeAABBKernel<<<gridSize, blockSize>>>(d_bp, d_aabbs, n_elems);
+  cudaError_t err = cudaPeekAtLastError();
+  if (err != cudaSuccess) {
+    std::cerr << "computeAABBKernel launch error: " << cudaGetErrorString(err)
+              << std::endl;
+  }
 
-  cudaDeviceSynchronize();
-
-  // Update host AABBs
-  h_aabbs.resize(n_elems);
-  cudaMemcpy(h_aabbs.data(), d_aabbs, n_elems * sizeof(AABB),
-             cudaMemcpyDeviceToHost);
+  if (copyToHost) {
+    h_aabbs.resize(n_elems);
+    HANDLE_ERROR(cudaMemcpy(h_aabbs.data(), d_aabbs, n_elems * sizeof(AABB),
+                            cudaMemcpyDeviceToHost));
+  }
 
   numObjects = n_elems;
 
-  std::cout << "Created " << numObjects << " AABBs from mesh elements"
-            << std::endl;
+  if (verbose) {
+    std::cout << "Created " << numObjects << " AABBs from mesh elements\n";
+  }
 }
 
 void Broadphase::RetrieveAABBandPrints() {
-  if (n_elems == 0 || h_aabbs.empty()) {
+  if (n_elems == 0 || d_aabbs == nullptr) {
     std::cerr << "Error: No AABBs to print" << std::endl;
     return;
   }
+
+  h_aabbs.resize(n_elems);
+  HANDLE_ERROR(cudaMemcpy(h_aabbs.data(), d_aabbs, n_elems * sizeof(AABB),
+                          cudaMemcpyDeviceToHost));
 
   std::cout << "\n========== AABB Results ==========\n" << std::endl;
 
@@ -306,6 +359,28 @@ void Broadphase::RetrieveAABBandPrints() {
   std::cout << "========== End of AABB Results ==========\n" << std::endl;
 }
 
+void Broadphase::BindNodesDevicePtr(double* d_nodes_external) {
+  if (n_nodes == 0 || d_bp == nullptr) {
+    std::cerr << "Broadphase::BindNodesDevicePtr called before Initialize"
+              << std::endl;
+    return;
+  }
+  if (d_nodes_external == nullptr) {
+    std::cerr << "Broadphase::BindNodesDevicePtr: null device pointer"
+              << std::endl;
+    return;
+  }
+
+  if (d_nodes && ownsNodes) {
+    HANDLE_ERROR(cudaFree(d_nodes));
+  }
+  d_nodes   = d_nodes_external;
+  ownsNodes = false;
+
+  HANDLE_ERROR(cudaMemcpy(d_bp, this, sizeof(Broadphase),
+                          cudaMemcpyHostToDevice));
+}
+
 // Sort AABBs along specified axis
 void Broadphase::SortAABBs(int axis) {
   if (numObjects == 0)
@@ -318,20 +393,25 @@ void Broadphase::SortAABBs(int axis) {
   int gridSize  = (numObjects + blockSize - 1) / blockSize;
   extractSortKeysKernel<<<gridSize, blockSize>>>(
       d_aabbs, d_sortKeys, d_sortIndices, axis, numObjects);
+  HANDLE_ERROR(cudaPeekAtLastError());
 
   // Sort using CUB (separate input and output buffers)
-  cub::DeviceRadixSort::SortPairs(d_tempStorage, tempStorageBytes, d_sortKeys,
-                                  d_sortedKeys, d_sortIndices, d_sortedIndices,
-                                  numObjects);
+  HANDLE_ERROR(cub::DeviceRadixSort::SortPairs(
+      d_tempStorage, tempStorageBytes, d_sortKeys, d_sortedKeys, d_sortIndices,
+      d_sortedIndices, numObjects));
 
   // Reorder AABBs based on sorted indices
   reorderAABBsKernel<<<gridSize, blockSize>>>(d_aabbs, d_sortedAABBs,
                                               d_sortedIndices, numObjects);
+  cudaError_t err = cudaPeekAtLastError();
+  if (err != cudaSuccess) {
+    std::cerr << "SortAABBs kernel launch error: " << cudaGetErrorString(err)
+              << std::endl;
+  }
 
-  cudaDeviceSynchronize();
-
-  std::cout << "Sorted " << numObjects << " AABBs along axis " << axis
-            << std::endl;
+  if (verbose) {
+    std::cout << "Sorted " << numObjects << " AABBs along axis " << axis << "\n";
+  }
 }
 
 // Print sorted AABBs for verification
@@ -348,12 +428,12 @@ void Broadphase::PrintSortedAABBs(int axis) {
   std::vector<double> h_sortedKeys(numObjects);
   std::vector<int> h_sortedIndices(numObjects);
 
-  cudaMemcpy(h_sortedAABBs.data(), d_sortedAABBs, numObjects * sizeof(AABB),
-             cudaMemcpyDeviceToHost);
-  cudaMemcpy(h_sortedKeys.data(), d_sortedKeys, numObjects * sizeof(double),
-             cudaMemcpyDeviceToHost);
-  cudaMemcpy(h_sortedIndices.data(), d_sortedIndices, numObjects * sizeof(int),
-             cudaMemcpyDeviceToHost);
+  HANDLE_ERROR(cudaMemcpy(h_sortedAABBs.data(), d_sortedAABBs,
+                          numObjects * sizeof(AABB), cudaMemcpyDeviceToHost));
+  HANDLE_ERROR(cudaMemcpy(h_sortedKeys.data(), d_sortedKeys,
+                          numObjects * sizeof(double), cudaMemcpyDeviceToHost));
+  HANDLE_ERROR(cudaMemcpy(h_sortedIndices.data(), d_sortedIndices,
+                          numObjects * sizeof(int), cudaMemcpyDeviceToHost));
 
   const char* axis_names[] = {"X", "Y", "Z"};
   std::cout << "\n========== Sorted AABBs (Axis: " << axis_names[axis]
@@ -410,32 +490,39 @@ void Broadphase::PrintSortedAABBs(int axis) {
   }
 }
 
-// Build neighbor connectivity map (CPU)
+// Build neighbor connectivity map (CPU).
+// Optimized using a node-to-element map:
+//   - Previous approach: O(n_elems^2) all-pairs element neighbor search.
+//   - Current approach: O(n_nodes * avg_elements_per_node^2),
+//     since we only compare elements that share a node.
+// For typical tetrahedral meshes where each node belongs to few elements,
+// this yields a substantial reduction in work compared to the naive method.
 void Broadphase::BuildNeighborMap() {
   h_neighborPairs.clear();
 
   std::cout << "Building neighbor map..." << std::endl;
 
-  // For each element, get its nodes
-  for (int elemA = 0; elemA < n_elems; elemA++) {
-    // Get nodes of element A
-    std::unordered_set<int> nodesA;
+  // Step 1: Build node-to-element map (which elements contain each node)
+  std::vector<std::vector<int>> nodeToElements(n_nodes);
+  for (int elem = 0; elem < n_elems; elem++) {
     for (int i = 0; i < nodesPerElement; i++) {
-      nodesA.insert(h_elements(elemA, i));
+      int nodeId = h_elements(elem, i);
+      nodeToElements[nodeId].push_back(elem);
     }
+  }
 
-    // Check against all other elements
-    for (int elemB = elemA + 1; elemB < n_elems; elemB++) {
-      // Check if elements share any nodes
-      bool shareNode = false;
-      for (int j = 0; j < nodesPerElement; j++) {
-        if (nodesA.count(h_elements(elemB, j)) > 0) {
-          shareNode = true;
-          break;
-        }
-      }
-
-      if (shareNode) {
+  // Step 2: For each node, all elements sharing that node are neighbors
+  for (int nodeId = 0; nodeId < n_nodes; nodeId++) {
+    const std::vector<int>& elems = nodeToElements[nodeId];
+    int numElems = elems.size();
+    
+    // All pairs of elements sharing this node are neighbors
+    for (int i = 0; i < numElems; i++) {
+      for (int j = i + 1; j < numElems; j++) {
+        int elemA = elems[i];
+        int elemB = elems[j];
+        // Ensure consistent ordering (smaller id first)
+        if (elemA > elemB) std::swap(elemA, elemB);
         h_neighborPairs.insert({elemA, elemB});
       }
     }
@@ -459,12 +546,14 @@ void Broadphase::BuildNeighborMap() {
   // Copy to device
   numNeighborPairs = hashes.size();
   if (d_neighborPairHashes)
-    cudaFree(d_neighborPairHashes);
+    HANDLE_ERROR(cudaFree(d_neighborPairHashes));
 
   if (numNeighborPairs > 0) {
-    cudaMalloc(&d_neighborPairHashes, numNeighborPairs * sizeof(long long));
-    cudaMemcpy(d_neighborPairHashes, hashes.data(),
-               numNeighborPairs * sizeof(long long), cudaMemcpyHostToDevice);
+    HANDLE_ERROR(
+        cudaMalloc(&d_neighborPairHashes, numNeighborPairs * sizeof(long long)));
+    HANDLE_ERROR(cudaMemcpy(d_neighborPairHashes, hashes.data(),
+                            numNeighborPairs * sizeof(long long),
+                            cudaMemcpyHostToDevice));
   }
 
   std::cout << "Neighbor map uploaded to GPU (" << numNeighborPairs << " pairs)"
@@ -479,76 +568,89 @@ void Broadphase::DetectCollisions(bool copyPairsToHost) {
   int blockSize = 256;
   int gridSize  = (numObjects + blockSize - 1) / blockSize;
 
-  // Pass 1: Count collisions per element
-  int* d_collisionCounts;
-  int* d_collisionOffsets;
-  cudaMalloc(&d_collisionCounts, numObjects * sizeof(int));
-  cudaMalloc(&d_collisionOffsets, (numObjects + 1) * sizeof(int));
+  // Pass 1: Count collisions per element (reuse buffers; avoid per-step malloc/free)
+  if (d_collisionCounts == nullptr || d_collisionOffsets == nullptr ||
+      collisionCountCapacity < (numObjects + 1)) {
+    if (d_collisionCounts)
+      HANDLE_ERROR(cudaFree(d_collisionCounts));
+    if (d_collisionOffsets)
+      HANDLE_ERROR(cudaFree(d_collisionOffsets));
+    HANDLE_ERROR(cudaMalloc(&d_collisionCounts, (numObjects + 1) * sizeof(int)));
+    HANDLE_ERROR(
+        cudaMalloc(&d_collisionOffsets, (numObjects + 1) * sizeof(int)));
+    collisionCountCapacity = numObjects + 1;  // includes scan sentinel slot
+  }
 
   countCollisionsKernel<<<gridSize, blockSize>>>(
       d_sortedAABBs, d_collisionCounts, numObjects, d_neighborPairHashes,
       numNeighborPairs, d_elementMeshIds, enableSelfCollision ? 1 : 0);
-  cudaDeviceSynchronize();
+  HANDLE_ERROR(cudaPeekAtLastError());
+  // `countCollisionsKernel` writes counts[0..numObjects-1] only. We scan
+  // (numObjects + 1) entries so offsets[numObjects] becomes the total number of
+  // collision pairs; therefore counts[numObjects] is a sentinel and must be 0.
+  HANDLE_ERROR(cudaMemset(&d_collisionCounts[numObjects], 0, sizeof(int)));
 
-  // Compute prefix sum (exclusive scan of numObjects elements)
-  // Output has numObjects elements; we read the last element + last count for
-  // total
-  void* d_tempScan     = nullptr;
-  size_t tempScanBytes = 0;
+  // Exclusive scan over (numObjects + 1) so offsets[numObjects] == total collisions.
+  size_t requiredScanBytes = 0;
+  HANDLE_ERROR(cub::DeviceScan::ExclusiveSum(nullptr, requiredScanBytes,
+                                             d_collisionCounts,
+                                             d_collisionOffsets,
+                                             numObjects + 1));
+  if (d_scanTempStorage == nullptr || scanTempStorageBytes < requiredScanBytes) {
+    if (d_scanTempStorage)
+      HANDLE_ERROR(cudaFree(d_scanTempStorage));
+    HANDLE_ERROR(cudaMalloc(&d_scanTempStorage, requiredScanBytes));
+    scanTempStorageBytes = requiredScanBytes;
+  }
 
-  cub::DeviceScan::ExclusiveSum(d_tempScan, tempScanBytes, d_collisionCounts,
-                                d_collisionOffsets, numObjects);
-  cudaMalloc(&d_tempScan, tempScanBytes);
+  HANDLE_ERROR(cub::DeviceScan::ExclusiveSum(d_scanTempStorage,
+                                             scanTempStorageBytes,
+                                             d_collisionCounts,
+                                             d_collisionOffsets,
+                                             numObjects + 1));
 
-  cub::DeviceScan::ExclusiveSum(d_tempScan, tempScanBytes, d_collisionCounts,
-                                d_collisionOffsets, numObjects);
-  cudaDeviceSynchronize();
+  // Minimal device->host transfer: just the total collision count (one int).
+  HANDLE_ERROR(cudaMemcpy(&numCollisions, &d_collisionOffsets[numObjects],
+                          sizeof(int), cudaMemcpyDeviceToHost));
 
-  // Compute total: offset[numObjects-1] + count[numObjects-1]
-  int lastOffset, lastCount;
-  cudaMemcpy(&lastOffset, &d_collisionOffsets[numObjects - 1], sizeof(int),
-             cudaMemcpyDeviceToHost);
-  cudaMemcpy(&lastCount, &d_collisionCounts[numObjects - 1], sizeof(int),
-             cudaMemcpyDeviceToHost);
-  numCollisions = lastOffset + lastCount;
-
-  std::cout << "Total non-neighbor collisions found: " << numCollisions
-            << std::endl;
+  if (verbose) {
+    std::cout << "Total non-neighbor collisions found: " << numCollisions
+              << "\n";
+  }
 
   if (numCollisions == 0) {
-    cudaFree(d_collisionCounts);
-    cudaFree(d_collisionOffsets);
-    cudaFree(d_tempScan);
     h_collisionPairs.clear();
     return;
   }
 
   // Pass 2: Generate pairs
-  if (d_collisionPairs)
-    cudaFree(d_collisionPairs);
-  cudaMalloc(&d_collisionPairs, numCollisions * sizeof(CollisionPair));
+  if (d_collisionPairs == nullptr || collisionPairsCapacity < numCollisions) {
+    if (d_collisionPairs)
+      HANDLE_ERROR(cudaFree(d_collisionPairs));
+    HANDLE_ERROR(
+        cudaMalloc(&d_collisionPairs, numCollisions * sizeof(CollisionPair)));
+    collisionPairsCapacity = numCollisions;
+  }
 
   generateCollisionPairsKernel<<<gridSize, blockSize>>>(
       d_sortedAABBs, d_collisionOffsets, d_collisionPairs, numObjects,
       d_neighborPairHashes, numNeighborPairs, d_elementMeshIds,
       enableSelfCollision ? 1 : 0);
-  cudaDeviceSynchronize();
+  HANDLE_ERROR(cudaPeekAtLastError());
 
   if (copyPairsToHost) {
     h_collisionPairs.resize(numCollisions);
-    cudaMemcpy(h_collisionPairs.data(), d_collisionPairs,
-               numCollisions * sizeof(CollisionPair), cudaMemcpyDeviceToHost);
+    HANDLE_ERROR(cudaMemcpy(h_collisionPairs.data(), d_collisionPairs,
+                            numCollisions * sizeof(CollisionPair),
+                            cudaMemcpyDeviceToHost));
   } else {
     h_collisionPairs.clear();
   }
 
-  // Cleanup
-  cudaFree(d_collisionCounts);
-  cudaFree(d_collisionOffsets);
-  cudaFree(d_tempScan);
-
-  std::cout << "Detected " << numCollisions
-            << " collision pairs (neighbors filtered)" << std::endl;
+  if (verbose) {
+    std::cout << "Detected " << numCollisions
+              << " collision pairs (neighbors filtered)\n";
+  }
 }
 
 int Broadphase::CountSameMeshPairsDevice() const {
@@ -557,17 +659,19 @@ int Broadphase::CountSameMeshPairsDevice() const {
     return 0;
   }
 
-  cudaMemset(d_sameMeshPairsCount, 0, sizeof(int));
+  HANDLE_ERROR(cudaMemset(d_sameMeshPairsCount, 0, sizeof(int)));
 
   int blockSize = 256;
   int gridSize  = (numCollisions + blockSize - 1) / blockSize;
 
   countSameMeshPairsKernel<<<gridSize, blockSize>>>(
       d_collisionPairs, numCollisions, d_elementMeshIds, d_sameMeshPairsCount);
-  cudaDeviceSynchronize();
+  HANDLE_ERROR(cudaPeekAtLastError());
+  HANDLE_ERROR(cudaDeviceSynchronize());
 
   int count = 0;
-  cudaMemcpy(&count, d_sameMeshPairsCount, sizeof(int), cudaMemcpyDeviceToHost);
+  HANDLE_ERROR(cudaMemcpy(&count, d_sameMeshPairsCount, sizeof(int),
+                          cudaMemcpyDeviceToHost));
   return count;
 }
 

@@ -103,11 +103,13 @@ struct Narrowphase {
 
   // Device data
   ContactPatch* d_contactPatches;
+  int contactPatchCapacity;
 
   // Mesh data pointers (shared with Broadphase or copied)
   double* d_nodes;     // (n_nodes * 3) node coordinates
   int* d_elements;     // (n_elems * nodesPerElement) element connectivity
   double* d_pressure;  // (n_nodes) pressure values at each node
+  bool ownsNodes;
   int n_nodes;
   int n_elems;
   int nodesPerElement;  // Should be 4 for linear tets (corners only)
@@ -120,6 +122,7 @@ struct Narrowphase {
   // If false, same-mesh collision pairs are skipped in narrowphase.
   // Broadphase is expected to do this filtering first; this is a safety guard.
   bool enableSelfCollision;
+  bool verbose;
 
   // Collision pair data (from broadphase)
   CollisionPair* d_collisionPairs;
@@ -162,6 +165,13 @@ struct Narrowphase {
   // columns as passed to Initialize.
   void UpdateNodes(const Eigen::MatrixXd& nodes);
 
+  // Bind an externally-managed device node buffer (column-major, length 3*n_nodes)
+  // to avoid per-step host->device copies. Caller owns the buffer lifetime.
+  void BindNodesDevicePtr(double* d_nodes_external);
+  void SetVerbose(bool enable) {
+    verbose = enable;
+  }
+
   /**
    * Set collision pairs from broadphase results.
    *
@@ -200,7 +210,8 @@ struct Narrowphase {
   /**
    * Compute external forces from contact patches on GPU.
    * Uses already-on-device patch data (d_contactPatches) without CPU transfer.
-   * Forces are computed using atomicAdd and returned as Eigen vector.
+   * Forces are computed on the device (atomicAdd into `d_f_ext`) and then copied
+   * back to the host as an Eigen vector.
    *
    * @param d_vel   Optional device pointer to nodal velocities laid out as
    *                [vx0, vy0, vz0, vx1, ...]. If nullptr, no velocity-dependent
@@ -216,8 +227,21 @@ struct Narrowphase {
                                            double friction      = 0.0);
 
   /**
+   * Compute external forces on the device without copying back to the host.
+   * Populates/overwrites the internal `d_f_ext` buffer, which can be accessed
+   * via GetExternalForcesDevicePtr().
+   *
+   * Use this when you want to accumulate contact forces directly into another
+   * device buffer (e.g., a solver's external force vector) without a host round-trip.
+   */
+  void ComputeExternalForcesGPUDevice(const double* d_vel = nullptr,
+                                      double damping       = 0.0,
+                                      double friction      = 0.0);
+
+  /**
    * Get device pointer to external forces buffer.
-   * Call ComputeExternalForcesGPU() first to populate the buffer.
+   * Call ComputeExternalForcesGPUDevice() (or ComputeExternalForcesGPU()) first
+   * to populate the buffer.
    * Buffer layout: [fx0, fy0, fz0, fx1, fy1, fz1, ...]
    *
    * @return Device pointer to external forces (3 * n_nodes doubles)

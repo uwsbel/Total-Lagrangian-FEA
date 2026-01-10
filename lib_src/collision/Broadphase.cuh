@@ -81,6 +81,7 @@ struct Broadphase {
   double* d_nodes;
   int* d_elements;
   int nodesPerElement;
+  bool ownsNodes;
 
   // Element-to-mesh mapping (device). Used to optionally filter out same-mesh
   // (self) collisions efficiently in broadphase.
@@ -113,6 +114,16 @@ struct Broadphase {
   // Neighbor filter data (compact representation for GPU)
   long long* d_neighborPairHashes;  // Sorted array of hashed pairs
   int numNeighborPairs;
+
+  // Reused temporary buffers for collision pair generation (avoid per-step malloc/free)
+  int* d_collisionCounts;
+  int* d_collisionOffsets;
+  int collisionCountCapacity;  // capacity in elements (not including the +1 slot)
+  void* d_scanTempStorage;
+  size_t scanTempStorageBytes;
+  int collisionPairsCapacity;
+
+  bool verbose;
 
   // Constructor
   Broadphase();
@@ -149,7 +160,15 @@ struct Broadphase {
   void Destroy();
 
   // Create/update AABBs from mesh data
-  void CreateAABB();
+  void CreateAABB(bool copyToHost = false);
+
+  // Bind an externally-managed device node buffer (column-major, length 3*n_nodes)
+  // to avoid per-step host->device copies. Caller owns the buffer lifetime.
+  void BindNodesDevicePtr(double* d_nodes_external);
+
+  void SetVerbose(bool enable) {
+    verbose = enable;
+  }
 
   // Sort AABBs along specified axis (0=x, 1=y, 2=z)
   void SortAABBs(int axis = 0);
