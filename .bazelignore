@@ -10,3 +10,4 @@ bazel-bin
 bazel-out
 bazel-testlogs
 bazel-Total-Lagrangian-FEA
+third_party/DEM-Engine
