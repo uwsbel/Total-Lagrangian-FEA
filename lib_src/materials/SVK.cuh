@@ -1,3 +1,14 @@
+/*==============================================================
+ *==============================================================
+ * Project: RoboDyna
+ * Author:  Json Zhou
+ * Email:   zzhou292@wisc.edu
+ * File:    SVK.cuh
+ * Brief:   Defines CUDA device routines for the St. Venant–Kirchhoff (SVK)
+ *          hyperelastic material model (stress and tangent block calculations).
+ *==============================================================
+ *==============================================================*/
+
 #pragma once
 #if defined(__CUDACC__)
 __device__ __forceinline__ void svk_compute_P_from_trFtF_and_FFtF(

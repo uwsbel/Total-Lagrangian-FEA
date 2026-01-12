@@ -1,0 +1,58 @@
+load("@rules_cuda//cuda:defs.bzl", "cuda_library")
+
+package(default_visibility = ["//visibility:public"])
+
+cuda_library(
+    name = "ANCF3243Data",
+    srcs = ["ANCF3243Data.cu"],
+    hdrs = [
+        "ANCF3243Data.cuh",
+        "ANCF3243DataFunc.cuh",
+        "ElementBase.h",
+    ],
+    copts = ["--std=c++17", "-O3", "--use_fast_math", "--extra-device-vectorization"],
+    linkopts = ["-lcusolver", "-lcublas", "-lcusparse"],
+    deps = [
+        "//lib_src/materials:materials",
+        "//lib_utils:cpu_utils",
+        "//lib_utils:cuda_utils",
+        "@eigen//:eigen",
+    ],
+)
+
+cuda_library(
+    name = "ANCF3443Data",
+    srcs = ["ANCF3443Data.cu"],
+    hdrs = [
+        "ANCF3443Data.cuh",
+        "ANCF3443DataFunc.cuh",
+        "ElementBase.h",
+    ],
+    copts = ["--std=c++17", "-O3", "--use_fast_math", "--extra-device-vectorization"],
+    linkopts = ["-lcusolver", "-lcublas", "-lcusparse"],
+    deps = [
+        "//lib_src/materials:materials",
+        "//lib_utils:cpu_utils",
+        "//lib_utils:cuda_utils",
+        "@eigen//:eigen",
+    ],
+)
+
+cuda_library(
+    name = "FEAT10Data",
+    srcs = ["FEAT10Data.cu"],
+    hdrs = [
+        "FEAT10Data.cuh",
+        "FEAT10DataFunc.cuh",
+        "ElementBase.h",
+    ],
+    copts = ["--std=c++17", "-O3", "--use_fast_math", "--extra-device-vectorization"],
+    linkopts = ["-lcusolver", "-lcublas", "-lcusparse"],
+    deps = [
+        "//lib_src/materials:materials",
+        "//lib_utils:cpu_utils",
+        "//lib_utils:cuda_utils",
+        "@eigen//:eigen",
+    ],
+)
+

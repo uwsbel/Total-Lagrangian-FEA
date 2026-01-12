@@ -1,7 +1,6 @@
 #include "mesh_utils.h"
 
 #include <cmath>
-#include <iostream>
 #include <stdexcept>
 
 namespace ANCFCPUUtils {
@@ -28,8 +27,6 @@ GridMeshGenerator::GridMeshGenerator(double X, double Y, double L,
   nx_ = static_cast<int>(std::round(X_ / L_));  // number of intervals in x
   ny_ = static_cast<int>(std::round(Y_ / L_));  // number of intervals in y
 
-  std::cout << "nx: " << nx_ << ", ny: " << ny_ << std::endl;
-
   // If flags are not provided, infer from geometry
   if (include_horizontal_ && nx_ == 0) {
     include_horizontal_ = false;
@@ -51,9 +48,7 @@ void GridMeshGenerator::generate_nodes() {
   for (int j = 0; j <= ny_; j++) {  // row-major by j then i
     double y = j * L_;
     for (int i = 0; i <= nx_; i++) {
-      double x =
-          -1.0 +
-          i * L_;  // Start at -1.0 instead of 0.0 (TODO: change this to 0.0)
+      double x = i * L_;
       nodes_.push_back({node_id_counter, i, j, x, y, 0.0, 0.0, 0.0, 0.0});
       node_id_counter++;
     }

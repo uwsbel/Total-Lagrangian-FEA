@@ -1,9 +1,16 @@
-/* Broadphase.cuh
- * Author: Json Zhou (zzhou292@wisc.edu)
- *
- * GPU broadphase collision detection: AABBs, sweep-and-prune, neighbor
- * filtering, and host/device data for mesh overlap queries.
- */
+/*==============================================================
+ *==============================================================
+ * Project: RoboDyna
+ * Author:  Json Zhou
+ * Email:   zzhou292@wisc.edu
+ * File:    HydroelasticBroadphase.cuh
+ * Brief:   Declares GPU broadphase collision detection utilities for
+ *          tetrahedral meshes, including AABB generation and collision-pair
+ *          candidate enumeration for the narrowphase.
+ *==============================================================
+ *==============================================================*/
+
+#pragma once
 
 #include <cuda_runtime.h>
 #include <cusparse.h>
@@ -16,14 +23,13 @@
 #include "../../lib_utils/cuda_utils.h"
 #include "../../lib_utils/quadrature_utils.h"
 
-#include "CollisionTypes.cuh"
+#include "HydroelasticCollisionTypes.cuh"
 
 namespace ANCFCPUUtils {
 class MeshManager;
 }
 
 // Definition of GPU_ANCF3243 and data access device functions
-#pragma once
 
 struct AABB {
   double3 min;

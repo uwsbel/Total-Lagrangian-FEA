@@ -21,6 +21,22 @@ filegroup(
     ),
 )
 
+cc_library(
+    name = "dem_engine_headers",
+    hdrs = glob(
+        [
+            "src/**/*.h",
+            "src/**/*.hpp",
+            "src/**/*.cuh",
+            "thirdparty/**/*.hpp",
+        ],
+    ),
+    includes = [
+        "src",
+        "thirdparty",
+    ],
+)
+
 # Builds DEM-Engine via its upstream CMake project.
 #
 # Note: this assumes a locally-installed CUDA toolkit (e.g. `/usr/local/cuda`),
@@ -47,12 +63,19 @@ cmake(
     #
     # This ends up running: `cmake --build <dir> --target ...`.
     build_args = [
+        "--parallel",
+        "8",
         "--target",
         "simulator_multi_gpu",
         # Upstream install logic expects this target's output to exist (it overwrites
         # the build-tree libDEMERuntimeDataHelper.so during installation).
         "--target",
         "DEMERuntimeDataHelper_install",
+    ],
+    # Keep installed runtime data (kernels, force-model sources, etc.) which DEM-Engine
+    # loads at runtime via `DEMERuntimeDataHelper::data_path`.
+    out_data_dirs = [
+        "share",
     ],
     out_static_libs = [
         "libsimulator_multi_gpu.a",

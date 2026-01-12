@@ -1,10 +1,12 @@
 test-scripts
 .bazel_output
 .bazel_output_base
+.bazel_output_base2
 .bazel_output_user_root
 .bazel_home
 .bazel_tmp
 .bazel_user_root
+.bazel_out
 .bazel_root
 bazel-bin
 bazel-out

@@ -27,28 +27,30 @@
 #include <string>
 #include <vector>
 
-#include "../../lib_src/collision/Broadphase.cuh"
-#include "../../lib_src/collision/Narrowphase.cuh"
 #include "../../lib_src/elements/FEAT10Data.cuh"
 #include "../../lib_src/solvers/SyncedNewton.cuh"
 #include "../../lib_utils/cuda_utils.h"
+#include "../../lib_src/collision/DemeMeshCollisionSystem.h"
+#include "../../lib_src/collision/HydroelasticPatchCollisionSystem.h"
 #include "../../lib_utils/cpu_utils.h"
 #include "../../lib_utils/mesh_manager.h"
 #include "../../lib_utils/quadrature_utils.h"
+#include "../../lib_utils/surface_trimesh_extract.h"
 #include "../../lib_utils/visualization_utils.h"
 
 // Material properties (for deformable items)
-const double E_val = 2e6;    // Young's modulus (Pa)
+const double E_val = 1e7;    // Young's modulus (Pa)
 const double nu    = 0.3;   // Poisson's ratio
 const double rho0  = 500.0; // Density (kg/m^3)
 
 // Simulation parameters
 const double gravity = -9.81; // Gravity acceleration (m/s^2)
-const double dt      = 5e-4;  // Time step (s)
-const int    num_steps_default = 4000;
+const double dt      = 2e-4;  // Time step (s)
+const int    num_steps_default = 10000;
 
 // Contact parameters
-const double contact_damping_default  = 0.0;
+// Damping is critical for stability when contact begins; raise default to reduce bounce.
+const double contact_damping_default  = 50.0;
 const double contact_friction_default = 0.6;
 
 using ANCFCPUUtils::VisualizationUtils;
@@ -102,8 +104,9 @@ struct Options {
   double contact_damping  = contact_damping_default;
   double contact_friction = contact_friction_default;
   bool enable_self_collision = false;
+  std::string collision_backend = "hydro";  // hydro | deme
   int max_steps = num_steps_default;
-  int export_interval = 10;
+  int export_interval = 25;
 };
 
 bool StartsWith(const std::string& s, const std::string& prefix) {
@@ -139,7 +142,8 @@ void PrintUsage(const char* argv0) {
       << "Usage:\n"
       << "  " << argv0
       << " [contact_damping] [contact_friction] [self_collision(0/1)] [max_steps] [export_interval]\n"
-      << "  " << argv0 << " [positional args...] [--help]\n";
+      << "  " << argv0 << " [positional args...] [--collision=hydro|deme] [--help]\n"
+      << "  " << argv0 << " [positional args...] --collision hydro|deme [--help]\n";
 }
 
 bool ParseArgs(int argc, char** argv, Options& opt) {
@@ -149,6 +153,28 @@ bool ParseArgs(int argc, char** argv, Options& opt) {
     if (arg == "--help" || arg == "-h") {
       PrintUsage(argv[0]);
       return false;
+    }
+    if (arg == "--collision") {
+      if (i + 1 >= argc) {
+        std::cerr << "--collision requires a value (hydro|deme)\n";
+        return false;
+      }
+      opt.collision_backend = argv[++i];
+      if (opt.collision_backend != "hydro" && opt.collision_backend != "deme") {
+        std::cerr << "Invalid --collision backend: " << opt.collision_backend
+                  << " (expected hydro|deme)\n";
+        return false;
+      }
+      continue;
+    }
+    if (StartsWith(arg, "--collision=")) {
+      opt.collision_backend = arg.substr(std::string("--collision=").size());
+      if (opt.collision_backend != "hydro" && opt.collision_backend != "deme") {
+        std::cerr << "Invalid --collision backend: " << opt.collision_backend
+                  << " (expected hydro|deme)\n";
+        return false;
+      }
+      continue;
     }
     if (StartsWith(arg, "--")) {
       std::cerr << "Unknown argument: " << arg << "\n";
@@ -216,6 +242,7 @@ int main(int argc, char** argv) {
   std::cout << "Contact friction: " << opt.contact_friction << "\n";
   std::cout << "Enable self collision: " << (opt.enable_self_collision ? 1 : 0)
             << "\n";
+  std::cout << "Collision backend: " << opt.collision_backend << "\n";
   std::cout << "Max steps: " << opt.max_steps << "\n";
   std::cout << "Export interval: " << opt.export_interval << "\n";
 
@@ -378,8 +405,9 @@ int main(int argc, char** argv) {
   const Eigen::VectorXd& tet5pt_z       = Quadrature::tet5pt_z;
   const Eigen::VectorXd& tet5pt_weights = Quadrature::tet5pt_weights;
 
-  const double eta_damp    = 1e3;
-  const double lambda_damp = 1e3;
+  // Material (bulk/viscous) damping to reduce oscillations after impact.
+  const double eta_damp    = 5e3;
+  const double lambda_damp = 5e3;
   gpu_t10_data.Setup(tet5pt_x, tet5pt_y, tet5pt_z, tet5pt_weights, h_x12, h_y12,
                      h_z12, elements);
   gpu_t10_data.SetDensity(rho0);
@@ -433,12 +461,6 @@ int main(int argc, char** argv) {
   // narrowphase doesn't read uninitialized device memory on step 0.
   HANDLE_ERROR(cudaMemset(d_vel_guess, 0, n_nodes * 3 * sizeof(double)));
 
-  // =========================================================================
-  // Collision detection setup
-  // =========================================================================
-  Broadphase broadphase;
-  Narrowphase narrowphase;
-
   Eigen::VectorXi elementMeshIds(n_elems);
   for (int i = 0; i < mesh_manager.GetNumMeshes(); ++i) {
     const auto& instance = mesh_manager.GetMeshInstance(i);
@@ -447,12 +469,38 @@ int main(int argc, char** argv) {
     }
   }
 
-  broadphase.Initialize(mesh_manager);
-  broadphase.EnableSelfCollision(opt.enable_self_collision);
-  broadphase.BuildNeighborMap();
-
-  narrowphase.Initialize(initial_nodes, elements, pressure, elementMeshIds);
-  narrowphase.EnableSelfCollision(opt.enable_self_collision);
+  std::unique_ptr<CollisionSystem> collision_system;
+  if (opt.collision_backend == "hydro") {
+    collision_system = std::make_unique<HydroelasticPatchCollisionSystem>(
+        mesh_manager, initial_nodes, elements, pressure, elementMeshIds,
+        opt.enable_self_collision);
+  } else if (opt.collision_backend == "deme") {
+    ANCFCPUUtils::SurfaceTriMesh floor_surface =
+        ANCFCPUUtils::ExtractSurfaceTriMesh(initial_nodes, elements, inst_floor);
+    ANCFCPUUtils::SurfaceTriMesh item_surface =
+        ANCFCPUUtils::ExtractSurfaceTriMesh(initial_nodes, elements, inst_dragon1);
+    std::vector<DemeMeshCollisionBody> bodies;
+    {
+      DemeMeshCollisionBody body;
+      body.surface = std::move(floor_surface);
+      body.family = 0;
+      body.split_into_patches = false;
+      bodies.push_back(std::move(body));
+    }
+    {
+      DemeMeshCollisionBody body;
+      body.surface = std::move(item_surface);
+      body.family = 1;
+      body.split_into_patches = true;
+      body.patch_angle_deg = -1.0f;  // Use `DEME_PATCH_ANGLE_DEG` (default is medium-aggressive).
+      bodies.push_back(std::move(body));
+    }
+    collision_system = std::make_unique<DemeMeshCollisionSystem>(
+        std::move(bodies), opt.contact_friction, opt.enable_self_collision);
+  } else {
+    std::cerr << "Unknown collision backend: " << opt.collision_backend << "\n";
+    return 1;
+  }
 
   // Shared device node buffer for collision (column-major: [x... y... z...]).
   // Updated from the dynamics state each step via device-to-device copies.
@@ -467,11 +515,7 @@ int main(int argc, char** argv) {
                           gpu_t10_data.GetZ12DevicePtr(), n_nodes * sizeof(double),
                           cudaMemcpyDeviceToDevice));
 
-  broadphase.BindNodesDevicePtr(d_nodes_collision);
-  narrowphase.BindNodesDevicePtr(d_nodes_collision);
-
-  broadphase.CreateAABB();
-  broadphase.SortAABBs(0);
+  collision_system->BindNodesDevicePtr(d_nodes_collision, n_nodes);
 
   // Precompute gravity on host once and keep it on device.
   Eigen::VectorXd h_f_gravity = Eigen::VectorXd::Zero(n_nodes * 3);
@@ -511,29 +555,30 @@ int main(int argc, char** argv) {
                             gpu_t10_data.GetZ12DevicePtr(), n_nodes * sizeof(double),
                             cudaMemcpyDeviceToDevice));
 
-    // 2) Collision detection
-    broadphase.CreateAABB();
-    broadphase.SortAABBs(0);
-    broadphase.DetectCollisions(false);
-    const int num_collision_pairs = broadphase.numCollisions;
+    // 2) Collision detection + contact forces
+    CollisionSystemInput coll_in;
+    coll_in.d_nodes_xyz = d_nodes_collision;
+    coll_in.n_nodes = n_nodes;
+    coll_in.d_vel_xyz = d_vel_guess;
+    coll_in.dt = dt;
 
-    narrowphase.SetCollisionPairsDevice(broadphase.GetCollisionPairsDevicePtr(),
-                                        num_collision_pairs);
-    narrowphase.ComputeContactPatches();
+    CollisionSystemParams coll_params;
+    coll_params.damping = opt.contact_damping;
+    coll_params.friction = opt.contact_friction;
+
+    collision_system->Step(coll_in, coll_params);
+    const int num_contacts = collision_system->GetNumContacts();
 
     // 3) External forces: contact + gravity
-    narrowphase.ComputeExternalForcesGPUDevice(d_vel_guess, opt.contact_damping,
-                                               opt.contact_friction);
-
     HANDLE_ERROR(cudaMemcpy(gpu_t10_data.GetExternalForceDevicePtr(), d_f_gravity,
                             n_nodes * 3 * sizeof(double),
                             cudaMemcpyDeviceToDevice));
 
-    if (num_collision_pairs > 0) {
+    if (num_contacts > 0) {
       const double alpha = 1.0;
       CheckCublas(cublasDaxpy(
                       cublas_handle, n_nodes * 3, &alpha,
-                      narrowphase.GetExternalForcesDevicePtr(), 1,
+                      collision_system->GetExternalForcesDevicePtr(), 1,
                       gpu_t10_data.GetExternalForceDevicePtr(), 1),
                   "cublasDaxpy(contact + gravity)");
     }
@@ -567,10 +612,13 @@ int main(int argc, char** argv) {
       std::ostringstream patch_filename;
       patch_filename << "output/item_drop/patches_" << std::setfill('0')
                      << std::setw(4) << step << ".vtp";
-      narrowphase.RetrieveResults();
-      std::vector<ContactPatch> patches = narrowphase.GetValidPatches();
-      VisualizationUtils::ExportContactPatchesToVTP(patches,
-                                                    patch_filename.str());
+      if (auto* hydro = dynamic_cast<HydroelasticPatchCollisionSystem*>(
+              collision_system.get())) {
+        hydro->RetrieveResults();
+        std::vector<ContactPatch> patches = hydro->GetValidPatches();
+        VisualizationUtils::ExportContactPatchesToVTP(patches,
+                                                      patch_filename.str());
+      }
     }
 
     // 6) Progress
@@ -579,7 +627,7 @@ int main(int argc, char** argv) {
       const double step_ms =
           std::chrono::duration<double, std::milli>(t1 - t0).count();
       std::cout << "Step " << std::setw(4) << step << ": pairs="
-                << std::setw(6) << num_collision_pairs << ", ms="
+                << std::setw(6) << collision_system->GetNumContacts() << ", ms="
                 << std::fixed << std::setprecision(2) << step_ms << "\n";
     }
   }

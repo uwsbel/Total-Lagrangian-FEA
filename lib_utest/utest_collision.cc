@@ -16,8 +16,8 @@
 #include <Eigen/Dense>
 #include <iostream>
 
-#include "../lib_src/collision/Broadphase.cuh"
-#include "../lib_src/collision/Narrowphase.cuh"
+#include "../lib_src/collision/HydroelasticBroadphase.cuh"
+#include "../lib_src/collision/HydroelasticNarrowphase.cuh"
 #include "../lib_utils/cpu_utils.h"
 #include "../lib_utils/mesh_manager.h"
 #include "../lib_utils/mesh_utils.h"

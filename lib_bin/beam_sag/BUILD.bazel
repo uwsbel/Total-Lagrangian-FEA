@@ -1,0 +1,106 @@
+package(default_visibility = ["//visibility:public"])
+
+cc_binary(
+    name = "test_ancf3243",
+    srcs = ["test_ancf3243.cc"],
+    copts = ["--std=c++17"],
+    linkopts = [
+        "-L/usr/local/cuda/lib64",
+        "-lcublas",
+        "-lcusparse",
+        "-lcudart",
+        "-lcudss",
+    ],
+    deps = [
+        "//lib_src/elements:ANCF3243Data",
+        "//lib_src/solvers:solvers_syncedadamwnocoop",
+        "//lib_src/solvers:solvers_syncednesterov",
+        "//lib_src/solvers:solvers_syncednewton",
+        "//lib_src/solvers:solvers_syncedvbd",
+        "//lib_utils:cpu_utils",
+        "//lib_utils:mesh_utils",
+        "@eigen//:eigen",
+    ],
+)
+
+cc_binary(
+    name = "test_ancf3443",
+    srcs = ["test_ancf3443.cc"],
+    copts = ["--std=c++17"],
+    linkopts = [
+        "-L/usr/local/cuda/lib64",
+        "-lcublas",
+        "-lcusparse",
+        "-lcudart",
+        "-lcudss",
+    ],
+    deps = [
+        "//lib_src/elements:ANCF3443Data",
+        "//lib_src/solvers:solvers_syncedadamwnocoop",
+        "//lib_src/solvers:solvers_syncednesterov",
+        "//lib_src/solvers:solvers_syncednewton",
+        "//lib_src/solvers:solvers_syncedvbd",
+        "//lib_utils:cpu_utils",
+        "@eigen//:eigen",
+    ],
+)
+
+cc_binary(
+    name = "test_feat10_adamw",
+    srcs = ["test_feat10_adamw.cc"],
+    copts = ["--std=c++17"],
+    linkopts = [
+        "-L/usr/local/cuda/lib64",
+        "-lcusparse",
+        "-lcudart",
+    ],
+    deps = [
+        "//lib_src/elements:FEAT10Data",
+        "//lib_src/solvers:solvers_syncedadamw",
+        "//lib_src/solvers:solvers_syncednesterov",
+        "//lib_src/solvers:solvers_syncednewton",
+        "//lib_utils:cpu_utils",
+        "@eigen//:eigen",
+    ],
+)
+
+cc_binary(
+    name = "test_feat10_resolution",
+    srcs = ["test_feat10_resolution.cc"],
+    copts = ["--std=c++17"],
+    linkopts = [
+        "-L/usr/local/cuda/lib64",
+        "-lcublas",
+        "-lcusparse",
+        "-lcudart",
+        "-lcudss",
+    ],
+    deps = [
+        "//lib_src/elements:FEAT10Data",
+        "//lib_src/solvers:solvers_syncedadamwnocoop",
+        "//lib_src/solvers:solvers_syncednewton",
+        "//lib_src/solvers:solvers_syncedvbd",
+        "//lib_utils:cpu_utils",
+        "@eigen//:eigen",
+    ],
+)
+
+cc_binary(
+    name = "test_feat10_nesterov",
+    srcs = ["test_feat10_nesterov.cc"],
+    copts = ["--std=c++17"],
+    linkopts = [
+        "-L/usr/local/cuda/lib64",
+        "-lcusparse",
+        "-lcudart",
+    ],
+    deps = [
+        "//lib_src/elements:FEAT10Data",
+        "//lib_src/solvers:solvers_syncedadamw",
+        "//lib_src/solvers:solvers_syncednesterov",
+        "//lib_src/solvers:solvers_syncednewton",
+        "//lib_utils:cpu_utils",
+        "@eigen//:eigen",
+    ],
+)
+
