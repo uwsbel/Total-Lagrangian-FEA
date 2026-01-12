@@ -37,12 +37,13 @@
  */
 
 #include <cooperative_groups.h>
+#include "tlfea_problem_parameters.cuh" // stores parameters associated with the TL_FEA model for this particular problem
 
 // The arrays below are used to coordinate the four threads in a tile.
 
 // The NU information is stored as AoS, xyz-xyz-xyz-xyz-etc.
 // The arrays below are used to coordinate the four threads in a tile.
-__device__ __constant__ int nodeOffsets[8][4] = {
+__device__ __constant__ int nodeOffsets_T10tet[8][4] = {
     {0, 0, 0, 3}, // first pass: node 0 (x,y,z), node 3 (x)
     {1, 1, 1, 3}, // second pass: node 1 (x,y,z), node 3 (y)
     {2, 2, 2, 3}, // third pass: node 2 (x,y,z), node 3 (z)
@@ -53,7 +54,7 @@ __device__ __constant__ int nodeOffsets[8][4] = {
     {9, 9, 9, 9}  // eighth pass: node 9 (x,y,z), node 9 (**bogus**); the 9 is bogus, not used
 };
 
-__device__ __constant__ int xyzFieldOffsets[8][4] = {
+__device__ __constant__ int xyzFieldOffsets_T10tet[8][4] = {
     {0, 1, 2, 0}, // first pass: node 0 (x,y,z), node 3 (x)
     {0, 1, 2, 1}, // second pass: node 1 (x,y,z), node 3 (y)
     {0, 1, 2, 2}, // third pass: node 2 (x,y,z), node 3 (z)
@@ -64,7 +65,6 @@ __device__ __constant__ int xyzFieldOffsets[8][4] = {
     {0, 1, 2, 2}  // eighth pass: node 9 (x,y,z), node 9 (**bogus**); the 9 is bogus, not used
 };
 
-/**
 /**
  * @brief Kernel computing the internal force associated with one element for Mooney-Rivlin material with 4 quadrature points.
  *
@@ -83,14 +83,13 @@ __device__ __constant__ int xyzFieldOffsets[8][4] = {
  * @param pIsoMapInverseScaled     Pointer to the inverse of the isoparametric-element Jacobian. All entries are already scaled by the
  *                                 QP weight and determinant of the isoparametric map (computation can be done offline and in double precision,
  *                                 then saved as float, compromising less the precision).
- * @param totalN_Elements          Total number of elements in the mesh; used as a guard to avoid out-of-bounds access.
  */
 
 __global__ void computeInternalForceContributionPerElement_MR_4QP(
     const double* __restrict__ pPosNodes, const double* __restrict__ pVelNodes,
     const int* __restrict__ pElement_NodeIndexes,
     float* __restrict__ pInternalForceNodes,
-    const float* __restrict__ pIsoMapInverseScaled, const int totalN_Elements) {
+    const float* __restrict__ pIsoMapInverseScaled) {
   // Four threads will load nodal unknowns from global memory, and then use them to compute the internal force contribution.
 
   // define tiles with four threads each; one thread per QP
@@ -116,7 +115,8 @@ __global__ void computeInternalForceContributionPerElement_MR_4QP(
   // (0.5854101966249685, 0.5854101966249685, 0.5854101966249685)
 
   float xi, eta, zeta;
-  switch (tile.thread_rank()) {
+  const int tile_thread_rank = tile.thread_rank();
+  switch (tile_thread_rank) {
     case 0:
       xi   = 0.1381966011250105f;
       eta  = 0.1381966011250105f;
@@ -139,6 +139,7 @@ __global__ void computeInternalForceContributionPerElement_MR_4QP(
       break;
   }
 
+  // start the computation of the deformation gradient F of the iso-parametric element.
   float isoJacInv00, isoJacInv01, isoJacInv02;
   float isoJacInv10, isoJacInv11, isoJacInv12;
   float isoJacInv20, isoJacInv21, isoJacInv22;
@@ -146,7 +147,7 @@ __global__ void computeInternalForceContributionPerElement_MR_4QP(
   {
     // Define the total number of quadrature points globally
     const int totalQPs    = totalN_Elements * 4;
-    const int globalQPIdx = element_idx * 4 + tile.thread_rank();
+    const int globalQPIdx = element_idx * 4 + tile_thread_rank;
 
     // Load the inverse of the scaled isoparametric-element Jacobian for this QP.
     // globalQPIdx is consecutive within each 4-lane tile, so these loads are coalesced within a tile.
@@ -171,12 +172,11 @@ __global__ void computeInternalForceContributionPerElement_MR_4QP(
   float F00, F01, F02, F10, F11, F12, F20, F21, F22;
   float NUx_bonus, NUy_bonus, NUz_bonus;
   const int* __restrict__ pElementNodes = pElement_NodeIndexes + element_idx * 10; // 10 nodes per element
-  const int tile_thread_rank = tile.thread_rank();
-
+  
   // Node 0 (with node 3 bonus x)
   {
-    int whichGlobalNode = pElementNodes[nodeOffsets[0][tile_thread_rank]];
-    float value = (float)pPosNodes[3 * whichGlobalNode + xyzFieldOffsets[0][tile_thread_rank]];
+    int whichGlobalNode = pElementNodes[nodeOffsets_T10tet[0][tile_thread_rank]];
+    float value = (float)pPosNodes[3 * whichGlobalNode + xyzFieldOffsets_T10tet[0][tile_thread_rank]];
     float NUx = tile.shfl(value, 0); // x of node 0
     float NUy = tile.shfl(value, 1); // y of node 0
     float NUz = tile.shfl(value, 2); // z of node 0
@@ -202,8 +202,8 @@ __global__ void computeInternalForceContributionPerElement_MR_4QP(
 
   // Node 1 (with node 3 bonus y)
   {
-    int whichGlobalNode = pElementNodes[nodeOffsets[1][tile_thread_rank]];
-    float value = (float)pPosNodes[3 * whichGlobalNode + xyzFieldOffsets[1][tile_thread_rank]];
+    int whichGlobalNode = pElementNodes[nodeOffsets_T10tet[1][tile_thread_rank]];
+    float value = (float)pPosNodes[3 * whichGlobalNode + xyzFieldOffsets_T10tet[1][tile_thread_rank]];
     float NUx = tile.shfl(value, 0); // x of node 1
     float NUy = tile.shfl(value, 1); // y of node 1
     float NUz = tile.shfl(value, 2); // z of node 1
@@ -229,8 +229,8 @@ __global__ void computeInternalForceContributionPerElement_MR_4QP(
 
   // Node 2 (with node 3 bonus z)
   {
-    int whichGlobalNode = pElementNodes[nodeOffsets[2][tile_thread_rank]];
-    float value = (float)pPosNodes[3 * whichGlobalNode + xyzFieldOffsets[2][tile_thread_rank]];
+    int whichGlobalNode = pElementNodes[nodeOffsets_T10tet[2][tile_thread_rank]];
+    float value = (float)pPosNodes[3 * whichGlobalNode + xyzFieldOffsets_T10tet[2][tile_thread_rank]];
     float NUx = tile.shfl(value, 0); // x of node 2
     float NUy = tile.shfl(value, 1); // y of node 2
     float NUz = tile.shfl(value, 2); // z of node 2
@@ -276,8 +276,8 @@ __global__ void computeInternalForceContributionPerElement_MR_4QP(
 
   // Node 4 (with node 7 bonus x)
   {
-    int whichGlobalNode = pElementNodes[nodeOffsets[3][tile_thread_rank]];
-    float value = (float)pPosNodes[3 * whichGlobalNode + xyzFieldOffsets[3][tile_thread_rank]];
+    int whichGlobalNode = pElementNodes[nodeOffsets_T10tet[3][tile_thread_rank]];
+    float value = (float)pPosNodes[3 * whichGlobalNode + xyzFieldOffsets_T10tet[3][tile_thread_rank]];
     float NUx = tile.shfl(value, 0); // x of node 4
     float NUy = tile.shfl(value, 1); // y of node 4
     float NUz = tile.shfl(value, 2); // z of node 4
@@ -303,8 +303,8 @@ __global__ void computeInternalForceContributionPerElement_MR_4QP(
 
   // Node 5 (with node 7 bonus y)
   {
-    int whichGlobalNode = pElementNodes[nodeOffsets[4][tile_thread_rank]];
-    float value = (float)pPosNodes[3 * whichGlobalNode + xyzFieldOffsets[4][tile_thread_rank]];
+    int whichGlobalNode = pElementNodes[nodeOffsets_T10tet[4][tile_thread_rank]];
+    float value = (float)pPosNodes[3 * whichGlobalNode + xyzFieldOffsets_T10tet[4][tile_thread_rank]];
     float NUx = tile.shfl(value, 0); // x of node 5
     float NUy = tile.shfl(value, 1); // y of node 5
     float NUz = tile.shfl(value, 2); // z of node 5
@@ -330,8 +330,8 @@ __global__ void computeInternalForceContributionPerElement_MR_4QP(
 
   // Node 6 (with node 7 bonus z)
   {
-    int whichGlobalNode = pElementNodes[nodeOffsets[5][tile_thread_rank]];
-    float value = (float)pPosNodes[3 * whichGlobalNode + xyzFieldOffsets[5][tile_thread_rank]];
+    int whichGlobalNode = pElementNodes[nodeOffsets_T10tet[5][tile_thread_rank]];
+    float value = (float)pPosNodes[3 * whichGlobalNode + xyzFieldOffsets_T10tet[5][tile_thread_rank]];
     float NUx = tile.shfl(value, 0); // x of node 6
     float NUy = tile.shfl(value, 1); // y of node 6
     float NUz = tile.shfl(value, 2); // z of node 6
@@ -377,8 +377,8 @@ __global__ void computeInternalForceContributionPerElement_MR_4QP(
 
   // Node 8 (no valid bonus, dummy)
   {
-    int whichGlobalNode = pElementNodes[nodeOffsets[6][tile_thread_rank]];
-    float value = (float)pPosNodes[3 * whichGlobalNode + xyzFieldOffsets[6][tile_thread_rank]];
+    int whichGlobalNode = pElementNodes[nodeOffsets_T10tet[6][tile_thread_rank]];
+    float value = (float)pPosNodes[3 * whichGlobalNode + xyzFieldOffsets_T10tet[6][tile_thread_rank]];
     float NUx = tile.shfl(value, 0); // x of node 8
     float NUy = tile.shfl(value, 1); // y of node 8
     float NUz = tile.shfl(value, 2); // z of node 8
@@ -404,8 +404,8 @@ __global__ void computeInternalForceContributionPerElement_MR_4QP(
 
   // Node 9 (no valid bonus, dummy)
   {
-    int whichGlobalNode = pElementNodes[nodeOffsets[7][tile_thread_rank]];
-    float value = (float)pPosNodes[3 * whichGlobalNode + xyzFieldOffsets[7][tile_thread_rank]];
+    int whichGlobalNode = pElementNodes[nodeOffsets_T10tet[7][tile_thread_rank]];
+    float value = (float)pPosNodes[3 * whichGlobalNode + xyzFieldOffsets_T10tet[7][tile_thread_rank]];
     float NUx = tile.shfl(value, 0); // x of node 9
     float NUy = tile.shfl(value, 1); // y of node 9
     float NUz = tile.shfl(value, 2); // z of node 9
@@ -428,8 +428,73 @@ __global__ void computeInternalForceContributionPerElement_MR_4QP(
     F21 += NUz * dummy1;
     F22 += NUz * dummy2;
   }
+  // This conclude the computation of the deformation gradient F of the iso-parametric element.
 
-  // This is fake here, writing to global memory to get the compiler to give me an approximation of the register usage.
-  pInternalForceNodes[element_idx * 9 + tile.thread_rank()] = F00 + F01 + F02 + F10 + F11 + F12 + F20 + F21 + F22;
+  #define internalAcceleration_X NUx_bonus  // Alias the register; NUx_bonus not needed from this point on
+  #define internalAcceleration_Y NUy_bonus  // Alias the register; NUy_bonus not needed from this point on
+  #define internalAcceleration_Z NUz_bonus  // Alias the register; NUz_bonus not needed from this point on
+
+  // Use the macro 'internalAcceleration_?' for internal acceleration calculation
+  // (The following statement is a placeholder for demonstration)
+  internalAcceleration_X = F00 + F01 + F02; //BOGUS FOR NOW, to get the atomic add operations going
+  internalAcceleration_Y = F10 + F11 + F12; //BOGUS FOR NOW, to get the atomic add operations going
+  internalAcceleration_Z = F20 + F21 + F22; //BOGUS FOR NOW, to get the atomic add operations going
+
+
+  // At this point, we just computed the internal acceleration for the QP.
+  // Need to do a reduce within the tile to get the internal acceleration for node "i" (of 0-9) in the element.
+  // tree reduction: 4 -> 2 -> 1
+
+  internalAcceleration_X += tile.shfl_down(internalAcceleration_X, 2);  
+  internalAcceleration_Y += tile.shfl_down(internalAcceleration_Y, 2);  
+  internalAcceleration_Z += tile.shfl_down(internalAcceleration_Z, 2);
+
+  internalAcceleration_X += tile.shfl_down(internalAcceleration_X, 1);  
+  internalAcceleration_Y += tile.shfl_down(internalAcceleration_Y, 1);  
+  internalAcceleration_Z += tile.shfl_down(internalAcceleration_Z, 1);
+
+  if (tile_thread_rank == 0) {
+    const int whichGlobalNode = pElementNodes[0];
+    atomicAdd(&pInternalForceNodes[3 * whichGlobalNode + 0], internalAcceleration_X);
+    atomicAdd(&pInternalForceNodes[3 * whichGlobalNode + 1], internalAcceleration_Y);
+    atomicAdd(&pInternalForceNodes[3 * whichGlobalNode + 2], internalAcceleration_Z);
+  }
+
+
+  // Remove the macro definition 
+  #undef internalAcceleration_X
+  #undef internalAcceleration_Y
+  #undef internalAcceleration_Z
+
   return;
 }
+/*
+ * DESIGN DECISION: Global Memory Reload vs. Register Storage
+ * --------------------------------------------------------
+ * For a T10 element (10 nodes), we purposefully choose to reload nodal indices 
+ * and positions from global memory during the internal force assembly phase 
+ * rather than storing them in registers. 
+ *
+ * 1. REGISTER PRESSURE & OCCUPANCY:
+ * - Each element has 10 nodes. Storing 10 global indices and 30 coordinates (xyz)
+ * per tile would consume ~40 registers per thread just for geometry storage.
+ * - By reloading, we keep the register footprint low (target < 64 regs/thread), 
+ * allowing for maximum occupancy (up to 512 elements/tiles per SM on RTX 4080/5080).
+ * - Higher occupancy is critical for hiding the functional latency of the 
+ * heavy floating-point math in the deformation gradient and stress calculations.
+ *
+ * 2. CACHE COHERENCY ("HOT" RELOAD):
+ * - The pElement_NodeIndexes and pPosNodes data were accessed at the start 
+ * of the kernel to compute the deformation gradient (F). 
+ * - Total working set for 512 active elements is approx 80 KB (512 * 160B). 
+ * Since modern SMs have 128 KB of L1/Shared memory, this data is 
+ * guaranteed to be "hot" in the L1 or L2 cache.
+ * - A cache-hit reload (latency ~30-50 cycles) is easily hidden by the 
+ * scheduler given our high occupancy.
+ *
+ * 3. BROADCAST EFFICIENCY:
+ * - Hardware-level constant memory and L1 controllers automatically handle 
+ * broadcasting when multiple threads in a tile request the same index. 
+ * Manual register-shuffling or broadcasting would increase instruction 
+ * overhead without reducing memory transactions.
+ */
