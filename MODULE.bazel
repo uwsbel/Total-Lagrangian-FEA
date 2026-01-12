@@ -9,5 +9,12 @@ bazel_dep(name = "rules_cuda", version = "0.2.5")
 bazel_dep(name = "eigen", version = "3.4.0.bcr.3")
 bazel_dep(name = "googletest", version = "1.14.0.bcr.1")
 
+bazel_dep(name = "hedron_compile_commands", version = "0.0.0", dev_dependency = True)
+git_override(
+    module_name = "hedron_compile_commands",
+    commit = "abb61a688167623088f8768cc9264798df6a9d10",
+    remote = "https://github.com/hedronvision/bazel-compile-commands-extractor.git",
+)
+
 # Register CUDA toolchains provided by rules_cuda
 register_toolchains("@rules_cuda//cuda:all")

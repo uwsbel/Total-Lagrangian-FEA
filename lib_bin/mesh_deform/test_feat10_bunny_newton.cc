@@ -210,7 +210,7 @@ int main() {
   int output_interval = 10;  // 10 vtk per seconds
   int output_frame    = 0;
 
-  for (int i = 0; i < 8000; i++) {
+  for (int i = 0; i < 80; i++) {
     // Reset external force to zero after 5000 steps
     if (i == 1000) {
       Eigen::VectorXd h_zero(gpu_t10_data.get_n_coef() * 3);
