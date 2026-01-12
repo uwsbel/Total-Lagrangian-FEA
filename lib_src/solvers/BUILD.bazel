@@ -1,0 +1,98 @@
+load("@rules_cuda//cuda:defs.bzl", "cuda_library")
+
+package(default_visibility = ["//visibility:public"])
+
+cuda_library(
+    name = "solvers_syncednesterov",
+    srcs = ["SyncedNesterov.cu"],
+    hdrs = [
+        "SolverBase.h",
+        "SyncedNesterov.cuh",
+    ],
+    copts = ["--std=c++17", "-O3", "--use_fast_math", "--extra-device-vectorization"],
+    deps = [
+        "//lib_src/elements:ANCF3243Data",
+        "//lib_src/elements:ANCF3443Data",
+        "//lib_src/elements:FEAT10Data",
+        "//lib_utils:cpu_utils",
+        "//lib_utils:cuda_utils",
+        "@eigen//:eigen",
+    ],
+)
+
+cuda_library(
+    name = "solvers_syncedadamw",
+    srcs = ["SyncedAdamW.cu"],
+    hdrs = [
+        "SolverBase.h",
+        "SyncedAdamW.cuh",
+    ],
+    copts = ["--std=c++17", "-O3", "--use_fast_math", "--extra-device-vectorization"],
+    deps = [
+        "//lib_src/elements:ANCF3243Data",
+        "//lib_src/elements:ANCF3443Data",
+        "//lib_src/elements:FEAT10Data",
+        "//lib_utils:cpu_utils",
+        "//lib_utils:cuda_utils",
+        "@eigen//:eigen",
+    ],
+)
+
+cuda_library(
+    name = "solvers_syncedadamwnocoop",
+    srcs = ["SyncedAdamWNocoop.cu"],
+    hdrs = [
+        "SolverBase.h",
+        "SyncedAdamW.cuh",
+        "SyncedAdamWNocoop.cuh",
+    ],
+    copts = ["--std=c++17", "-O3", "--use_fast_math", "--extra-device-vectorization"],
+    linkopts = ["-lcublas"],
+    deps = [
+        "//lib_src/elements:ANCF3243Data",
+        "//lib_src/elements:ANCF3443Data",
+        "//lib_src/elements:FEAT10Data",
+        "//lib_utils:cpu_utils",
+        "//lib_utils:cuda_utils",
+        "@eigen//:eigen",
+    ],
+)
+
+cuda_library(
+    name = "solvers_syncednewton",
+    srcs = ["SyncedNewton.cu"],
+    hdrs = [
+        "SolverBase.h",
+        "SyncedNewton.cuh",
+    ],
+    copts = ["--std=c++17", "-O3", "--use_fast_math", "--extra-device-vectorization"],
+    linkopts = ["-lcusolver", "-lcublas", "-lcusparse", "-lcudss"],
+    deps = [
+        "//lib_src/elements:ANCF3243Data",
+        "//lib_src/elements:ANCF3443Data",
+        "//lib_src/elements:FEAT10Data",
+        "//lib_utils:cpu_utils",
+        "//lib_utils:cuda_utils",
+        "@eigen//:eigen",
+    ],
+)
+
+cuda_library(
+    name = "solvers_syncedvbd",
+    srcs = ["SyncedVBD.cu"],
+    hdrs = [
+        "SolverBase.h",
+        "SyncedVBD.cuh",
+    ],
+    copts = ["--std=c++17", "-O3", "--use_fast_math", "--extra-device-vectorization"],
+    linkopts = ["-lcublas"],
+    deps = [
+        "//lib_src/elements:ANCF3243Data",
+        "//lib_src/elements:ANCF3443Data",
+        "//lib_src/elements:FEAT10Data",
+        "//lib_utils:cpu_utils",
+        "//lib_utils:cuda_utils",
+        "@eigen//:eigen",
+    ],
+)
+

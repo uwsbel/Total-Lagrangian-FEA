@@ -1,0 +1,21 @@
+#==============================================================
+#==============================================================
+# Project: RoboDyna
+# Author:  Json Zhou
+# Email:   zzhou292@wisc.edu
+# File:    BUILD.bazel
+# Brief:   Bazel build rules for material model headers.
+#==============================================================
+#==============================================================
+
+package(default_visibility = ["//visibility:public"])
+
+cc_library(
+    name = "materials",
+    hdrs = [
+        "MaterialModel.cuh",
+        "MooneyRivlin.cuh",
+        "SVK.cuh",
+    ],
+    copts = ["--std=c++17"],
+)

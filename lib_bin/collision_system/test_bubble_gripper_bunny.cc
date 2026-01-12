@@ -16,8 +16,8 @@
 #include <iomanip>
 #include <iostream>
 
-#include "../../lib_src/collision/Broadphase.cuh"
-#include "../../lib_src/collision/Narrowphase.cuh"
+#include "../../lib_src/collision/HydroelasticBroadphase.cuh"
+#include "../../lib_src/collision/HydroelasticNarrowphase.cuh"
 #include "../../lib_src/elements/FEAT10Data.cuh"
 #include "../../lib_src/solvers/SyncedNewton.cuh"
 #include "../../lib_utils/cpu_utils.h"

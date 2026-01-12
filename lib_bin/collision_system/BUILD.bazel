@@ -1,0 +1,105 @@
+package(default_visibility = ["//visibility:public"])
+
+cc_binary(
+    name = "test_sphere_drop_collision",
+    srcs = ["test_sphere_drop_collision.cc"],
+    copts = ["--std=c++17"],
+    linkopts = [
+        "-L/usr/local/cuda/lib64",
+        "-lcusparse",
+        "-lcudart",
+        "-lcudss",
+        "-lcublas",
+    ],
+    deps = [
+        "//lib_src/collision:hydroelastic_broadphase",
+        "//lib_src/collision:hydroelastic_narrowphase",
+        "//lib_src/elements:FEAT10Data",
+        "//lib_src/solvers:solvers_syncedadamw",
+        "//lib_src/solvers:solvers_syncednesterov",
+        "//lib_src/solvers:solvers_syncednewton",
+        "//lib_utils:cpu_utils",
+        "//lib_utils:mesh_manager",
+        "//lib_utils:visualization_utils",
+        "@eigen//:eigen",
+    ],
+)
+
+cc_binary(
+    name = "test_bubble_gripper_bunny",
+    srcs = ["test_bubble_gripper_bunny.cc"],
+    copts = ["--std=c++17"],
+    linkopts = [
+        "-L/usr/local/cuda/lib64",
+        "-lcusparse",
+        "-lcudart",
+        "-lcudss",
+        "-lcublas",
+    ],
+    deps = [
+        "//lib_src/collision:hydroelastic_broadphase",
+        "//lib_src/collision:hydroelastic_narrowphase",
+        "//lib_src/elements:FEAT10Data",
+        "//lib_src/solvers:solvers_syncedadamw",
+        "//lib_src/solvers:solvers_syncednesterov",
+        "//lib_src/solvers:solvers_syncednewton",
+        "//lib_utils:cpu_utils",
+        "//lib_utils:mesh_manager",
+        "//lib_utils:visualization_utils",
+        "@eigen//:eigen",
+    ],
+)
+
+cc_binary(
+    name = "test_bubble_gripper_bunny_floor",
+    srcs = ["test_bubble_gripper_bunny_floor.cc"],
+    copts = ["--std=c++17"],
+    linkopts = [
+        "-L/usr/local/cuda/lib64",
+        "-lcusparse",
+        "-lcudart",
+        "-lcudss",
+        "-lcublas",
+    ],
+    deps = [
+        "//lib_src/collision:hydroelastic_broadphase",
+        "//lib_src/collision:hydroelastic_narrowphase",
+        "//lib_src/elements:FEAT10Data",
+        "//lib_src/solvers:solvers_syncedadamw",
+        "//lib_src/solvers:solvers_syncednesterov",
+        "//lib_src/solvers:solvers_syncednewton",
+        "//lib_utils:cpu_utils",
+        "//lib_utils:mesh_manager",
+        "//lib_utils:visualization_utils",
+        "@eigen//:eigen",
+    ],
+)
+
+cc_binary(
+    name = "test_item_drop",
+    srcs = ["test_item_drop.cc"],
+    copts = ["--std=c++17"],
+    linkopts = [
+        "-L/usr/local/cuda/lib64",
+        "-lnvrtc",
+        "-lcuda",
+        "-lcusparse",
+        "-lcudart",
+        "-lcudss",
+        "-lcublas",
+    ],
+    deps = [
+        "//lib_src/collision:deme_mesh_collision_system",
+        "//lib_src/collision:hydroelastic_patch_collision_system",
+        "//lib_src/elements:FEAT10Data",
+        "//lib_src/solvers:solvers_syncedadamw",
+        "//lib_src/solvers:solvers_syncednesterov",
+        "//lib_src/solvers:solvers_syncednewton",
+        "//lib_utils:cpu_utils",
+        "//lib_utils:mesh_manager",
+        "//lib_utils:surface_trimesh_extract",
+        "//lib_utils:visualization_utils",
+        "@eigen//:eigen",
+    ],
+)
+

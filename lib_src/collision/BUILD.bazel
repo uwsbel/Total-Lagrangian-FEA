@@ -1,0 +1,83 @@
+#==============================================================
+#==============================================================
+# Project: RoboDyna
+# Author:  Json Zhou
+# Email:   zzhou292@wisc.edu
+# File:    BUILD.bazel
+# Brief:   Bazel build rules for collision backends (hydroelastic and DEME).
+#==============================================================
+#==============================================================
+
+load("@rules_cuda//cuda:defs.bzl", "cuda_library")
+
+package(default_visibility = ["//visibility:public"])
+
+cuda_library(
+    name = "hydroelastic_broadphase",
+    srcs = ["HydroelasticBroadphase.cu"],
+    hdrs = [
+        "HydroelasticBroadphase.cuh",
+        "HydroelasticBroadphaseFunc.cuh",
+        "HydroelasticCollisionTypes.cuh",
+    ],
+    copts = ["--std=c++17", "-O3", "--use_fast_math", "--extra-device-vectorization"],
+    linkopts = ["-lcudart"],
+    deps = [
+        "//lib_utils:cpu_utils",
+        "//lib_utils:cuda_utils",
+        "//lib_utils:mesh_manager",
+        "@eigen//:eigen",
+    ],
+)
+
+cuda_library(
+    name = "hydroelastic_narrowphase",
+    srcs = ["HydroelasticNarrowphase.cu"],
+    hdrs = [
+        "HydroelasticCollisionTypes.cuh",
+        "HydroelasticNarrowphase.cuh",
+        "HydroelasticNarrowphaseFunc.cuh",
+    ],
+    copts = ["--std=c++17", "-O3", "--use_fast_math", "--extra-device-vectorization"],
+    linkopts = ["-lcudart"],
+    deps = [
+        "//lib_utils:cuda_utils",
+        "@eigen//:eigen",
+    ],
+)
+
+cc_library(
+    name = "collision_system_interface",
+    hdrs = ["CollisionSystemBase.h"],
+    copts = ["--std=c++17"],
+)
+
+cc_library(
+    name = "hydroelastic_patch_collision_system",
+    srcs = ["HydroelasticPatchCollisionSystem.cc"],
+    hdrs = ["HydroelasticPatchCollisionSystem.h"],
+    copts = ["--std=c++17"],
+    deps = [
+        ":collision_system_interface",
+        ":hydroelastic_broadphase",
+        ":hydroelastic_narrowphase",
+        "//lib_utils:mesh_manager",
+        "@eigen//:eigen",
+    ],
+)
+
+cuda_library(
+    name = "deme_mesh_collision_system",
+    srcs = ["DemeMeshCollisionSystem.cu"],
+    hdrs = ["DemeMeshCollisionSystem.h"],
+    copts = ["--std=c++17", "-O3"],
+    linkopts = ["-lcudart"],
+    deps = [
+        ":collision_system_interface",
+        "//lib_utils:cuda_utils",
+        "//lib_utils:surface_trimesh",
+        "@dem_engine//:dem_engine_headers",
+        "//third_party:dem_engine",
+        "@eigen//:eigen",
+    ],
+)

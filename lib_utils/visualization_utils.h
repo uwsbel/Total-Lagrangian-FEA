@@ -8,7 +8,7 @@
 #include <string>
 #include <vector>
 
-#include "../lib_src/collision/Narrowphase.cuh"
+#include "../lib_src/collision/HydroelasticNarrowphase.cuh"
 
 namespace ANCFCPUUtils {
 

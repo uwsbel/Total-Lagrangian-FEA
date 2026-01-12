@@ -3,7 +3,7 @@
  * Project: RoboDyna
  * Author:  Json Zhou
  * Email:   zzhou292@wisc.edu
- * File:    Broadphase.cu
+ * File:    HydroelasticBroadphase.cu
  * Brief:   Implements the GPU broadphase collision stage for tetrahedral
  *          meshes. Builds AABBs for elements, performs sweep-and-prune along
  *          a chosen axis, filters out mesh neighbors, and uses CUB-based
@@ -19,8 +19,8 @@
 #include <algorithm>
 #include <cub/cub.cuh>  // Include CUB only in .cu file
 
-#include "Broadphase.cuh"
-#include "BroadphaseFunc.cuh"
+#include "HydroelasticBroadphase.cuh"
+#include "HydroelasticBroadphaseFunc.cuh"
 
 #include "lib_utils/mesh_manager.h"
 

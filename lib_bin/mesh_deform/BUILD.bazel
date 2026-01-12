@@ -1,0 +1,42 @@
+package(default_visibility = ["//visibility:public"])
+
+cc_binary(
+    name = "test_feat10_bunny_adamw",
+    srcs = ["test_feat10_bunny_adamw.cc"],
+    copts = ["--std=c++17"],
+    linkopts = [
+        "-L/usr/local/cuda/lib64",
+        "-lcusparse",
+        "-lcudart",
+    ],
+    deps = [
+        "//lib_src/elements:FEAT10Data",
+        "//lib_src/solvers:solvers_syncedadamw",
+        "//lib_src/solvers:solvers_syncednesterov",
+        "//lib_src/solvers:solvers_syncednewton",
+        "//lib_utils:cpu_utils",
+        "@eigen//:eigen",
+    ],
+)
+
+cc_binary(
+    name = "test_feat10_bunny_newton",
+    srcs = ["test_feat10_bunny_newton.cc"],
+    copts = ["--std=c++17"],
+    linkopts = [
+        "-L/usr/local/cuda/lib64",
+        "-lcusparse",
+        "-lcudart",
+        "-lcudss",
+        "-lcublas",
+    ],
+    deps = [
+        "//lib_src/elements:FEAT10Data",
+        "//lib_src/solvers:solvers_syncedadamw",
+        "//lib_src/solvers:solvers_syncednesterov",
+        "//lib_src/solvers:solvers_syncednewton",
+        "//lib_utils:cpu_utils",
+        "@eigen//:eigen",
+    ],
+)
+

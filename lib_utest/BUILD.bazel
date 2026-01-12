@@ -1,0 +1,127 @@
+package(default_visibility = ["//visibility:public"])
+
+cc_test(
+    name = "utest_3243",
+    srcs = ["utest_3243.cc"],
+    copts = ["--std=c++17"],
+    linkopts = [
+        "-L/usr/local/cuda/lib64",
+        "-lcusparse",
+        "-lcudart",
+    ],
+    data = ["//:data_utest"],
+    deps = [
+        "//lib_src/elements:ANCF3243Data",
+        "//lib_utils:cpu_utils",
+        "//lib_utils:csv_utils",
+        "//lib_utils:mesh_utils",
+        "@eigen//:eigen",
+        "@googletest//:gtest_main",
+    ],
+)
+
+cc_test(
+    name = "utest_utils",
+    srcs = ["utest_utils.cc"],
+    copts = ["--std=c++17"],
+    deps = [
+        "//lib_utils:cpu_utils",
+        "@eigen//:eigen",
+        "@googletest//:gtest_main",
+    ],
+)
+
+cc_test(
+    name = "utest_collision",
+    srcs = ["utest_collision.cc"],
+    copts = ["--std=c++17"],
+    data = ["//:data_meshes"],
+    deps = [
+        "//lib_src/collision:hydroelastic_broadphase",
+        "//lib_src/collision:hydroelastic_narrowphase",
+        "//lib_utils:cpu_utils",
+        "//lib_utils:mesh_manager",
+        "//lib_utils:mesh_utils",
+        "//lib_utils:visualization_utils",
+        "@eigen//:eigen",
+        "@googletest//:gtest_main",
+    ],
+)
+
+cc_test(
+    name = "utest_sparse_mass",
+    srcs = ["utest_sparse_mass.cc"],
+    copts = ["--std=c++17"],
+    linkopts = [
+        "-L/usr/local/cuda/lib64",
+        "-lcusparse",
+        "-lcudart",
+    ],
+    data = [
+        "//:data_meshes",
+        "//:data_utest",
+    ],
+    deps = [
+        "//lib_src/elements:ANCF3243Data",
+        "//lib_src/elements:ANCF3443Data",
+        "//lib_src/elements:FEAT10Data",
+        "//lib_utils:cpu_utils",
+        "//lib_utils:csv_utils",
+        "//lib_utils:mesh_utils",
+        "@eigen//:eigen",
+        "@googletest//:gtest_main",
+    ],
+)
+
+cc_test(
+    name = "utest_feat10_mesh",
+    srcs = ["utest_feat10_mesh.cc"],
+    copts = ["--std=c++17"],
+    linkopts = [
+        "-L/usr/local/cuda/lib64",
+        "-lcusparse",
+        "-lcudart",
+    ],
+    data = [
+        "//:data_meshes",
+        "//:data_utest",
+    ],
+    deps = [
+        "//lib_src/elements:FEAT10Data",
+        "//lib_src/solvers:solvers_syncedadamw",
+        "//lib_src/solvers:solvers_syncednesterov",
+        "//lib_src/solvers:solvers_syncednewton",
+        "//lib_utils:cpu_utils",
+        "//lib_utils:csv_utils",
+        "@eigen//:eigen",
+        "@googletest//:gtest_main",
+    ],
+)
+
+cc_test(
+    name = "utest_feat10_cudss",
+    srcs = ["utest_feat10_cudss.cc"],
+    copts = ["--std=c++17"],
+    linkopts = [
+        "-L/usr/local/cuda/lib64",
+        "-lcusparse",
+        "-lcudart",
+        "-lcudss",
+        "-lcublas",
+    ],
+    data = [
+        "//:data_meshes",
+        "//:data_utest",
+    ],
+    deps = [
+        "//lib_src/elements:FEAT10Data",
+        "//lib_src/solvers:solvers_syncedadamw",
+        "//lib_src/solvers:solvers_syncednesterov",
+        "//lib_src/solvers:solvers_syncednewton",
+        "//lib_utils:cpu_utils",
+        "//lib_utils:csv_utils",
+        "@eigen//:eigen",
+        "@googletest//:gtest_main",
+    ],
+)
+

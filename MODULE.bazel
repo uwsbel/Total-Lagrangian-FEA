@@ -6,8 +6,19 @@ module(
 bazel_dep(name = "platforms", version = "0.0.11")
 bazel_dep(name = "rules_cc", version = "0.2.1")
 bazel_dep(name = "rules_cuda", version = "0.2.5")
+bazel_dep(name = "rules_foreign_cc", version = "0.9.0")
 bazel_dep(name = "eigen", version = "3.4.0.bcr.3")
 bazel_dep(name = "googletest", version = "1.14.0.bcr.1")
+
+# Bring the CMake-based DEM-Engine submodule into Bazel without adding BUILD files
+# inside the submodule itself.
+new_local_repository = use_repo_rule("@bazel_tools//tools/build_defs/repo:local.bzl", "new_local_repository")
+
+new_local_repository(
+    name = "dem_engine",
+    build_file = "//third_party:dem_engine.BUILD.bazel",
+    path = "third_party/DEM-Engine",
+)
 
 # Register CUDA toolchains provided by rules_cuda
 register_toolchains("@rules_cuda//cuda:all")

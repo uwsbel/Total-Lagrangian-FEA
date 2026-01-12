@@ -3,7 +3,7 @@
  * Project: RoboDyna
  * Author:  Json Zhou
  * Email:   zzhou292@wisc.edu
- * File:    Narrowphase.cu
+ * File:    HydroelasticNarrowphase.cu
  * Brief:   Host-side narrowphase collision pipeline. Manages GPU data for
  *          tetrahedral meshes and pressures, launches CUDA kernels to compute
  *          iso-pressure contact patches, retrieves patch data to the host,
@@ -16,8 +16,8 @@
 #include <cmath>
 #include <iostream>
 
-#include "Narrowphase.cuh"
-#include "NarrowphaseFunc.cuh"
+#include "HydroelasticNarrowphase.cuh"
+#include "HydroelasticNarrowphaseFunc.cuh"
 
 #include "lib_utils/cuda_utils.h"
 

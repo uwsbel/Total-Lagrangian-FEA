@@ -1,15 +1,19 @@
-/* Narrowphase.cuh
- * Author: Json Zhou (zzhou292@wisc.edu)
- *
- * Pressure-based narrowphase: contact patch data structures, GPU storage, and
- * host API for computing patches and contact forces between tetrahedra.
- */
+/*==============================================================
+ *==============================================================
+ * Project: RoboDyna
+ * Author:  Json Zhou
+ * Email:   zzhou292@wisc.edu
+ * File:    HydroelasticNarrowphase.cuh
+ * Brief:   Declares hydroelastic narrowphase data structures and APIs for
+ *          computing contact patches and per-node contact forces on the GPU.
+ *==============================================================
+ *==============================================================*/
 
 #pragma once
 
 #include <cuda_runtime.h>
 
-#include "CollisionTypes.cuh"
+#include "HydroelasticCollisionTypes.cuh"
 
 #include <Eigen/Dense>
 #include <vector>

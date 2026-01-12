@@ -1,0 +1,86 @@
+package(default_visibility = ["//visibility:public"])
+
+load("@rules_foreign_cc//foreign_cc:defs.bzl", "cmake")
+
+filegroup(
+    name = "srcs",
+    srcs = glob(
+        [
+            "CMakeLists.txt",
+            "cmake/**",
+            "src/**",
+            "thirdparty/**",
+            "data/**",
+        ],
+        exclude = [
+            "**/bazel-*/**",
+            "**/bazel-out/**",
+            "**/bazel-bin/**",
+            "**/bazel-testlogs/**",
+        ],
+    ),
+)
+
+cc_library(
+    name = "dem_engine_headers",
+    hdrs = glob(
+        [
+            "src/**/*.h",
+            "src/**/*.hpp",
+            "src/**/*.cuh",
+            "thirdparty/**/*.hpp",
+        ],
+    ),
+    includes = [
+        "src",
+        "thirdparty",
+    ],
+)
+
+# Builds DEM-Engine via its upstream CMake project.
+#
+# Note: this assumes a locally-installed CUDA toolkit (e.g. `/usr/local/cuda`),
+# similar to how the rest of this repo links CUDA libraries today.
+cmake(
+    name = "dem_engine",
+    lib_source = ":srcs",
+    cache_entries = {
+        # Avoid CMake FetchContent downloads.
+        "USE_CHPF": "OFF",
+        "USE_MANAGED_ARRAYS": "OFF",
+        # Match this repo's C++ standard settings.
+        "CXXSTD_MAX": "17",
+        # Point CMake at the system CUDA toolkit (adjust if needed).
+        "CUDAToolkit_ROOT": "/usr/local/cuda",
+        # Match `.bazelrc` default archs (compute_75 + compute_86).
+        "CMAKE_CUDA_ARCHITECTURES": "75;86",
+    },
+    generate_args = [
+        # Prefer makefiles (don't assume Ninja is installed).
+        "-GUnix Makefiles",
+    ],
+    # Only build the core library target (avoid building upstream demos).
+    #
+    # This ends up running: `cmake --build <dir> --target ...`.
+    build_args = [
+        "--parallel",
+        "8",
+        "--target",
+        "simulator_multi_gpu",
+        # Upstream install logic expects this target's output to exist (it overwrites
+        # the build-tree libDEMERuntimeDataHelper.so during installation).
+        "--target",
+        "DEMERuntimeDataHelper_install",
+    ],
+    # Keep installed runtime data (kernels, force-model sources, etc.) which DEM-Engine
+    # loads at runtime via `DEMERuntimeDataHelper::data_path`.
+    out_data_dirs = [
+        "share",
+    ],
+    out_static_libs = [
+        "libsimulator_multi_gpu.a",
+    ],
+    out_shared_libs = [
+        "libDEMERuntimeDataHelper.so",
+    ],
+)

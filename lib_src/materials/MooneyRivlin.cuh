@@ -1,3 +1,14 @@
+/*==============================================================
+ *==============================================================
+ * Project: RoboDyna
+ * Author:  Json Zhou
+ * Email:   zzhou292@wisc.edu
+ * File:    MooneyRivlin.cuh
+ * Brief:   Defines CUDA device routines for the Mooney-Rivlin hyperelastic
+ *          material model (stress and tangent operator calculations).
+ *==============================================================
+ *==============================================================*/
+
 #pragma once
 
 #if defined(__CUDACC__)

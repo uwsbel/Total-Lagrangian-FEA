@@ -1,11 +1,9 @@
-#pragma once
-
 /*==============================================================
  *==============================================================
  * Project: RoboDyna
  * Author:  Json Zhou
  * Email:   zzhou292@wisc.edu
- * File:    NarrowphaseFunc.cuh
+ * File:    HydroelasticNarrowphaseFunc.cuh
  * Brief:   CUDA device utilities and kernels for narrowphase contact
  *          computation. Implements affine pressure fields, plane–tet
  *          intersection, polygon clipping, patch area/centroid evaluation,
@@ -14,7 +12,9 @@
  *==============================================================
  *==============================================================*/
 
-#include "Narrowphase.cuh"
+#pragma once
+
+#include "HydroelasticNarrowphase.cuh"
 
 // Device / kernel functions for Narrowphase
 

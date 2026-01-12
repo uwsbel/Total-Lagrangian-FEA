@@ -1,0 +1,83 @@
+package(default_visibility = ["//visibility:public"])
+
+cc_library(
+    name = "cuda_utils",
+    hdrs = ["cuda_utils.h"],
+    copts = ["--std=c++17"],
+)
+
+cc_library(
+    name = "cpu_utils",
+    srcs = ["cpu_utils.cc"],
+    hdrs = [
+        "cpu_utils.h",
+        "quadrature_utils.h",
+    ],
+    copts = ["--std=c++17"],
+    deps = ["@eigen//:eigen"],
+)
+
+cc_library(
+    name = "mesh_utils",
+    srcs = ["mesh_utils.cc"],
+    hdrs = ["mesh_utils.h"],
+    copts = ["--std=c++17"],
+    deps = ["@eigen//:eigen"],
+)
+
+cc_library(
+    name = "mesh_manager",
+    srcs = ["mesh_manager.cc"],
+    hdrs = ["mesh_manager.h"],
+    copts = ["--std=c++17"],
+    deps = [
+        ":cpu_utils",
+        "@eigen//:eigen",
+    ],
+)
+
+cc_library(
+    name = "surface_trimesh",
+    srcs = ["surface_trimesh.cc"],
+    hdrs = ["surface_trimesh.h"],
+    copts = ["--std=c++17"],
+    deps = ["@eigen//:eigen"],
+)
+
+cc_library(
+    name = "surface_trimesh_extract",
+    srcs = ["surface_trimesh_extract.cc"],
+    hdrs = ["surface_trimesh_extract.h"],
+    copts = ["--std=c++17"],
+    deps = [
+        ":mesh_manager",
+        ":surface_trimesh",
+        "@eigen//:eigen",
+    ],
+)
+
+cc_library(
+    name = "visualization_utils",
+    hdrs = ["visualization_utils.h"],
+    copts = ["--std=c++17"],
+    deps = [
+        "//lib_src/collision:hydroelastic_narrowphase",
+        "@eigen//:eigen",
+    ],
+)
+
+cc_library(
+    name = "csv_utils",
+    srcs = ["csv_utils.cc"],
+    hdrs = ["csv_utils.h"],
+    copts = ["--std=c++17"],
+    deps = ["@eigen//:eigen"],
+)
+
+cc_library(
+    name = "collision_system_interface_shim",
+    hdrs = ["collision_system_interface.h"],
+    copts = ["--std=c++17"],
+    deps = ["//lib_src/collision:collision_system_interface"],
+)
+
