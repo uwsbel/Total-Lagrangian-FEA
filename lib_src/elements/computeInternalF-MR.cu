@@ -97,375 +97,414 @@ __global__ void computeInternalForceContributionPerElement_MR_4QP(
   namespace cg                  = cooperative_groups;
   cg::thread_block block        = cg::this_thread_block();
   cg::thread_block_tile<TILE> tile = cg::tiled_partition<TILE>(block);
+  const int lane_in_tile = tile.thread_rank();
 
-  int elements_per_block = blockDim.x / TILE;
-  int element_idx = blockIdx.x * elements_per_block + tile.meta_group_rank();
+  // Elements per block: blockDim.x / TILE
+  const int element_idx = blockIdx.x * (blockDim.x / TILE) + tile.meta_group_rank();
 
   if (element_idx >= totalN_Elements) {
     return;
   }
 
-  // The coordinates of the four quadrature points.
-  // The vertices of the canonical tetrahedron are:
-  // (0,0,0), (1,0,0), (0,1,0), (0,0,1)
-  // The coordinates of the four quadrature points are:
-  // (0.1381966011250105, 0.1381966011250105, 0.1381966011250105)
-  // (0.5854101966249685, 0.1381966011250105, 0.1381966011250105)
-  // (0.5854101966249685, 0.5854101966249685, 0.1381966011250105)
-  // (0.5854101966249685, 0.5854101966249685, 0.5854101966249685)
+  // QP coordinates for the 4-point rule on the T10 tet element canonical tetrahedron.
+  // Lane mapping:
+  //  lane 0: (a,a,a)
+  //  lane 1: (b,a,a)
+  //  lane 2: (b,b,a)
+  //  lane 3: (b,b,b)  
+  constexpr float a = 0.1381966011250105f;
+  constexpr float b = 0.5854101966249685f;
 
-  float xi, eta, zeta;
-  const int tile_thread_rank = tile.thread_rank();
-  switch (tile_thread_rank) {
-    case 0:
-      xi   = 0.1381966011250105f;
-      eta  = 0.1381966011250105f;
-      zeta = 0.1381966011250105f;
-      break;
-    case 1:
-      xi   = 0.5854101966249685f;
-      eta  = 0.1381966011250105f;
-      zeta = 0.1381966011250105f;
-      break;
-    case 2:
-      xi   = 0.5854101966249685f;
-      eta  = 0.5854101966249685f;
-      zeta = 0.1381966011250105f;
-      break;
-    case 3:
-      xi   = 0.5854101966249685f;
-      eta  = 0.5854101966249685f;
-      zeta = 0.5854101966249685f;
-      break;
-  }
+  const float xi   = (lane_in_tile == 0) ? a : b;
+  const float eta  = (lane_in_tile <  2) ? a : b;
+  const float zeta = (lane_in_tile <  3) ? a : b;
 
   // start the computation of the deformation gradient F of the iso-parametric element.
-  float isoJacInv00, isoJacInv01, isoJacInv02;
-  float isoJacInv10, isoJacInv11, isoJacInv12;
-  float isoJacInv20, isoJacInv21, isoJacInv22;
-
-  {
+  float F00, F01, F02, F10, F11, F12, F20, F21, F22;
+  const int* __restrict__ pElementNodes = pElement_NodeIndexes + element_idx * 10; // 10 nodes per element
+  {  
+  
     // Define the total number of quadrature points globally
-    const int totalQPs    = totalN_Elements * 4;
-    const int globalQPIdx = element_idx * 4 + tile_thread_rank;
+    constexpr int totalQPs = totalN_Elements * 4;
+    const int globalQPIdx  = element_idx * 4 + lane_in_tile;
 
     // Load the inverse of the scaled isoparametric-element Jacobian for this QP.
     // globalQPIdx is consecutive within each 4-lane tile, so these loads are coalesced within a tile.
-    isoJacInv00 = __ldg(&pIsoMapInverseScaled[globalQPIdx + 0 * totalQPs]);
-    isoJacInv01 = __ldg(&pIsoMapInverseScaled[globalQPIdx + 1 * totalQPs]);
-    isoJacInv02 = __ldg(&pIsoMapInverseScaled[globalQPIdx + 2 * totalQPs]);
-    isoJacInv10 = __ldg(&pIsoMapInverseScaled[globalQPIdx + 3 * totalQPs]);
-    isoJacInv11 = __ldg(&pIsoMapInverseScaled[globalQPIdx + 4 * totalQPs]);
-    isoJacInv12 = __ldg(&pIsoMapInverseScaled[globalQPIdx + 5 * totalQPs]);
-    isoJacInv20 = __ldg(&pIsoMapInverseScaled[globalQPIdx + 6 * totalQPs]);
-    isoJacInv21 = __ldg(&pIsoMapInverseScaled[globalQPIdx + 7 * totalQPs]);
-    isoJacInv22 = __ldg(&pIsoMapInverseScaled[globalQPIdx + 8 * totalQPs]);
-  }
-
-  // Begin internal force contribution calculation using the Jacobian H.
-  // The exact formula for H is given below.
-  /*
-      [See long multiline LaTeX comment above]
-  */
-
-  // Compute the deformation gradient F using the nodal unknowns.
-  float F00, F01, F02, F10, F11, F12, F20, F21, F22;
-  float NUx_bonus, NUy_bonus, NUz_bonus;
-  const int* __restrict__ pElementNodes = pElement_NodeIndexes + element_idx * 10; // 10 nodes per element
+    const float isoJacInv00 = __ldg(&pIsoMapInverseScaled[globalQPIdx + 0 * totalQPs]);
+    const float isoJacInv01 = __ldg(&pIsoMapInverseScaled[globalQPIdx + 1 * totalQPs]);
+    const float isoJacInv02 = __ldg(&pIsoMapInverseScaled[globalQPIdx + 2 * totalQPs]);
+    const float isoJacInv10 = __ldg(&pIsoMapInverseScaled[globalQPIdx + 3 * totalQPs]);
+    const float isoJacInv11 = __ldg(&pIsoMapInverseScaled[globalQPIdx + 4 * totalQPs]);
+    const float isoJacInv12 = __ldg(&pIsoMapInverseScaled[globalQPIdx + 5 * totalQPs]);
+    const float isoJacInv20 = __ldg(&pIsoMapInverseScaled[globalQPIdx + 6 * totalQPs]);
+    const float isoJacInv21 = __ldg(&pIsoMapInverseScaled[globalQPIdx + 7 * totalQPs]);
+    const float isoJacInv22 = __ldg(&pIsoMapInverseScaled[globalQPIdx + 8 * totalQPs]);
   
-  // Node 0 (with node 3 bonus x)
+    // Used to store "serendipitous" (i.e., bonus) nodal unknowns.
+    float NUx_bonus, NUy_bonus, NUz_bonus;
+
+    // Node 0 (with node 3 bonus x)
+    {
+      const int whichGlobalNode = pElementNodes[nodeOffsets_T10tet[0][lane_in_tile]];
+      const float value = (float)pPosNodes[3 * whichGlobalNode + xyzFieldOffsets_T10tet[0][lane_in_tile]];
+      const float NUx = tile.shfl(value, 0); // x of node 0
+      const float NUy = tile.shfl(value, 1); // y of node 0
+      const float NUz = tile.shfl(value, 2); // z of node 0
+      NUx_bonus = tile.shfl(value, 3); // x of node 3
+  
+      const float h0 = 4.f * eta + 4.f * xi + 4.f * zeta - 3.f;
+      // h1 = h0;
+      // h2 = h0;
+      const float dummy0 = h0*(isoJacInv00 + isoJacInv01 + isoJacInv02);
+      const float dummy1 = h0*(isoJacInv10 + isoJacInv11 + isoJacInv12);
+      const float dummy2 = h0*(isoJacInv20 + isoJacInv21 + isoJacInv22);
+  
+      F00 = NUx * dummy0;
+      F01 = NUx * dummy1;
+      F02 = NUx * dummy2;
+      F10 = NUy * dummy0;
+      F11 = NUy * dummy1;
+      F12 = NUy * dummy2;
+      F20 = NUz * dummy0;
+      F21 = NUz * dummy1;
+      F22 = NUz * dummy2;
+    }
+  
+    // Node 1 (with node 3 bonus y)
+    {
+      const int whichGlobalNode = pElementNodes[nodeOffsets_T10tet[1][lane_in_tile]];
+      const float value = (float)pPosNodes[3 * whichGlobalNode + xyzFieldOffsets_T10tet[1][lane_in_tile]];
+      const float NUx = tile.shfl(value, 0); // x of node 1
+      const float NUy = tile.shfl(value, 1); // y of node 1
+      const float NUz = tile.shfl(value, 2); // z of node 1
+      NUy_bonus = tile.shfl(value, 3); // y of node 3
+  
+      const float h0 = 4.f * xi - 1.f;
+      // h1 = 0.f;
+      // h2 = 0.f;
+      const float dummy0 = h0*isoJacInv00;
+      const float dummy1 = h0*isoJacInv10;
+      const float dummy2 = h0*isoJacInv20;
+  
+      F00 += NUx * dummy0;
+      F01 += NUx * dummy1;
+      F02 += NUx * dummy2;
+      F10 += NUy * dummy0;
+      F11 += NUy * dummy1;
+      F12 += NUy * dummy2;
+      F20 += NUz * dummy0;
+      F21 += NUz * dummy1;
+      F22 += NUz * dummy2;
+    }
+  
+    // Node 2 (with node 3 bonus z)
+    {
+      const int whichGlobalNode = pElementNodes[nodeOffsets_T10tet[2][lane_in_tile]];
+      const float value = (float)pPosNodes[3 * whichGlobalNode + xyzFieldOffsets_T10tet[2][lane_in_tile]];
+      const float NUx = tile.shfl(value, 0); // x of node 2
+      const float NUy = tile.shfl(value, 1); // y of node 2
+      const float NUz = tile.shfl(value, 2); // z of node 2
+      NUz_bonus = tile.shfl(value, 3); // z of node 3
+  
+      // h0 = 0.f;
+      const float h1 = 4.f * eta - 1.f;
+      // h2 = 0.f;
+      const float dummy0 = h1*isoJacInv01;
+      const float dummy1 = h1*isoJacInv11;
+      const float dummy2 = h1*isoJacInv21;
+  
+      F00 += NUx * dummy0;
+      F01 += NUx * dummy1;
+      F02 += NUx * dummy2;
+      F10 += NUy * dummy0;
+      F11 += NUy * dummy1;
+      F12 += NUy * dummy2;
+      F20 += NUz * dummy0;
+      F21 += NUz * dummy1;
+      F22 += NUz * dummy2;
+    }
+  
+    // Node 3 (bonus, use shuffled bonuses)
+    {
+      // h0 = 0.f;
+      // h1 = 0.f;
+      const float h2 = 4.f * zeta - 1.f;
+      const float dummy0 = h2*isoJacInv02;
+      const float dummy1 = h2*isoJacInv12;
+      const float dummy2 = h2*isoJacInv22;
+  
+      F00 += NUx_bonus * dummy0;
+      F01 += NUx_bonus * dummy1;
+      F02 += NUx_bonus * dummy2;
+      F10 += NUy_bonus * dummy0;
+      F11 += NUy_bonus * dummy1;
+      F12 += NUy_bonus * dummy2;
+      F20 += NUz_bonus * dummy0;
+      F21 += NUz_bonus * dummy1;
+      F22 += NUz_bonus * dummy2;
+    }
+  
+    // Node 4 (with node 7 bonus x)
+    {
+      const int whichGlobalNode = pElementNodes[nodeOffsets_T10tet[3][lane_in_tile]];
+      const float value = (float)pPosNodes[3 * whichGlobalNode + xyzFieldOffsets_T10tet[3][lane_in_tile]];
+      const float NUx = tile.shfl(value, 0); // x of node 4
+      const float NUy = tile.shfl(value, 1); // y of node 4
+      const float NUz = tile.shfl(value, 2); // z of node 4
+      NUx_bonus = tile.shfl(value, 3); // x of node 7
+  
+      const float h0 = -4.f * eta - 8.f * xi - 4.f * zeta + 4.f;
+      const float h1 = -4.f * xi;
+      // h1 and h2 are the same
+      const float dummy0 = h0*isoJacInv00 + h1*(isoJacInv01 + isoJacInv02);
+      const float dummy1 = h0*isoJacInv10 + h1*(isoJacInv11 + isoJacInv12);
+      const float dummy2 = h0*isoJacInv20 + h1*(isoJacInv21 + isoJacInv22);
+  
+      F00 += NUx * dummy0;
+      F01 += NUx * dummy1;
+      F02 += NUx * dummy2;
+      F10 += NUy * dummy0;
+      F11 += NUy * dummy1;
+      F12 += NUy * dummy2;
+      F20 += NUz * dummy0;
+      F21 += NUz * dummy1;
+      F22 += NUz * dummy2;
+    }
+  
+    // Node 5 (with node 7 bonus y)
+    {
+      const int whichGlobalNode = pElementNodes[nodeOffsets_T10tet[4][lane_in_tile]];
+      const float value = (float)pPosNodes[3 * whichGlobalNode + xyzFieldOffsets_T10tet[4][lane_in_tile]];
+      const float NUx = tile.shfl(value, 0); // x of node 5
+      const float NUy = tile.shfl(value, 1); // y of node 5
+      const float NUz = tile.shfl(value, 2); // z of node 5
+      NUy_bonus = tile.shfl(value, 3); // y of node 7
+  
+      const float h0 = 4.f * eta;
+      const float h1 = 4.f * xi;
+      // h2 = 0.f;
+      const float dummy0 = h0*isoJacInv00 + h1*isoJacInv01;
+      const float dummy1 = h0*isoJacInv10 + h1*isoJacInv11;
+      const float dummy2 = h0*isoJacInv20 + h1*isoJacInv21;
+  
+      F00 += NUx * dummy0;
+      F01 += NUx * dummy1;
+      F02 += NUx * dummy2;
+      F10 += NUy * dummy0;
+      F11 += NUy * dummy1;
+      F12 += NUy * dummy2;
+      F20 += NUz * dummy0;
+      F21 += NUz * dummy1;
+      F22 += NUz * dummy2;
+    }
+  
+    // Node 6 (with node 7 bonus z)
+    {
+      const int whichGlobalNode = pElementNodes[nodeOffsets_T10tet[5][lane_in_tile]];
+      const float value = (float)pPosNodes[3 * whichGlobalNode + xyzFieldOffsets_T10tet[5][lane_in_tile]];
+      const float NUx = tile.shfl(value, 0); // x of node 6
+      const float NUy = tile.shfl(value, 1); // y of node 6
+      const float NUz = tile.shfl(value, 2); // z of node 6
+      NUz_bonus = tile.shfl(value, 3); // z of node 7
+  
+      const float h0 = -4.f * eta;
+      const float h1 = -8.f * eta - 4.f * xi - 4.f * zeta + 4.f;
+      const float h2 = -4.f * eta;
+      const float dummy0 = h0*isoJacInv00 + h1*isoJacInv01 + h2*isoJacInv02;
+      const float dummy1 = h0*isoJacInv10 + h1*isoJacInv11 + h2*isoJacInv12;
+      const float dummy2 = h0*isoJacInv20 + h1*isoJacInv21 + h2*isoJacInv22;
+  
+      F00 += NUx * dummy0;
+      F01 += NUx * dummy1;
+      F02 += NUx * dummy2;
+      F10 += NUy * dummy0;
+      F11 += NUy * dummy1;
+      F12 += NUy * dummy2;
+      F20 += NUz * dummy0;
+      F21 += NUz * dummy1;
+      F22 += NUz * dummy2;
+    }
+  
+    // Node 7 (bonus, use all shuffled bonuses)
+    {
+      const float h0 = -4.f * zeta;
+      // h1 = h0;
+      const float h2 = -4.f * eta - 4.f * xi - 8.f * zeta + 4.f;
+      const float dummy0 = h0*(isoJacInv00 + isoJacInv01) + h2*isoJacInv02;
+      const float dummy1 = h0*(isoJacInv10 + isoJacInv11) + h2*isoJacInv12;
+      const float dummy2 = h0*(isoJacInv20 + isoJacInv21) + h2*isoJacInv22;
+  
+      F00 += NUx_bonus * dummy0;
+      F01 += NUx_bonus * dummy1;
+      F02 += NUx_bonus * dummy2;
+      F10 += NUy_bonus * dummy0;
+      F11 += NUy_bonus * dummy1;
+      F12 += NUy_bonus * dummy2;
+      F20 += NUz_bonus * dummy0;
+      F21 += NUz_bonus * dummy1;
+      F22 += NUz_bonus * dummy2;
+    }
+  
+    // Node 8 (no valid bonus, dummy)
+    {
+      const int whichGlobalNode = pElementNodes[nodeOffsets_T10tet[6][lane_in_tile]];
+      const float value = (float)pPosNodes[3 * whichGlobalNode + xyzFieldOffsets_T10tet[6][lane_in_tile]];
+      const float NUx = tile.shfl(value, 0); // x of node 8
+      const float NUy = tile.shfl(value, 1); // y of node 8
+      const float NUz = tile.shfl(value, 2); // z of node 8
+      NUz_bonus = tile.shfl(value, 3); // z of node 8; dummy
+  
+      const float h0 = 4.f * zeta;
+      // h1 = 0.f;
+      const float h2 = 4.f * xi;
+      const float dummy0 = h0*isoJacInv00 + h2*isoJacInv02;
+      const float dummy1 = h0*isoJacInv10 + h2*isoJacInv12;
+      const float dummy2 = h0*isoJacInv20 + h2*isoJacInv22;
+  
+      F00 += NUx * dummy0;
+      F01 += NUx * dummy1;
+      F02 += NUx * dummy2;
+      F10 += NUy * dummy0;
+      F11 += NUy * dummy1;
+      F12 += NUy * dummy2;
+      F20 += NUz * dummy0;
+      F21 += NUz * dummy1;
+      F22 += NUz * dummy2;
+    }
+  
+    // Node 9 (no valid bonus, dummy)
+    {
+      const int whichGlobalNode = pElementNodes[nodeOffsets_T10tet[7][lane_in_tile]];
+      const float value = (float)pPosNodes[3 * whichGlobalNode + xyzFieldOffsets_T10tet[7][lane_in_tile]];
+      const float NUx = tile.shfl(value, 0); // x of node 9
+      const float NUy = tile.shfl(value, 1); // y of node 9
+      const float NUz = tile.shfl(value, 2); // z of node 9
+      NUz_bonus = tile.shfl(value, 3); // z of node 9; dummy
+  
+      // h0 = 0.f;
+      const float h1 = 4.f * zeta;
+      const float h2 = 4.f * eta;
+      const float dummy0 = h1*isoJacInv01 + h2*isoJacInv02;
+      const float dummy1 = h1*isoJacInv11 + h2*isoJacInv12;
+      const float dummy2 = h1*isoJacInv21 + h2*isoJacInv22;
+  
+      F00 += NUx * dummy0;
+      F01 += NUx * dummy1;
+      F02 += NUx * dummy2;
+      F10 += NUy * dummy0;
+      F11 += NUy * dummy1;
+      F12 += NUy * dummy2;
+      F20 += NUz * dummy0;
+      F21 += NUz * dummy1;
+      F22 += NUz * dummy2;
+    }
+  }
+  // End of computation of deformation gradient F, for the iso-parametric T10 tet element - 10 nodes, 4 QPs.
+
+  // Start of computation of the internal acceleration for the element.
   {
-    int whichGlobalNode = pElementNodes[nodeOffsets_T10tet[0][tile_thread_rank]];
-    float value = (float)pPosNodes[3 * whichGlobalNode + xyzFieldOffsets_T10tet[0][tile_thread_rank]];
-    float NUx = tile.shfl(value, 0); // x of node 0
-    float NUy = tile.shfl(value, 1); // y of node 0
-    float NUz = tile.shfl(value, 2); // z of node 0
-    NUx_bonus = tile.shfl(value, 3); // x of node 3
 
-    float h0 = 4.f * eta + 4.f * xi + 4.f * zeta - 3.f;
-    // h1 = h0;
-    // h2 = h0;
-    float dummy0 = h0*(isoJacInv00 + isoJacInv01 + isoJacInv02);
-    float dummy1 = h0*(isoJacInv10 + isoJacInv11 + isoJacInv12);
-    float dummy2 = h0*(isoJacInv20 + isoJacInv21 + isoJacInv22);
+    // compute the determinant of the deformation gradient F; pad with minJthreshold to avoid division by zero.
+    float dummy = F00 * (F11 * F22 - F12 * F21) - F01 * (F10 * F22 - F12 * F20) + F02 * (F10 * F21 - F11 * F20);
+    const float J = (dummy<minJthreshold ? minJthreshold : dummy);
 
-    F00 = NUx * dummy0;
-    F01 = NUx * dummy1;
-    F02 = NUx * dummy2;
-    F10 = NUy * dummy0;
-    F11 = NUy * dummy1;
-    F12 = NUy * dummy2;
-    F20 = NUz * dummy0;
-    F21 = NUz * dummy1;
-    F22 = NUz * dummy2;
+    dummy = cbrtf(J);
+    dummy = 1.0f / dummy;
+    const float hatJ = dummy * dummy;  // J^{-2/3}
+
+    float bibi;
+    {
+      // B = F * F^T (symmetric), then I1 = tr(B)
+      const float B00 = F00*F00 + F01*F01 + F02*F02;
+      const float B11 = F10*F10 + F11*F11 + F12*F12;
+      const float B22 = F20*F20 + F21*F21 + F22*F22;
+      const float B01 = F00*F10 + F01*F11 + F02*F12;
+      const float B02 = F00*F20 + F01*F21 + F02*F22;
+      const float B12 = F10*F20 + F11*F21 + F12*F22;
+      dummy = B00 + B11 + B22;
+      bibi = B00*B00 + B11*B11 + B22*B22 + 2.0f*(B01*B01 + B02*B02 + B12*B12); // tr(B*B)
+      bibi = 0.5f * (dummy*dummy - bibi); // I2 = 1/2 (I1^2 - tr(B*B))
+    }
+    const float I1 = dummy; // first invariant of the deformation gradient
+    const float I2 = bibi; // second invariant of the deformation gradient
+    const float alpha = mu10 + mu01 * I1 * hatJ; // helper variable, see ME751 lecture notes
+    const float beta = bulkK * (J - 1.0f) * J - (2.0f/3.0f) * hatJ * (mu10*I1 + 2.0f*mu01*I2*hatJ); // helper variable, see ME751 lecture notes
+
+    float internalForce_X, internalForce_Y, internalForce_Z;
+
+    // start visiting the nodes and compute the internal force for each one. Use atomic adds to accumulate
+    // Node 0 (of 0-9)
+    { 
+      const float hx = 4.f * eta + 4.f * xi + 4.f * zeta - 3.f;
+      // hy = hx;
+      // hz = hx;
+      // Get now u := F * h
+      const float ux = hx*(F00 + F01 + F02);
+      const float uy = hx*(F10 + F11 + F12);
+      const float uz = hx*(F20 + F21 + F22);
+
+      // w = (F F^T) u = F*(F^T*u) without forming matrices:
+      // v = F^T * u
+      const float vx = F00*ux + F10*uy + F20*uz;
+      const float vy = F01*ux + F11*uy + F21*uz;
+      const float vz = F02*ux + F12*uy + F22*uz;
+      // w = F * v
+      const float wx = F00*vx + F01*vy + F02*vz;
+      const float wy = F10*vx + F11*vy + F12*vz;
+      const float wz = F20*vx + F21*vy + F22*vz;
+
+      const float invJ = 1.0f / J;  
+
+      // inside node-a work:
+      float gtx, gty, gtz;
+      {
+          const float cof_x =  F11*F22 - F12*F21;
+          const float cof_y =  F12*F20 - F10*F22;
+          const float cof_z =  F10*F21 - F11*F20;
+          gtx = hx * (cof_x + cof_y + cof_z) * invJ;
+      }
+      {
+          const float cof_x =  F02*F21 - F01*F22;
+          const float cof_y =  F00*F22 - F02*F20;
+          const float cof_z =  F01*F20 - F00*F21;
+          gty = hx * (cof_x + cof_y + cof_z) * invJ;
+      }
+      {
+          const float cof_x =  F01*F12 - F02*F11;
+          const float cof_y =  F02*F10 - F00*F12;
+          const float cof_z =  F00*F11 - F01*F10;
+          gtz = hx * (cof_x + cof_y + cof_z) * invJ;
+      }
+
+      // P*h = 2*hatJ*(alpha*u - mu01*hatJ*w) + beta*(F^{-T}*h)
+      const float iso_scale = 2.0f * hatJ;
+      const float mu01_hatJ = mu01 * hatJ;
+
+      internalForce_X = iso_scale * (alpha * ux - mu01_hatJ * wx) + beta * gtx;
+      internalForce_Y = iso_scale * (alpha * uy - mu01_hatJ * wy) + beta * gty;
+      internalForce_Z = iso_scale * (alpha * uz - mu01_hatJ * wz) + beta * gtz;
+
+      // At this point, we just computed the internal acceleration for the QP.
+      // Need to do a reduce within the tile to get the internal acceleration for node "i" (of 0-9) in the element.
+      // tree reduction: 4 -> 2 -> 1
+
+      internalForce_X += tile.shfl_down(internalForce_X, 2);
+      internalForce_Y += tile.shfl_down(internalForce_Y, 2);
+      internalForce_Z += tile.shfl_down(internalForce_Z, 2);
+
+      internalForce_X += tile.shfl_down(internalForce_X, 1);
+      internalForce_Y += tile.shfl_down(internalForce_Y, 1);
+      internalForce_Z += tile.shfl_down(internalForce_Z, 1);
+
+      if (lane_in_tile == 0) {
+        const int whichGlobalNode = pElementNodes[0]; // why not storing in a reg? See comment at end of kernel.
+        atomicAdd(&pInternalForceNodes[3 * whichGlobalNode + 0], internalForce_X);
+        atomicAdd(&pInternalForceNodes[3 * whichGlobalNode + 1], internalForce_Y);
+        atomicAdd(&pInternalForceNodes[3 * whichGlobalNode + 2], internalForce_Z);
+      }
+
   }
-
-  // Node 1 (with node 3 bonus y)
-  {
-    int whichGlobalNode = pElementNodes[nodeOffsets_T10tet[1][tile_thread_rank]];
-    float value = (float)pPosNodes[3 * whichGlobalNode + xyzFieldOffsets_T10tet[1][tile_thread_rank]];
-    float NUx = tile.shfl(value, 0); // x of node 1
-    float NUy = tile.shfl(value, 1); // y of node 1
-    float NUz = tile.shfl(value, 2); // z of node 1
-    NUy_bonus = tile.shfl(value, 3); // y of node 3
-
-    float h0 = 4.f * xi - 1.f;
-    // h1 = 0.f;
-    // h2 = 0.f;
-    float dummy0 = h0*isoJacInv00;
-    float dummy1 = h0*isoJacInv10;
-    float dummy2 = h0*isoJacInv20;
-
-    F00 += NUx * dummy0;
-    F01 += NUx * dummy1;
-    F02 += NUx * dummy2;
-    F10 += NUy * dummy0;
-    F11 += NUy * dummy1;
-    F12 += NUy * dummy2;
-    F20 += NUz * dummy0;
-    F21 += NUz * dummy1;
-    F22 += NUz * dummy2;
-  }
-
-  // Node 2 (with node 3 bonus z)
-  {
-    int whichGlobalNode = pElementNodes[nodeOffsets_T10tet[2][tile_thread_rank]];
-    float value = (float)pPosNodes[3 * whichGlobalNode + xyzFieldOffsets_T10tet[2][tile_thread_rank]];
-    float NUx = tile.shfl(value, 0); // x of node 2
-    float NUy = tile.shfl(value, 1); // y of node 2
-    float NUz = tile.shfl(value, 2); // z of node 2
-    NUz_bonus = tile.shfl(value, 3); // z of node 3
-
-    // h0 = 0.f;
-    float h1 = 4.f * eta - 1.f;
-    // h2 = 0.f;
-    float dummy0 = h1*isoJacInv01;
-    float dummy1 = h1*isoJacInv11;
-    float dummy2 = h1*isoJacInv21;
-
-    F00 += NUx * dummy0;
-    F01 += NUx * dummy1;
-    F02 += NUx * dummy2;
-    F10 += NUy * dummy0;
-    F11 += NUy * dummy1;
-    F12 += NUy * dummy2;
-    F20 += NUz * dummy0;
-    F21 += NUz * dummy1;
-    F22 += NUz * dummy2;
-  }
-
-  // Node 3 (bonus, use shuffled bonuses)
-  {
-    // h0 = 0.f;
-    // h1 = 0.f;
-    float h2 = 4.f * zeta - 1.f;
-    float dummy0 = h2*isoJacInv02;
-    float dummy1 = h2*isoJacInv12;
-    float dummy2 = h2*isoJacInv22;
-
-    F00 += NUx_bonus * dummy0;
-    F01 += NUx_bonus * dummy1;
-    F02 += NUx_bonus * dummy2;
-    F10 += NUy_bonus * dummy0;
-    F11 += NUy_bonus * dummy1;
-    F12 += NUy_bonus * dummy2;
-    F20 += NUz_bonus * dummy0;
-    F21 += NUz_bonus * dummy1;
-    F22 += NUz_bonus * dummy2;
-  }
-
-  // Node 4 (with node 7 bonus x)
-  {
-    int whichGlobalNode = pElementNodes[nodeOffsets_T10tet[3][tile_thread_rank]];
-    float value = (float)pPosNodes[3 * whichGlobalNode + xyzFieldOffsets_T10tet[3][tile_thread_rank]];
-    float NUx = tile.shfl(value, 0); // x of node 4
-    float NUy = tile.shfl(value, 1); // y of node 4
-    float NUz = tile.shfl(value, 2); // z of node 4
-    NUx_bonus = tile.shfl(value, 3); // x of node 7
-
-    float h0 = -4.f * eta - 8.f * xi - 4.f * zeta + 4.f;
-    float h1 = -4.f * xi;
-    // h1 and h2 are the same
-    float dummy0 = h0*isoJacInv00 + h1*(isoJacInv01 + isoJacInv02);
-    float dummy1 = h0*isoJacInv10 + h1*(isoJacInv11 + isoJacInv12);
-    float dummy2 = h0*isoJacInv20 + h1*(isoJacInv21 + isoJacInv22);
-
-    F00 += NUx * dummy0;
-    F01 += NUx * dummy1;
-    F02 += NUx * dummy2;
-    F10 += NUy * dummy0;
-    F11 += NUy * dummy1;
-    F12 += NUy * dummy2;
-    F20 += NUz * dummy0;
-    F21 += NUz * dummy1;
-    F22 += NUz * dummy2;
-  }
-
-  // Node 5 (with node 7 bonus y)
-  {
-    int whichGlobalNode = pElementNodes[nodeOffsets_T10tet[4][tile_thread_rank]];
-    float value = (float)pPosNodes[3 * whichGlobalNode + xyzFieldOffsets_T10tet[4][tile_thread_rank]];
-    float NUx = tile.shfl(value, 0); // x of node 5
-    float NUy = tile.shfl(value, 1); // y of node 5
-    float NUz = tile.shfl(value, 2); // z of node 5
-    NUy_bonus = tile.shfl(value, 3); // y of node 7
-
-    float h0 = 4.f * eta;
-    float h1 = 4.f * xi;
-    // h2 = 0.f;
-    float dummy0 = h0*isoJacInv00 + h1*isoJacInv01;
-    float dummy1 = h0*isoJacInv10 + h1*isoJacInv11;
-    float dummy2 = h0*isoJacInv20 + h1*isoJacInv21;
-
-    F00 += NUx * dummy0;
-    F01 += NUx * dummy1;
-    F02 += NUx * dummy2;
-    F10 += NUy * dummy0;
-    F11 += NUy * dummy1;
-    F12 += NUy * dummy2;
-    F20 += NUz * dummy0;
-    F21 += NUz * dummy1;
-    F22 += NUz * dummy2;
-  }
-
-  // Node 6 (with node 7 bonus z)
-  {
-    int whichGlobalNode = pElementNodes[nodeOffsets_T10tet[5][tile_thread_rank]];
-    float value = (float)pPosNodes[3 * whichGlobalNode + xyzFieldOffsets_T10tet[5][tile_thread_rank]];
-    float NUx = tile.shfl(value, 0); // x of node 6
-    float NUy = tile.shfl(value, 1); // y of node 6
-    float NUz = tile.shfl(value, 2); // z of node 6
-    NUz_bonus = tile.shfl(value, 3); // z of node 7
-
-    float h0 = -4.f * eta;
-    float h1 = -8.f * eta - 4.f * xi - 4.f * zeta + 4.f;
-    float h2 = -4.f * eta;
-    float dummy0 = h0*isoJacInv00 + h1*isoJacInv01 + h2*isoJacInv02;
-    float dummy1 = h0*isoJacInv10 + h1*isoJacInv11 + h2*isoJacInv12;
-    float dummy2 = h0*isoJacInv20 + h1*isoJacInv21 + h2*isoJacInv22;
-
-    F00 += NUx * dummy0;
-    F01 += NUx * dummy1;
-    F02 += NUx * dummy2;
-    F10 += NUy * dummy0;
-    F11 += NUy * dummy1;
-    F12 += NUy * dummy2;
-    F20 += NUz * dummy0;
-    F21 += NUz * dummy1;
-    F22 += NUz * dummy2;
-  }
-
-  // Node 7 (bonus, use all shuffled bonuses)
-  {
-    float h0 = -4.f * zeta;
-    // h1 = h0;
-    float h2 = -4.f * eta - 4.f * xi - 8.f * zeta + 4.f;
-    float dummy0 = h0*(isoJacInv00 + isoJacInv01) + h2*isoJacInv02;
-    float dummy1 = h0*(isoJacInv10 + isoJacInv11) + h2*isoJacInv12;
-    float dummy2 = h0*(isoJacInv20 + isoJacInv21) + h2*isoJacInv22;
-
-    F00 += NUx_bonus * dummy0;
-    F01 += NUx_bonus * dummy1;
-    F02 += NUx_bonus * dummy2;
-    F10 += NUy_bonus * dummy0;
-    F11 += NUy_bonus * dummy1;
-    F12 += NUy_bonus * dummy2;
-    F20 += NUz_bonus * dummy0;
-    F21 += NUz_bonus * dummy1;
-    F22 += NUz_bonus * dummy2;
-  }
-
-  // Node 8 (no valid bonus, dummy)
-  {
-    int whichGlobalNode = pElementNodes[nodeOffsets_T10tet[6][tile_thread_rank]];
-    float value = (float)pPosNodes[3 * whichGlobalNode + xyzFieldOffsets_T10tet[6][tile_thread_rank]];
-    float NUx = tile.shfl(value, 0); // x of node 8
-    float NUy = tile.shfl(value, 1); // y of node 8
-    float NUz = tile.shfl(value, 2); // z of node 8
-    NUz_bonus = tile.shfl(value, 3); // z of node 8; dummy
-
-    float h0 = 4.f * zeta;
-    // h1 = 0.f;
-    float h2 = 4.f * xi;
-    float dummy0 = h0*isoJacInv00 + h2*isoJacInv02;
-    float dummy1 = h0*isoJacInv10 + h2*isoJacInv12;
-    float dummy2 = h0*isoJacInv20 + h2*isoJacInv22;
-
-    F00 += NUx * dummy0;
-    F01 += NUx * dummy1;
-    F02 += NUx * dummy2;
-    F10 += NUy * dummy0;
-    F11 += NUy * dummy1;
-    F12 += NUy * dummy2;
-    F20 += NUz * dummy0;
-    F21 += NUz * dummy1;
-    F22 += NUz * dummy2;
-  }
-
-  // Node 9 (no valid bonus, dummy)
-  {
-    int whichGlobalNode = pElementNodes[nodeOffsets_T10tet[7][tile_thread_rank]];
-    float value = (float)pPosNodes[3 * whichGlobalNode + xyzFieldOffsets_T10tet[7][tile_thread_rank]];
-    float NUx = tile.shfl(value, 0); // x of node 9
-    float NUy = tile.shfl(value, 1); // y of node 9
-    float NUz = tile.shfl(value, 2); // z of node 9
-    NUz_bonus = tile.shfl(value, 3); // z of node 9; dummy
-
-    // h0 = 0.f;
-    float h1 = 4.f * zeta;
-    float h2 = 4.f * eta;
-    float dummy0 = h1*isoJacInv01 + h2*isoJacInv02;
-    float dummy1 = h1*isoJacInv11 + h2*isoJacInv12;
-    float dummy2 = h1*isoJacInv21 + h2*isoJacInv22;
-
-    F00 += NUx * dummy0;
-    F01 += NUx * dummy1;
-    F02 += NUx * dummy2;
-    F10 += NUy * dummy0;
-    F11 += NUy * dummy1;
-    F12 += NUy * dummy2;
-    F20 += NUz * dummy0;
-    F21 += NUz * dummy1;
-    F22 += NUz * dummy2;
-  }
-  // This conclude the computation of the deformation gradient F of the iso-parametric element.
-
-  #define internalAcceleration_X NUx_bonus  // Alias the register; NUx_bonus not needed from this point on
-  #define internalAcceleration_Y NUy_bonus  // Alias the register; NUy_bonus not needed from this point on
-  #define internalAcceleration_Z NUz_bonus  // Alias the register; NUz_bonus not needed from this point on
-
-  // Use the macro 'internalAcceleration_?' for internal acceleration calculation
-  // (The following statement is a placeholder for demonstration)
-  internalAcceleration_X = F00 + F01 + F02; //BOGUS FOR NOW, to get the atomic add operations going
-  internalAcceleration_Y = F10 + F11 + F12; //BOGUS FOR NOW, to get the atomic add operations going
-  internalAcceleration_Z = F20 + F21 + F22; //BOGUS FOR NOW, to get the atomic add operations going
-
-
-  // At this point, we just computed the internal acceleration for the QP.
-  // Need to do a reduce within the tile to get the internal acceleration for node "i" (of 0-9) in the element.
-  // tree reduction: 4 -> 2 -> 1
-
-  internalAcceleration_X += tile.shfl_down(internalAcceleration_X, 2);  
-  internalAcceleration_Y += tile.shfl_down(internalAcceleration_Y, 2);  
-  internalAcceleration_Z += tile.shfl_down(internalAcceleration_Z, 2);
-
-  internalAcceleration_X += tile.shfl_down(internalAcceleration_X, 1);  
-  internalAcceleration_Y += tile.shfl_down(internalAcceleration_Y, 1);  
-  internalAcceleration_Z += tile.shfl_down(internalAcceleration_Z, 1);
-
-  if (tile_thread_rank == 0) {
-    const int whichGlobalNode = pElementNodes[0];
-    atomicAdd(&pInternalForceNodes[3 * whichGlobalNode + 0], internalAcceleration_X);
-    atomicAdd(&pInternalForceNodes[3 * whichGlobalNode + 1], internalAcceleration_Y);
-    atomicAdd(&pInternalForceNodes[3 * whichGlobalNode + 2], internalAcceleration_Z);
-  }
-
-
-  // Remove the macro definition 
-  #undef internalAcceleration_X
-  #undef internalAcceleration_Y
-  #undef internalAcceleration_Z
-
+  
   return;
 }
 /*
