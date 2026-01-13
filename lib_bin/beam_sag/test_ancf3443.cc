@@ -27,7 +27,6 @@
 #include "../../lib_src/solvers/SyncedNesterov.cuh"
 #include "../../lib_src/solvers/SyncedNewton.cuh"
 #include "../../lib_src/solvers/SyncedVBD.cuh"
-#include "../../lib_utils/cpu_utils.h"
 #include "../../lib_utils/visualization_utils.h"
 
 namespace {
@@ -258,10 +257,6 @@ int main(int argc, char** argv) {
             << " dt=" << opt.dt << " L=" << L << " W=" << W << " H=" << H
             << " tip_force_z=" << opt.tip_force_z << std::endl;
 
-  Eigen::MatrixXd h_B_inv(Quadrature::N_SHAPE_3443, Quadrature::N_SHAPE_3443);
-  ANCFCPUUtils::ANCF3443_B12_matrix(L, W, H, h_B_inv,
-                                    Quadrature::N_SHAPE_3443);
-
   Eigen::VectorXd h_x12(data.get_n_coef());
   Eigen::VectorXd h_y12(data.get_n_coef());
   Eigen::VectorXd h_z12(data.get_n_coef());
@@ -305,7 +300,7 @@ int main(int argc, char** argv) {
                         (1.0 - opt.lrratio) * opt.tip_force_z);
   data.SetExternalForce(h_f_ext);
 
-  data.Setup(L, W, H, h_B_inv, Quadrature::gauss_xi_m_7,
+  data.Setup(L, W, H, Quadrature::gauss_xi_m_7,
              Quadrature::gauss_eta_m_7, Quadrature::gauss_zeta_m_3,
              Quadrature::gauss_xi_4, Quadrature::gauss_eta_4,
              Quadrature::gauss_zeta_3, Quadrature::weight_xi_m_7,

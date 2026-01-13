@@ -30,6 +30,7 @@ __device__ __forceinline__ void compute_constraint_data(GPU_ANCF3443_Data *);
 __device__ __forceinline__ void ancf3443_solve_3x3_system(double A[3][3],
                                                           double b[3],
                                                           double x[3]) {
+  constexpr double kEpsPivot = 1e-14;
   double aug[3][4];
 #pragma unroll
   for (int i = 0; i < 3; i++) {
@@ -60,7 +61,7 @@ __device__ __forceinline__ void ancf3443_solve_3x3_system(double A[3][3],
       }
     }
 
-    if (fabs(aug[k][k]) < 1e-14) {
+    if (fabs(aug[k][k]) < kEpsPivot) {
       x[0] = x[1] = x[2] = 0.0;
       return;
     }
@@ -71,6 +72,14 @@ __device__ __forceinline__ void ancf3443_solve_3x3_system(double A[3][3],
         aug[i][j] -= factor * aug[k][j];
       }
     }
+  }
+
+  // Extra guard: even with pivoting, near-singular systems can produce tiny
+  // diagonal entries after elimination (e.g., due to floating-point effects).
+  if (fabs(aug[2][2]) < kEpsPivot || fabs(aug[1][1]) < kEpsPivot ||
+      fabs(aug[0][0]) < kEpsPivot) {
+    x[0] = x[1] = x[2] = 0.0;
+    return;
   }
 
   x[2] = aug[2][3] / aug[2][2];

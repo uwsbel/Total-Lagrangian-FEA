@@ -150,13 +150,7 @@ TEST_F(TestSparseMass, ANCF_3443_SparseMassMatrix) {
   std::cout << "Number of beams: " << gpu_3443_data.get_n_beam() << std::endl;
   std::cout << "Total nodes: " << gpu_3443_data.get_n_coef() << std::endl;
 
-  // Compute B_inv on CPU
-  Eigen::MatrixXd h_B_inv(Quadrature::N_SHAPE_3443, Quadrature::N_SHAPE_3443);
-  ANCFCPUUtils::ANCF3443_B12_matrix(2.0, 1.0, 1.0, h_B_inv,
-                                    Quadrature::N_SHAPE_3443);
-
-  std::cout << "B_inv:" << std::endl;
-  std::cout << h_B_inv << std::endl;
+  // B_inv is derived from (L,W,H) and computed inside Setup().
 
   // Generate nodal coordinates for multiple beams - using Eigen vectors
   Eigen::VectorXd h_x12(gpu_3443_data.get_n_coef());
@@ -211,7 +205,7 @@ TEST_F(TestSparseMass, ANCF_3443_SparseMassMatrix) {
   gpu_3443_data.SetExternalForce(h_f_ext);
 
   gpu_3443_data.Setup(
-      L, W, H, h_B_inv, Quadrature::gauss_xi_m_7, Quadrature::gauss_eta_m_7,
+      L, W, H, Quadrature::gauss_xi_m_7, Quadrature::gauss_eta_m_7,
       Quadrature::gauss_zeta_m_3, Quadrature::gauss_xi_4,
       Quadrature::gauss_eta_4, Quadrature::gauss_zeta_3,
       Quadrature::weight_xi_m_7, Quadrature::weight_eta_m_7,
@@ -260,10 +254,7 @@ TEST_F(TestSparseMass, ANCF_3243_SparseMassMatrix) {
   std::cout << "Number of beams: " << gpu_3243_data.get_n_beam() << std::endl;
   std::cout << "Total nodes: " << gpu_3243_data.get_n_coef() << std::endl;
 
-  // Compute B_inv on CPU
-  Eigen::MatrixXd h_B_inv(Quadrature::N_SHAPE_3243, Quadrature::N_SHAPE_3243);
-  ANCFCPUUtils::ANCF3243_B12_matrix(2.0, 1.0, 1.0, h_B_inv,
-                                    Quadrature::N_SHAPE_3243);
+  // B_inv is derived from (L,W,H) and computed inside Setup().
 
   // Generate nodal coordinates for multiple beams - using Eigen vectors
   Eigen::VectorXd h_x12(gpu_3243_data.get_n_coef());
@@ -318,7 +309,7 @@ TEST_F(TestSparseMass, ANCF_3243_SparseMassMatrix) {
   gpu_3243_data.SetExternalForce(h_f_ext);
 
   // set up the system
-  gpu_3243_data.Setup(L, W, H, h_B_inv, Quadrature::gauss_xi_m_6,
+  gpu_3243_data.Setup(L, W, H, Quadrature::gauss_xi_m_6,
                       Quadrature::gauss_xi_3, Quadrature::gauss_eta_2,
                       Quadrature::gauss_zeta_2, Quadrature::weight_xi_m_6,
                       Quadrature::weight_xi_3, Quadrature::weight_eta_2,

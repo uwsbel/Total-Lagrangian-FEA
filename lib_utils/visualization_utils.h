@@ -824,6 +824,12 @@ class VisualizationUtils {
    * For visualization convenience, this creates 8 points per element (no sharing)
    * by extruding the 4 corner nodes along the element normal by +/- thickness/2.
    *
+   * Hex connectivity follows VTK_HEXAHEDRON (type 12) convention:
+   * points [0,1,2,3] form the bottom quad, and [4,5,6,7] the top quad with the
+   * same local ordering. For correct orientation/volume, each row of
+   * element_connectivity should list the 4 corner nodes in a consistent loop
+   * (e.g., counter-clockwise on the midsurface when viewed from the "top").
+   *
    * @param x12 Global x coefficient vector (size >= 4 * n_nodes)
    * @param y12 Global y coefficient vector
    * @param z12 Global z coefficient vector
@@ -870,6 +876,11 @@ class VisualizationUtils {
         p[n] = Eigen::Vector3d(x12(idx), y12(idx), z12(idx));
       }
 
+      // Compute an element normal using a right-hand rule:
+      //   normal ∝ (p[1] - p[0]) × (p[3] - p[0]).
+      // This assumes the 4 corner nodes are provided in a consistent loop
+      // (see the function docstring). If the node order is reversed, the normal
+      // (and thus the meaning of "top" (+off) vs "bottom" (-off)) flips.
       Eigen::Vector3d normal = (p[1] - p[0]).cross(p[3] - p[0]);
       const double nrm = normal.norm();
       if (nrm < 1e-12) {
@@ -933,6 +944,12 @@ class VisualizationUtils {
    * For visualization convenience, this creates 8 points per element (no sharing)
    * by building a rectangular cross-section (width x height) at each end node and
    * connecting them into a hexahedron along the element tangent.
+   *
+   * Hex connectivity follows VTK_HEXAHEDRON (type 12) convention:
+   * points [0,1,2,3] form the cross-section at node0, and [4,5,6,7] the
+   * corresponding cross-section at node1. The local frame is constructed from the
+   * chord tangent and an arbitrary reference vector (fallback if near-parallel);
+   * this is intended for quick visualization, not exact ANCF geometry.
    *
    * @param x12 Global x coefficient vector (size >= 4 * n_nodes)
    * @param y12 Global y coefficient vector

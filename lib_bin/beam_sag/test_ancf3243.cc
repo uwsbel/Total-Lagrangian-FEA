@@ -27,7 +27,6 @@
 #include "../../lib_src/solvers/SyncedNesterov.cuh"
 #include "../../lib_src/solvers/SyncedNewton.cuh"
 #include "../../lib_src/solvers/SyncedVBD.cuh"
-#include "../../lib_utils/cpu_utils.h"
 #include "../../lib_utils/mesh_utils.h"
 #include "../../lib_utils/visualization_utils.h"
 
@@ -249,9 +248,6 @@ int main(int argc, char** argv) {
   GPU_ANCF3243_Data data(n_nodes, n_elements);
   data.Initialize();
 
-  Eigen::MatrixXd h_B_inv(Quadrature::N_SHAPE_3243, Quadrature::N_SHAPE_3243);
-  ANCFCPUUtils::ANCF3243_B12_matrix(L, W, H, h_B_inv, Quadrature::N_SHAPE_3243);
-
   Eigen::VectorXd h_x12(data.get_n_coef());
   Eigen::VectorXd h_y12(data.get_n_coef());
   Eigen::VectorXd h_z12(data.get_n_coef());
@@ -271,7 +267,7 @@ int main(int argc, char** argv) {
   h_f_ext(tip_coef * 3 + 2) = opt.tip_force_z;
   data.SetExternalForce(h_f_ext);
 
-  data.Setup(L, W, H, h_B_inv, Quadrature::gauss_xi_m_6, Quadrature::gauss_xi_3,
+  data.Setup(L, W, H, Quadrature::gauss_xi_m_6, Quadrature::gauss_xi_3,
              Quadrature::gauss_eta_2, Quadrature::gauss_zeta_2,
              Quadrature::weight_xi_m_6, Quadrature::weight_xi_3,
              Quadrature::weight_eta_2, Quadrature::weight_zeta_2, h_x12, h_y12,

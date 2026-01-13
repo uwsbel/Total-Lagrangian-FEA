@@ -20,6 +20,7 @@
  *==============================================================*/
 
 #include "../../lib_utils/cuda_utils.h"
+#include "../../lib_utils/cpu_utils.h"
 #include "../../lib_utils/quadrature_utils.h"
 #include "ElementBase.h"
 #include "../materials/MaterialModel.cuh"
@@ -490,7 +491,7 @@ struct GPU_ANCF3443_Data : public ElementBase {
   }
 
   void Setup(const Eigen::VectorXd &length, const Eigen::VectorXd &width,
-             const Eigen::VectorXd &height, const Eigen::VectorXd &h_B_inv_flat,
+             const Eigen::VectorXd &height,
              const Eigen::VectorXd &gauss_xi_m, const Eigen::VectorXd &gauss_eta_m,
              const Eigen::VectorXd &gauss_zeta_m, const Eigen::VectorXd &gauss_xi,
              const Eigen::VectorXd &gauss_eta, const Eigen::VectorXd &gauss_zeta,
@@ -513,14 +514,16 @@ struct GPU_ANCF3443_Data : public ElementBase {
       return;
     }
 
-    const int n_binv = n_beam * Quadrature::N_SHAPE_3443 *
-                       Quadrature::N_SHAPE_3443;
-    if (h_B_inv_flat.size() != n_binv) {
-      std::cerr << "GPU_ANCF3443_Data::Setup: h_B_inv_flat must have size "
-                   "n_beam*N_SHAPE*N_SHAPE."
-                << std::endl;
+    Eigen::VectorXd h_B_inv_flat;
+    try {
+      ANCFCPUUtils::ANCF3443_B12_matrix_flat_per_element(
+          length, width, height, h_B_inv_flat, Quadrature::N_SHAPE_3443);
+    } catch (const std::exception &e) {
+      std::cerr << "GPU_ANCF3443_Data::Setup: failed to build per-element B_inv: "
+                << e.what() << std::endl;
       return;
     }
+    const int n_binv = static_cast<int>(h_B_inv_flat.size());
 
     HANDLE_ERROR(cudaMemcpy(d_B_inv, h_B_inv_flat.data(),
                             n_binv * sizeof(double), cudaMemcpyHostToDevice));
@@ -640,7 +643,7 @@ struct GPU_ANCF3443_Data : public ElementBase {
   }
 
   void Setup(
-      double length, double width, double height, const Eigen::MatrixXd &h_B_inv,
+      double length, double width, double height,
       const Eigen::VectorXd &gauss_xi_m,
       const Eigen::VectorXd &gauss_eta_m, const Eigen::VectorXd &gauss_zeta_m,
       const Eigen::VectorXd &gauss_xi, const Eigen::VectorXd &gauss_eta,
@@ -653,18 +656,10 @@ struct GPU_ANCF3443_Data : public ElementBase {
     Eigen::VectorXd lengths = Eigen::VectorXd::Constant(n_beam, length);
     Eigen::VectorXd widths  = Eigen::VectorXd::Constant(n_beam, width);
     Eigen::VectorXd heights = Eigen::VectorXd::Constant(n_beam, height);
-
-    const int per = Quadrature::N_SHAPE_3443 * Quadrature::N_SHAPE_3443;
-    Eigen::VectorXd h_B_inv_flat(n_beam * per);
-    for (int e = 0; e < n_beam; ++e) {
-      std::memcpy(h_B_inv_flat.data() + e * per, h_B_inv.data(),
-                  static_cast<size_t>(per) * sizeof(double));
-    }
-
-    Setup(lengths, widths, heights, h_B_inv_flat, gauss_xi_m, gauss_eta_m,
-          gauss_zeta_m, gauss_xi, gauss_eta, gauss_zeta, weight_xi_m,
-          weight_eta_m, weight_zeta_m, weight_xi, weight_eta, weight_zeta, h_x12,
-          h_y12, h_z12, element_connectivity);
+    Setup(lengths, widths, heights, gauss_xi_m, gauss_eta_m, gauss_zeta_m,
+          gauss_xi, gauss_eta, gauss_zeta, weight_xi_m, weight_eta_m,
+          weight_zeta_m, weight_xi, weight_eta, weight_zeta, h_x12, h_y12, h_z12,
+          element_connectivity);
   }
 
   /**
