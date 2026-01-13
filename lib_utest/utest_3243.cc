@@ -48,10 +48,6 @@ TEST(Test3243, MassMatrix2Beams) {
   const double nu   = 0.33;  // Poisson's ratio
   const double rho0 = 2700;  // Density
 
-  Eigen::MatrixXd h_B_inv(Quadrature::N_SHAPE_3243, Quadrature::N_SHAPE_3243);
-  ANCFCPUUtils::ANCF3243_B12_matrix(2.0, 1.0, 1.0, h_B_inv,
-                                    Quadrature::N_SHAPE_3243);
-
   Eigen::VectorXd h_x12(gpu_3243_data.get_n_coef());
   Eigen::VectorXd h_y12(gpu_3243_data.get_n_coef());
   Eigen::VectorXd h_z12(gpu_3243_data.get_n_coef());
@@ -61,7 +57,7 @@ TEST(Test3243, MassMatrix2Beams) {
   Eigen::MatrixXi h_element_connectivity;
   grid_gen.get_element_connectivity(h_element_connectivity);
 
-  gpu_3243_data.Setup(L, W, H, h_B_inv, Quadrature::gauss_xi_m_6,
+  gpu_3243_data.Setup(L, W, H, Quadrature::gauss_xi_m_6,
                       Quadrature::gauss_xi_3, Quadrature::gauss_eta_2,
                       Quadrature::gauss_zeta_2, Quadrature::weight_xi_m_6,
                       Quadrature::weight_xi_3, Quadrature::weight_eta_2,
@@ -136,9 +132,7 @@ TEST(Test3243, MassMatrix3Beams) {
   const double nu   = 0.33;  // Poisson's ratio
   const double rho0 = 2700;  // Density
 
-  Eigen::MatrixXd h_B_inv(Quadrature::N_SHAPE_3243, Quadrature::N_SHAPE_3243);
-  ANCFCPUUtils::ANCF3243_B12_matrix(2.0, 1.0, 1.0, h_B_inv,
-                                    Quadrature::N_SHAPE_3243);
+  // B_inv is derived from (L,W,H) and computed inside Setup().
 
   Eigen::VectorXd h_x12(gpu_3243_data.get_n_coef());
   Eigen::VectorXd h_y12(gpu_3243_data.get_n_coef());
@@ -149,7 +143,7 @@ TEST(Test3243, MassMatrix3Beams) {
   Eigen::MatrixXi h_element_connectivity;
   grid_gen.get_element_connectivity(h_element_connectivity);
 
-  gpu_3243_data.Setup(L, W, H, h_B_inv, Quadrature::gauss_xi_m_6,
+  gpu_3243_data.Setup(L, W, H, Quadrature::gauss_xi_m_6,
                       Quadrature::gauss_xi_3, Quadrature::gauss_eta_2,
                       Quadrature::gauss_zeta_2, Quadrature::weight_xi_m_6,
                       Quadrature::weight_xi_3, Quadrature::weight_eta_2,

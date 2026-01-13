@@ -91,95 +91,93 @@ __global__ void set_last_offset_3443_kernel(int *d_offsets, int n_rows,
   }
 }
 
-__global__ void ds_du_pre_kernel(GPU_ANCF3443_Data *d_data) {
-  int ixi   = blockIdx.x;
-  int ieta  = blockIdx.y;
-  int izeta = threadIdx.x;
-  int idx   = ixi * Quadrature::N_QP_4 * Quadrature::N_QP_3 +
-            ieta * Quadrature::N_QP_3 + izeta;
+// Precompute reference Jacobian determinant and physical shape gradients
+// (per element, per quadrature point).
+__global__ void precompute_reference_kernel(GPU_ANCF3443_Data *d_data) {
+  const int tid = blockIdx.x * blockDim.x + threadIdx.x;
+  const int n_qp = Quadrature::N_TOTAL_QP_4_4_3;
+  const int total = d_data->gpu_n_beam() * n_qp;
+  if (tid >= total) {
+    return;
+  }
 
-  double xi   = d_data->gauss_xi()(ixi);
-  double eta  = d_data->gauss_eta()(ieta);
-  double zeta = d_data->gauss_zeta()(izeta);
+  const int elem_idx = tid / n_qp;
+  const int qp_idx   = tid - elem_idx * n_qp;
 
-  // Use the element geometry stored on device (set during Setup()).
-  const double L = d_data->L();
-  const double W = d_data->W();
-  const double H = d_data->H();
+  const int ixi   = qp_idx / (Quadrature::N_QP_4 * Quadrature::N_QP_3);
+  const int ieta  = (qp_idx / Quadrature::N_QP_3) % Quadrature::N_QP_4;
+  const int izeta = qp_idx % Quadrature::N_QP_3;
 
-  double u = L * xi / 2.0;
-  double v = W * eta / 2.0;
-  double w = H * zeta / 2.0;
+  const double xi   = d_data->gauss_xi()(ixi);
+  const double eta  = d_data->gauss_eta()(ieta);
+  const double zeta = d_data->gauss_zeta()(izeta);
 
-  double db_du[Quadrature::N_SHAPE_3443] = {
-      0.0,              // d/du 1
-      1.0,              // d/du u
-      0.0,              // d/du v
-      0.0,              // d/du w
-      v,                // d/du uv
-      w,                // d/du uw
-      0.0,              // d/du vw
-      v * w,            // d/du uvw
-      2.0 * u,          // d/du u^2
-      0.0,              // d/du v^2
-      2.0 * u * v,      // d/du u^2 v
-      v * v,            // d/du u v^2
-      3.0 * u * u,      // d/du u^3
-      0.0,              // d/du v^3
-      3.0 * u * u * v,  // d/du u^3 v
-      v * v * v         // d/du u v^3
-  };
+  const double L = d_data->L(elem_idx);
+  const double W = d_data->W(elem_idx);
+  const double H = d_data->H(elem_idx);
 
-  double db_dv[Quadrature::N_SHAPE_3443] = {
-      0.0,             // d/dv 1
-      0.0,             // d/dv u
-      1.0,             // d/dv v
-      0.0,             // d/dv w
-      u,               // d/dv uv
-      0.0,             // d/dv uw
-      w,               // d/dv vw
-      u * w,           // d/dv uvw
-      0.0,             // d/dv u^2
-      2.0 * v,         // d/dv v^2
-      u * u,           // d/dv u^2 v
-      2.0 * u * v,     // d/dv u v^2
-      0.0,             // d/dv u^3
-      3.0 * v * v,     // d/dv v^3
-      u * u * u,       // d/dv u^3 v
-      3.0 * u * v * v  // d/dv u v^3
-  };
+  double db_dxi[Quadrature::N_SHAPE_3443];
+  double db_deta[Quadrature::N_SHAPE_3443];
+  double db_dzeta[Quadrature::N_SHAPE_3443];
+  ancf3443_db_dxi(xi, eta, zeta, L, W, H, db_dxi);
+  ancf3443_db_deta(xi, eta, zeta, L, W, H, db_deta);
+  ancf3443_db_dzeta(xi, eta, zeta, L, W, H, db_dzeta);
 
-  double db_dw[Quadrature::N_SHAPE_3443] = {
-      0.0,    // d/dw 1
-      0.0,    // d/dw u
-      0.0,    // d/dw v
-      1.0,    // d/dw w
-      0.0,    // d/dw uv
-      u,      // d/dw uw
-      v,      // d/dw vw
-      u * v,  // d/dw uvw
-      0.0,    // d/dw u^2
-      0.0,    // d/dw v^2
-      0.0,    // d/dw u^2 v
-      0.0,    // d/dw u v^2
-      0.0,    // d/dw u^3
-      0.0,    // d/dw v^3
-      0.0,    // d/dw u^3 v
-      0.0     // d/dw u v^3
-  };
+  double ds_dxi[Quadrature::N_SHAPE_3443];
+  double ds_deta[Quadrature::N_SHAPE_3443];
+  double ds_dzeta[Quadrature::N_SHAPE_3443];
+  ancf3443_mat_vec_mul(d_data->B_inv(elem_idx), db_dxi, ds_dxi);
+  ancf3443_mat_vec_mul(d_data->B_inv(elem_idx), db_deta, ds_deta);
+  ancf3443_mat_vec_mul(d_data->B_inv(elem_idx), db_dzeta, ds_dzeta);
 
-  double ds_du[Quadrature::N_SHAPE_3443], ds_dv[Quadrature::N_SHAPE_3443],
-      ds_dw[Quadrature::N_SHAPE_3443];
-  ancf3443_mat_vec_mul(d_data->B_inv(), db_du, ds_du);
-  ancf3443_mat_vec_mul(d_data->B_inv(), db_dv, ds_dv);
-  ancf3443_mat_vec_mul(d_data->B_inv(), db_dw, ds_dw);
+  double x_local_arr[Quadrature::N_SHAPE_3443];
+  double y_local_arr[Quadrature::N_SHAPE_3443];
+  double z_local_arr[Quadrature::N_SHAPE_3443];
+  d_data->x12_jac_elem(elem_idx, x_local_arr);
+  d_data->y12_jac_elem(elem_idx, y_local_arr);
+  d_data->z12_jac_elem(elem_idx, z_local_arr);
+  Eigen::Map<Eigen::VectorXd> x_loc(x_local_arr, Quadrature::N_SHAPE_3443);
+  Eigen::Map<Eigen::VectorXd> y_loc(y_local_arr, Quadrature::N_SHAPE_3443);
+  Eigen::Map<Eigen::VectorXd> z_loc(z_local_arr, Quadrature::N_SHAPE_3443);
 
-  // Store as 8x3 matrix: for each i in 0..7, store ds_du, ds_dv, ds_dw as
-  // columns
-  for (int i = 0; i < Quadrature::N_SHAPE_3443; ++i) {
-    d_data->ds_du_pre(idx)(i, 0) = ds_du[i];
-    d_data->ds_du_pre(idx)(i, 1) = ds_dv[i];
-    d_data->ds_du_pre(idx)(i, 2) = ds_dw[i];
+  double J[3][3] = {{0.0}};
+#pragma unroll
+  for (int a = 0; a < Quadrature::N_SHAPE_3443; ++a) {
+    J[0][0] += x_loc(a) * ds_dxi[a];
+    J[1][0] += y_loc(a) * ds_dxi[a];
+    J[2][0] += z_loc(a) * ds_dxi[a];
+
+    J[0][1] += x_loc(a) * ds_deta[a];
+    J[1][1] += y_loc(a) * ds_deta[a];
+    J[2][1] += z_loc(a) * ds_deta[a];
+
+    J[0][2] += x_loc(a) * ds_dzeta[a];
+    J[1][2] += y_loc(a) * ds_dzeta[a];
+    J[2][2] += z_loc(a) * ds_dzeta[a];
+  }
+
+  const double detJ = J[0][0] * (J[1][1] * J[2][2] - J[1][2] * J[2][1]) -
+                      J[0][1] * (J[1][0] * J[2][2] - J[1][2] * J[2][0]) +
+                      J[0][2] * (J[1][0] * J[2][1] - J[1][1] * J[2][0]);
+  d_data->detJ_ref(elem_idx, qp_idx) = detJ;
+
+  double JT[3][3];
+#pragma unroll
+  for (int i = 0; i < 3; ++i) {
+#pragma unroll
+    for (int j = 0; j < 3; ++j) {
+      JT[i][j] = J[j][i];
+    }
+  }
+
+#pragma unroll
+  for (int a = 0; a < Quadrature::N_SHAPE_3443; ++a) {
+    double rhs[3]  = {ds_dxi[a], ds_deta[a], ds_dzeta[a]};
+    double grad[3] = {0.0, 0.0, 0.0};
+    ancf3443_solve_3x3_system(JT, rhs, grad);
+    d_data->grad_N_ref(elem_idx, qp_idx)(a, 0) = grad[0];
+    d_data->grad_N_ref(elem_idx, qp_idx)(a, 1) = grad[1];
+    d_data->grad_N_ref(elem_idx, qp_idx)(a, 2) = grad[2];
   }
 }
 
@@ -210,25 +208,28 @@ __global__ void mass_matrix_qp_kernel(GPU_ANCF3443_Data *d_data) {
     double x_local_arr[Quadrature::N_SHAPE_3443],
         y_local_arr[Quadrature::N_SHAPE_3443],
         z_local_arr[Quadrature::N_SHAPE_3443];
-    d_data->x12_elem(elem, x_local_arr);
-    d_data->y12_elem(elem, y_local_arr);
-    d_data->z12_elem(elem, z_local_arr);
+    d_data->x12_jac_elem(elem, x_local_arr);
+    d_data->y12_jac_elem(elem, y_local_arr);
+    d_data->z12_jac_elem(elem, z_local_arr);
     Eigen::Map<Eigen::VectorXd> x_loc(x_local_arr, Quadrature::N_SHAPE_3443);
     Eigen::Map<Eigen::VectorXd> y_loc(y_local_arr, Quadrature::N_SHAPE_3443);
     Eigen::Map<Eigen::VectorXd> z_loc(z_local_arr, Quadrature::N_SHAPE_3443);
 
     // Compute shape function at this QP
     double b[Quadrature::N_SHAPE_3443];
-    ancf3443_b_vec_xi(xi, eta, zeta, d_data->L(), d_data->W(), d_data->H(), b);
+    const double L = d_data->L(elem);
+    const double W = d_data->W(elem);
+    const double H = d_data->H(elem);
+    ancf3443_b_vec_xi(xi, eta, zeta, L, W, H, b);
 
     // Compute s = B_inv @ b
     double s[Quadrature::N_SHAPE_3443];
-    ancf3443_mat_vec_mul(d_data->B_inv(), b, s);
+    ancf3443_mat_vec_mul(d_data->B_inv(elem), b, s);
 
     // Compute Jacobian determinant
     double J[9];
-    ancf3443_calc_det_J_xi(xi, eta, zeta, d_data->B_inv(), x_loc, y_loc, z_loc,
-                           d_data->L(), d_data->W(), d_data->H(), J);
+    ancf3443_calc_det_J_xi(xi, eta, zeta, d_data->B_inv(elem), x_loc, y_loc,
+                           z_loc, L, W, H, J);
     double detJ = ancf3443_det3x3(J);
 
     // For each local node, output (global_node, value)
@@ -273,45 +274,73 @@ void GPU_ANCF3443_Data::CalcP() {
 }
 
 void GPU_ANCF3443_Data::CalcDsDuPre() {
-  // Launch kernel
-  dim3 blocks_pre(Quadrature::N_QP_4, Quadrature::N_QP_4);
-  dim3 threads_pre(Quadrature::N_QP_3);
-  ds_du_pre_kernel<<<blocks_pre, threads_pre>>>(d_data);
+  if (!is_setup) {
+    std::cerr << "GPU_ANCF3443_Data::CalcDsDuPre: call Setup() first."
+              << std::endl;
+    return;
+  }
+  if (is_reference_precomputed) {
+    return;
+  }
+  const int threads = 128;
+  const int total   = n_beam * Quadrature::N_TOTAL_QP_4_4_3;
+  const int blocks  = (total + threads - 1) / threads;
+  precompute_reference_kernel<<<blocks, threads>>>(d_data);
   cudaDeviceSynchronize();
+  is_reference_precomputed = true;
 }
 
 void GPU_ANCF3443_Data::PrintDsDuPre() {
-  // Allocate host memory for all quadrature points
-  const int total_size =
-      Quadrature::N_TOTAL_QP_4_4_3 * Quadrature::N_SHAPE_3443 * 3;
-  double *h_ds_du_pre_raw = new double[total_size];
+  const int n_qp = Quadrature::N_TOTAL_QP_4_4_3;
+  const int mat_stride = Quadrature::N_SHAPE_3443 * 3;
+  const int total_size = n_beam * n_qp * mat_stride;
 
-  // Copy from device to host
-  HANDLE_ERROR(cudaMemcpy(h_ds_du_pre_raw, d_ds_du_pre,
-                          total_size * sizeof(double), cudaMemcpyDeviceToHost));
+  std::vector<double> h_grad(static_cast<size_t>(total_size));
+  std::vector<double> h_detJ(static_cast<size_t>(n_beam * n_qp));
 
-  // Print each quadrature point's matrix
-  for (int qp = 0; qp < Quadrature::N_TOTAL_QP_4_4_3; ++qp) {
-    std::cout << "\n=== Quadrature Point " << qp << " ===" << std::endl;
+  HANDLE_ERROR(cudaMemcpy(h_grad.data(), d_grad_N_ref,
+                          static_cast<size_t>(total_size) * sizeof(double),
+                          cudaMemcpyDeviceToHost));
+  HANDLE_ERROR(cudaMemcpy(h_detJ.data(), d_detJ_ref,
+                          static_cast<size_t>(n_beam * n_qp) * sizeof(double),
+                          cudaMemcpyDeviceToHost));
 
-    // Create Eigen::Map for this quadrature point's data
-    double *qp_data = h_ds_du_pre_raw + qp * Quadrature::N_SHAPE_3443 * 3;
-    Eigen::Map<Eigen::MatrixXd> ds_du_matrix(qp_data, Quadrature::N_SHAPE_3443,
-                                             3);
+  for (int e = 0; e < n_beam; ++e) {
+    for (int qp = 0; qp < n_qp; ++qp) {
+      std::cout << "\n=== Elem " << e << " Quadrature Point " << qp
+                << " detJ_ref=" << h_detJ[e * n_qp + qp] << " ==="
+                << std::endl;
 
-    // Print the 16x3 matrix with column headers
-    std::cout << "        ds/du       ds/dv       ds/dw" << std::endl;
-    for (int i = 0; i < Quadrature::N_SHAPE_3443; ++i) {
-      std::cout << "Node " << i << ": ";
-      for (int j = 0; j < 3; ++j) {
-        std::cout << std::setw(10) << std::fixed << std::setprecision(6)
-                  << ds_du_matrix(i, j) << " ";
+      double *qp_data =
+          h_grad.data() + (e * n_qp + qp) * mat_stride;
+      Eigen::Map<Eigen::MatrixXd> grad_matrix(qp_data, Quadrature::N_SHAPE_3443,
+                                              3);
+      std::cout << "        dN/dx       dN/dy       dN/dz" << std::endl;
+      for (int i = 0; i < Quadrature::N_SHAPE_3443; ++i) {
+        std::cout << "Shape " << i << ": ";
+        for (int j = 0; j < 3; ++j) {
+          std::cout << std::setw(10) << std::fixed << std::setprecision(6)
+                    << grad_matrix(i, j) << " ";
+        }
+        std::cout << std::endl;
       }
-      std::cout << std::endl;
     }
   }
+}
 
-  delete[] h_ds_du_pre_raw;
+void GPU_ANCF3443_Data::RetrieveDetJToCPU(
+    std::vector<std::vector<double>> &detJ) {
+  const int n_qp = Quadrature::N_TOTAL_QP_4_4_3;
+  detJ.assign(static_cast<size_t>(n_beam), std::vector<double>(n_qp));
+  std::vector<double> flat(static_cast<size_t>(n_beam * n_qp));
+  HANDLE_ERROR(cudaMemcpy(flat.data(), d_detJ_ref,
+                          static_cast<size_t>(n_beam * n_qp) * sizeof(double),
+                          cudaMemcpyDeviceToHost));
+  for (int e = 0; e < n_beam; ++e) {
+    for (int qp = 0; qp < n_qp; ++qp) {
+      detJ[e][qp] = flat[e * n_qp + qp];
+    }
+  }
 }
 
 void GPU_ANCF3443_Data::CalcMassMatrix() {
