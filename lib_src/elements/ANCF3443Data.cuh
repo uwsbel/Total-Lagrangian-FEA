@@ -2,6 +2,7 @@
 #include <cusparse.h>
 
 #include <Eigen/Dense>
+#include <cstring>
 #include <iostream>
 #include <vector>
 
@@ -32,17 +33,29 @@ struct GPU_ANCF3443_Data : public ElementBase {
 #if defined(__CUDACC__)
 
   // Const get functions
-  __device__ const Eigen::Map<Eigen::MatrixXd> B_inv() const {
-    int row_size = Quadrature::N_SHAPE_3443;
-    int col_size = Quadrature::N_SHAPE_3443;
-    return Eigen::Map<Eigen::MatrixXd>(d_B_inv, row_size, col_size);
+  __device__ const Eigen::Map<Eigen::MatrixXd> B_inv(int elem_idx) const {
+    const int row_size = Quadrature::N_SHAPE_3443;
+    const int col_size = Quadrature::N_SHAPE_3443;
+    return Eigen::Map<Eigen::MatrixXd>(
+        d_B_inv + elem_idx * row_size * col_size, row_size, col_size);
   }
 
-  __device__ Eigen::Map<Eigen::MatrixXd> ds_du_pre(int qp_idx) const {
-    int row_size    = Quadrature::N_SHAPE_3443;
-    int col_size    = 3;
-    double *qp_data = d_ds_du_pre + qp_idx * Quadrature::N_SHAPE_3443 * 3;
+  __device__ Eigen::Map<Eigen::MatrixXd> grad_N_ref(int elem_idx,
+                                                    int qp_idx) const {
+    const int row_size = Quadrature::N_SHAPE_3443;
+    const int col_size = 3;
+    double *qp_data =
+        d_grad_N_ref +
+        (elem_idx * Quadrature::N_TOTAL_QP_4_4_3 + qp_idx) * row_size * col_size;
     return Eigen::Map<Eigen::MatrixXd>(qp_data, row_size, col_size);
+  }
+
+  __device__ double &detJ_ref(int elem_idx, int qp_idx) {
+    return d_detJ_ref[elem_idx * Quadrature::N_TOTAL_QP_4_4_3 + qp_idx];
+  }
+
+  __device__ double detJ_ref(int elem_idx, int qp_idx) const {
+    return d_detJ_ref[elem_idx * Quadrature::N_TOTAL_QP_4_4_3 + qp_idx];
   }
 
   // ==============================================================
@@ -164,14 +177,26 @@ struct GPU_ANCF3443_Data : public ElementBase {
     gather_element_dofs(d_x12, this->element_connectivity(), elem, buffer);
   }
 
+  __device__ void x12_jac_elem(int elem, double *buffer) const {
+    gather_element_dofs(d_x12_jac, this->element_connectivity(), elem, buffer);
+  }
+
   // Accessor for y12 for a given element
   __device__ void y12_elem(int elem, double *buffer) const {
     gather_element_dofs(d_y12, this->element_connectivity(), elem, buffer);
   }
 
+  __device__ void y12_jac_elem(int elem, double *buffer) const {
+    gather_element_dofs(d_y12_jac, this->element_connectivity(), elem, buffer);
+  }
+
   // Accessor for z12 for a given element
   __device__ void z12_elem(int elem, double *buffer) const {
     gather_element_dofs(d_z12, this->element_connectivity(), elem, buffer);
+  }
+
+  __device__ void z12_jac_elem(int elem, double *buffer) const {
+    gather_element_dofs(d_z12_jac, this->element_connectivity(), elem, buffer);
   }
 
   __device__ Eigen::Map<Eigen::MatrixXi> element_connectivity() const {
@@ -272,16 +297,16 @@ struct GPU_ANCF3443_Data : public ElementBase {
 
   // ================================
 
-  __device__ double L() const {
-    return *d_L;
+  __device__ double L(int elem_idx) const {
+    return d_L[elem_idx];
   }
 
-  __device__ double W() const {
-    return *d_W;
+  __device__ double W(int elem_idx) const {
+    return d_W[elem_idx];
   }
 
-  __device__ double H() const {
-    return *d_H;
+  __device__ double H(int elem_idx) const {
+    return d_H[elem_idx];
   }
 
   __device__ double rho0() const {
@@ -390,10 +415,13 @@ struct GPU_ANCF3443_Data : public ElementBase {
   void Initialize() {
     HANDLE_ERROR(cudaMalloc(
         &d_B_inv,
-        Quadrature::N_SHAPE_3443 * Quadrature::N_SHAPE_3443 * sizeof(double)));
-    HANDLE_ERROR(cudaMalloc(&d_ds_du_pre, Quadrature::N_TOTAL_QP_4_4_3 *
-                                              Quadrature::N_SHAPE_3443 * 3 *
-                                              sizeof(double)));
+        n_beam * Quadrature::N_SHAPE_3443 * Quadrature::N_SHAPE_3443 *
+            sizeof(double)));
+    HANDLE_ERROR(cudaMalloc(&d_grad_N_ref, n_beam * Quadrature::N_TOTAL_QP_4_4_3 *
+                                               Quadrature::N_SHAPE_3443 * 3 *
+                                               sizeof(double)));
+    HANDLE_ERROR(cudaMalloc(
+        &d_detJ_ref, n_beam * Quadrature::N_TOTAL_QP_4_4_3 * sizeof(double)));
 
     HANDLE_ERROR(
         cudaMalloc(&d_gauss_xi_m, Quadrature::N_QP_7 * sizeof(double)));
@@ -446,9 +474,9 @@ struct GPU_ANCF3443_Data : public ElementBase {
     HANDLE_ERROR(cudaMalloc(&d_data, sizeof(GPU_ANCF3443_Data)));
 
     // beam data
-    HANDLE_ERROR(cudaMalloc(&d_H, sizeof(double)));
-    HANDLE_ERROR(cudaMalloc(&d_W, sizeof(double)));
-    HANDLE_ERROR(cudaMalloc(&d_L, sizeof(double)));
+    HANDLE_ERROR(cudaMalloc(&d_H, n_beam * sizeof(double)));
+    HANDLE_ERROR(cudaMalloc(&d_W, n_beam * sizeof(double)));
+    HANDLE_ERROR(cudaMalloc(&d_L, n_beam * sizeof(double)));
 
     HANDLE_ERROR(cudaMalloc(&d_rho0, sizeof(double)));
     HANDLE_ERROR(cudaMalloc(&d_nu, sizeof(double)));
@@ -461,26 +489,41 @@ struct GPU_ANCF3443_Data : public ElementBase {
     HANDLE_ERROR(cudaMalloc(&d_kappa, sizeof(double)));
   }
 
-  void Setup(
-      double length, double width, double height, const Eigen::MatrixXd &h_B_inv,
-      const Eigen::VectorXd &gauss_xi_m,
-      const Eigen::VectorXd &gauss_eta_m, const Eigen::VectorXd &gauss_zeta_m,
-      const Eigen::VectorXd &gauss_xi, const Eigen::VectorXd &gauss_eta,
-      const Eigen::VectorXd &gauss_zeta, const Eigen::VectorXd &weight_xi_m,
-      const Eigen::VectorXd &weight_eta_m, const Eigen::VectorXd &weight_zeta_m,
-      const Eigen::VectorXd &weight_xi, const Eigen::VectorXd &weight_eta,
-      const Eigen::VectorXd &weight_zeta, const Eigen::VectorXd &h_x12,
-      const Eigen::VectorXd &h_y12, const Eigen::VectorXd &h_z12,
-      const Eigen::MatrixXi &element_connectivity) {
+  void Setup(const Eigen::VectorXd &length, const Eigen::VectorXd &width,
+             const Eigen::VectorXd &height, const Eigen::VectorXd &h_B_inv_flat,
+             const Eigen::VectorXd &gauss_xi_m, const Eigen::VectorXd &gauss_eta_m,
+             const Eigen::VectorXd &gauss_zeta_m, const Eigen::VectorXd &gauss_xi,
+             const Eigen::VectorXd &gauss_eta, const Eigen::VectorXd &gauss_zeta,
+             const Eigen::VectorXd &weight_xi_m, const Eigen::VectorXd &weight_eta_m,
+             const Eigen::VectorXd &weight_zeta_m, const Eigen::VectorXd &weight_xi,
+             const Eigen::VectorXd &weight_eta, const Eigen::VectorXd &weight_zeta,
+             const Eigen::VectorXd &h_x12, const Eigen::VectorXd &h_y12,
+             const Eigen::VectorXd &h_z12,
+             const Eigen::MatrixXi &element_connectivity) {
     if (is_setup) {
       std::cerr << "GPU_ANCF3443_Data is already set up." << std::endl;
       return;
     }
 
-    HANDLE_ERROR(cudaMemcpy(
-        d_B_inv, h_B_inv.data(),
-        Quadrature::N_SHAPE_3443 * Quadrature::N_SHAPE_3443 * sizeof(double),
-        cudaMemcpyHostToDevice));
+    if (length.size() != n_beam || width.size() != n_beam ||
+        height.size() != n_beam) {
+      std::cerr << "GPU_ANCF3443_Data::Setup: length/width/height must have "
+                   "size n_beam."
+                << std::endl;
+      return;
+    }
+
+    const int n_binv = n_beam * Quadrature::N_SHAPE_3443 *
+                       Quadrature::N_SHAPE_3443;
+    if (h_B_inv_flat.size() != n_binv) {
+      std::cerr << "GPU_ANCF3443_Data::Setup: h_B_inv_flat must have size "
+                   "n_beam*N_SHAPE*N_SHAPE."
+                << std::endl;
+      return;
+    }
+
+    HANDLE_ERROR(cudaMemcpy(d_B_inv, h_B_inv_flat.data(),
+                            n_binv * sizeof(double), cudaMemcpyHostToDevice));
 
     HANDLE_ERROR(cudaMemcpy(d_gauss_xi_m, gauss_xi_m.data(),
                             Quadrature::N_QP_7 * sizeof(double),
@@ -548,12 +591,12 @@ struct GPU_ANCF3443_Data : public ElementBase {
     cudaMemset(d_P_vis, 0,
                n_beam * Quadrature::N_TOTAL_QP_4_4_3 * 3 * 3 * sizeof(double));
 
-    HANDLE_ERROR(
-        cudaMemcpy(d_H, &height, sizeof(double), cudaMemcpyHostToDevice));
-    HANDLE_ERROR(
-        cudaMemcpy(d_W, &width, sizeof(double), cudaMemcpyHostToDevice));
-    HANDLE_ERROR(
-        cudaMemcpy(d_L, &length, sizeof(double), cudaMemcpyHostToDevice));
+    HANDLE_ERROR(cudaMemcpy(d_H, height.data(), n_beam * sizeof(double),
+                            cudaMemcpyHostToDevice));
+    HANDLE_ERROR(cudaMemcpy(d_W, width.data(), n_beam * sizeof(double),
+                            cudaMemcpyHostToDevice));
+    HANDLE_ERROR(cudaMemcpy(d_L, length.data(), n_beam * sizeof(double),
+                            cudaMemcpyHostToDevice));
 
     double rho0        = 0.0;
     double nu          = 0.0;
@@ -593,6 +636,35 @@ struct GPU_ANCF3443_Data : public ElementBase {
                             cudaMemcpyHostToDevice));
 
     is_setup = true;
+    is_reference_precomputed = false;
+  }
+
+  void Setup(
+      double length, double width, double height, const Eigen::MatrixXd &h_B_inv,
+      const Eigen::VectorXd &gauss_xi_m,
+      const Eigen::VectorXd &gauss_eta_m, const Eigen::VectorXd &gauss_zeta_m,
+      const Eigen::VectorXd &gauss_xi, const Eigen::VectorXd &gauss_eta,
+      const Eigen::VectorXd &gauss_zeta, const Eigen::VectorXd &weight_xi_m,
+      const Eigen::VectorXd &weight_eta_m, const Eigen::VectorXd &weight_zeta_m,
+      const Eigen::VectorXd &weight_xi, const Eigen::VectorXd &weight_eta,
+      const Eigen::VectorXd &weight_zeta, const Eigen::VectorXd &h_x12,
+      const Eigen::VectorXd &h_y12, const Eigen::VectorXd &h_z12,
+      const Eigen::MatrixXi &element_connectivity) {
+    Eigen::VectorXd lengths = Eigen::VectorXd::Constant(n_beam, length);
+    Eigen::VectorXd widths  = Eigen::VectorXd::Constant(n_beam, width);
+    Eigen::VectorXd heights = Eigen::VectorXd::Constant(n_beam, height);
+
+    const int per = Quadrature::N_SHAPE_3443 * Quadrature::N_SHAPE_3443;
+    Eigen::VectorXd h_B_inv_flat(n_beam * per);
+    for (int e = 0; e < n_beam; ++e) {
+      std::memcpy(h_B_inv_flat.data() + e * per, h_B_inv.data(),
+                  static_cast<size_t>(per) * sizeof(double));
+    }
+
+    Setup(lengths, widths, heights, h_B_inv_flat, gauss_xi_m, gauss_eta_m,
+          gauss_zeta_m, gauss_xi, gauss_eta, gauss_zeta, weight_xi_m,
+          weight_eta_m, weight_zeta_m, weight_xi, weight_eta, weight_zeta, h_x12,
+          h_y12, h_z12, element_connectivity);
   }
 
   /**
@@ -728,7 +800,8 @@ struct GPU_ANCF3443_Data : public ElementBase {
   // Free memory
   void Destroy() {
     HANDLE_ERROR(cudaFree(d_B_inv));
-    HANDLE_ERROR(cudaFree(d_ds_du_pre));
+    HANDLE_ERROR(cudaFree(d_grad_N_ref));
+    HANDLE_ERROR(cudaFree(d_detJ_ref));
 
     HANDLE_ERROR(cudaFree(d_gauss_xi_m));
     HANDLE_ERROR(cudaFree(d_gauss_eta_m));
@@ -832,6 +905,8 @@ struct GPU_ANCF3443_Data : public ElementBase {
 
   void RetrieveConnectivityToCPU(Eigen::MatrixXi &connectivity);
 
+  void RetrieveDetJToCPU(std::vector<std::vector<double>> &detJ);
+
   void RetrieveMassCSRToCPU(std::vector<int> &offsets,
                             std::vector<int> &columns,
                             std::vector<double> &values);
@@ -866,7 +941,8 @@ struct GPU_ANCF3443_Data : public ElementBase {
 
  private:
   double *d_B_inv;
-  double *d_ds_du_pre;
+  double *d_grad_N_ref;  // (n_beam, N_QP, N_SHAPE, 3)
+  double *d_detJ_ref;    // (n_beam, N_QP)
   double *d_gauss_xi_m, *d_gauss_eta_m, *d_gauss_zeta_m, *d_gauss_xi,
       *d_gauss_eta, *d_gauss_zeta;
   double *d_weight_xi_m, *d_weight_eta_m, *d_weight_zeta_m, *d_weight_xi,
@@ -913,4 +989,5 @@ struct GPU_ANCF3443_Data : public ElementBase {
   bool is_csr_setup         = false;
   bool is_cj_csr_setup      = false;
   bool is_j_csr_setup       = false;
+  bool is_reference_precomputed = false;
 };

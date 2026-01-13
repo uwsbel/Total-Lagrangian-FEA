@@ -15,6 +15,7 @@
 #include "ANCF3243Data.cuh"
 #include "../materials/SVK.cuh"
 #include "../materials/MooneyRivlin.cuh"
+#include <cmath>
 
 // forward-declare solver type (pointer-only used here)
 struct SyncedNewtonSolver;
@@ -24,6 +25,58 @@ __device__ __forceinline__ void compute_p(int, int, GPU_ANCF3243_Data *,
 __device__ __forceinline__ void compute_internal_force(int, int,
                                                        GPU_ANCF3243_Data *);
 __device__ __forceinline__ void compute_constraint_data(GPU_ANCF3243_Data *);
+
+// Solve 3x3 linear system: A * x = b (Gaussian elimination with pivoting).
+__device__ __forceinline__ void ancf3243_solve_3x3_system(double A[3][3],
+                                                          double b[3],
+                                                          double x[3]) {
+  double aug[3][4];
+#pragma unroll
+  for (int i = 0; i < 3; i++) {
+#pragma unroll
+    for (int j = 0; j < 3; j++) {
+      aug[i][j] = A[i][j];
+    }
+    aug[i][3] = b[i];
+  }
+
+  for (int k = 0; k < 3; k++) {
+    int pivot_row  = k;
+    double max_val = fabs(aug[k][k]);
+    for (int i = k + 1; i < 3; i++) {
+      double v = fabs(aug[i][k]);
+      if (v > max_val) {
+        max_val   = v;
+        pivot_row = i;
+      }
+    }
+
+    if (pivot_row != k) {
+#pragma unroll
+      for (int j = 0; j < 4; j++) {
+        double tmp       = aug[k][j];
+        aug[k][j]        = aug[pivot_row][j];
+        aug[pivot_row][j] = tmp;
+      }
+    }
+
+    if (fabs(aug[k][k]) < 1e-14) {
+      x[0] = x[1] = x[2] = 0.0;
+      return;
+    }
+
+    for (int i = k + 1; i < 3; i++) {
+      double factor = aug[i][k] / aug[k][k];
+      for (int j = k; j < 4; j++) {
+        aug[i][j] -= factor * aug[k][j];
+      }
+    }
+  }
+
+  x[2] = aug[2][3] / aug[2][2];
+  x[1] = (aug[1][3] - aug[1][2] * x[2]) / aug[1][1];
+  x[0] = (aug[0][3] - aug[0][2] * x[2] - aug[0][1] * x[1]) / aug[0][0];
+}
 
 // Device function: matrix-vector multiply (8x8 * 8x1)
 __device__ __forceinline__ void ancf3243_mat_vec_mul8(
@@ -166,9 +219,9 @@ __device__ __forceinline__ void compute_p(int elem_idx, int qp_idx,
         // You'll need to provide the correct qp_idx for the current quadrature
         // point
         double grad_s_i[3];
-        grad_s_i[0] = d_data->ds_du_pre(qp_idx)(i, 0); // ∂s_i/∂u
-        grad_s_i[1] = d_data->ds_du_pre(qp_idx)(i, 1); // ∂s_i/∂v
-        grad_s_i[2] = d_data->ds_du_pre(qp_idx)(i, 2); // ∂s_i/∂w
+        grad_s_i[0] = d_data->grad_N_ref(elem_idx, qp_idx)(i, 0);
+        grad_s_i[1] = d_data->grad_N_ref(elem_idx, qp_idx)(i, 1);
+        grad_s_i[2] = d_data->grad_N_ref(elem_idx, qp_idx)(i, 2);
 
         // Compute outer product: e_i ⊗ ∇s_i and add to F
         #pragma unroll
@@ -275,8 +328,7 @@ __device__ __forceinline__ void compute_p(int elem_idx, int qp_idx,
         for (int row = 0; row < 3; row++) {
           #pragma unroll
           for (int col = 0; col < 3; col++) {
-            // grad_s not stored locally here; read from precomputed ds_du_pre
-            double grad_si_col = d_data->ds_du_pre(qp_idx)(i, col);
+            double grad_si_col = d_data->grad_N_ref(elem_idx, qp_idx)(i, col);
             Fdot[row][col] += v_i[row] * grad_si_col;
           }
         }
@@ -357,28 +409,27 @@ __device__ __forceinline__ void compute_internal_force(
   const int dof_local       = node_idx % 4;
   const int node_global     = d_data->element_node(elem_idx, node_local);
   const int coef_idx_global = node_global * 4 + dof_local;
-  double geom               = (d_data->L() * d_data->W() * d_data->H()) / 8.0;
-
   // clang-format off
 
     #pragma unroll
     for (int qp_idx = 0; qp_idx < Quadrature::N_TOTAL_QP_3_2_2; qp_idx++)
     {
         double grad_s[3];
-        grad_s[0] = d_data->ds_du_pre(qp_idx)(node_idx, 0);
-        grad_s[1] = d_data->ds_du_pre(qp_idx)(node_idx, 1);
-        grad_s[2] = d_data->ds_du_pre(qp_idx)(node_idx, 2);
+        grad_s[0] = d_data->grad_N_ref(elem_idx, qp_idx)(node_idx, 0);
+        grad_s[1] = d_data->grad_N_ref(elem_idx, qp_idx)(node_idx, 1);
+        grad_s[2] = d_data->grad_N_ref(elem_idx, qp_idx)(node_idx, 2);
 
         double scale = d_data->weight_xi()(qp_idx / (Quadrature::N_QP_2 * Quadrature::N_QP_2)) *
                        d_data->weight_eta()((qp_idx / Quadrature::N_QP_2) % Quadrature::N_QP_2) *
                        d_data->weight_zeta()(qp_idx % Quadrature::N_QP_2);
+        const double dV = d_data->detJ_ref(elem_idx, qp_idx) * scale;
         #pragma unroll
         for (int r = 0; r < 3; ++r)
         {
             #pragma unroll
             for (int c = 0; c < 3; ++c)
             {
-                f_i[r] += (d_data->P(elem_idx, qp_idx)(r, c) * grad_s[c]) * scale * geom;
+                f_i[r] += (d_data->P(elem_idx, qp_idx)(r, c) * grad_s[c]) * dV;
             }
         }
     }
@@ -414,16 +465,14 @@ __device__ __forceinline__ void vbd_accumulate_residual_and_hessian_diag(
     double dt, double &r0, double &r1, double &r2, double &h00, double &h01,
     double &h02, double &h10, double &h11, double &h12, double &h20,
     double &h21, double &h22) {
-  const double ha0 = d_data->ds_du_pre(qp_idx)(local_node, 0);
-  const double ha1 = d_data->ds_du_pre(qp_idx)(local_node, 1);
-  const double ha2 = d_data->ds_du_pre(qp_idx)(local_node, 2);
-
-  const double geom = (d_data->L() * d_data->W() * d_data->H()) / 8.0;
+  const double ha0 = d_data->grad_N_ref(elem_idx, qp_idx)(local_node, 0);
+  const double ha1 = d_data->grad_N_ref(elem_idx, qp_idx)(local_node, 1);
+  const double ha2 = d_data->grad_N_ref(elem_idx, qp_idx)(local_node, 2);
   const double scale =
       d_data->weight_xi()(qp_idx / (Quadrature::N_QP_2 * Quadrature::N_QP_2)) *
       d_data->weight_eta()((qp_idx / Quadrature::N_QP_2) % Quadrature::N_QP_2) *
       d_data->weight_zeta()(qp_idx % Quadrature::N_QP_2);
-  const double dV = scale * geom;
+  const double dV = d_data->detJ_ref(elem_idx, qp_idx) * scale;
 
   const double P00 = d_data->P(elem_idx, qp_idx)(0, 0);
   const double P01 = d_data->P(elem_idx, qp_idx)(0, 1);
@@ -574,9 +623,9 @@ __device__ __forceinline__ void compute_hessian_assemble_csr<GPU_ANCF3243_Data>(
   double grad_s[Quadrature::N_SHAPE_3243][3];
 #pragma unroll
   for (int i = 0; i < Quadrature::N_SHAPE_3243; i++) {
-    grad_s[i][0] = d_data->ds_du_pre(qp_idx)(i, 0);
-    grad_s[i][1] = d_data->ds_du_pre(qp_idx)(i, 1);
-    grad_s[i][2] = d_data->ds_du_pre(qp_idx)(i, 2);
+    grad_s[i][0] = d_data->grad_N_ref(elem_idx, qp_idx)(i, 0);
+    grad_s[i][1] = d_data->grad_N_ref(elem_idx, qp_idx)(i, 1);
+    grad_s[i][2] = d_data->grad_N_ref(elem_idx, qp_idx)(i, 2);
   }
 
   double F[3][3] = {{0.0}};
@@ -633,12 +682,11 @@ __device__ __forceinline__ void compute_hessian_assemble_csr<GPU_ANCF3243_Data>(
 
   double lambda = d_data->lambda();
   double mu     = d_data->mu();
-  double geom   = (d_data->L() * d_data->W() * d_data->H()) / 8.0;
   double scale =
       d_data->weight_xi()(qp_idx / (Quadrature::N_QP_2 * Quadrature::N_QP_2)) *
       d_data->weight_eta()((qp_idx / Quadrature::N_QP_2) % Quadrature::N_QP_2) *
       d_data->weight_zeta()(qp_idx % Quadrature::N_QP_2);
-  double dV = scale * geom;
+  double dV = d_data->detJ_ref(elem_idx, qp_idx) * scale;
 
   const bool use_mr = (d_data->material_model() == MATERIAL_MODEL_MOONEY_RIVLIN);
   double A_mr[3][3][3][3];

@@ -6,6 +6,8 @@
 #include <algorithm>
 #include <numeric>
 #include <climits>
+#include <cstring>
+#include <stdexcept>
 
 namespace ANCFCPUUtils {
 
@@ -183,6 +185,27 @@ void ANCF3243_B12_matrix(double L, double W, double H,
 
   // Compute inverse of transposed B using Eigen
   B_inv_out = B.transpose().inverse();
+}
+
+void ANCF3243_B12_matrix_flat_per_element(const Eigen::VectorXd &L,
+                                          const Eigen::VectorXd &W,
+                                          const Eigen::VectorXd &H,
+                                          Eigen::VectorXd &B_inv_flat_out,
+                                          int n_shape) {
+  if (L.size() != W.size() || L.size() != H.size()) {
+    throw std::runtime_error(
+        "ANCF3243_B12_matrix_flat_per_element: L/W/H size mismatch.");
+  }
+  const int n_elem = static_cast<int>(L.size());
+  const int per    = n_shape * n_shape;
+  B_inv_flat_out.resize(n_elem * per);
+
+  Eigen::MatrixXd B_inv;
+  for (int e = 0; e < n_elem; ++e) {
+    ANCF3243_B12_matrix(L[e], W[e], H[e], B_inv, n_shape);
+    std::memcpy(B_inv_flat_out.data() + e * per, B_inv.data(),
+                static_cast<size_t>(per) * sizeof(double));
+  }
 }
 
 void ANCF3443_B12_matrix(double L, double W, double H,
@@ -394,6 +417,27 @@ void ANCF3443_B12_matrix(double L, double W, double H,
 
   // Compute inverse of B matrix
   B_inv_out = B.transpose().inverse();
+}
+
+void ANCF3443_B12_matrix_flat_per_element(const Eigen::VectorXd &L,
+                                          const Eigen::VectorXd &W,
+                                          const Eigen::VectorXd &H,
+                                          Eigen::VectorXd &B_inv_flat_out,
+                                          int n_shape) {
+  if (L.size() != W.size() || L.size() != H.size()) {
+    throw std::runtime_error(
+        "ANCF3443_B12_matrix_flat_per_element: L/W/H size mismatch.");
+  }
+  const int n_elem = static_cast<int>(L.size());
+  const int per    = n_shape * n_shape;
+  B_inv_flat_out.resize(n_elem * per);
+
+  Eigen::MatrixXd B_inv;
+  for (int e = 0; e < n_elem; ++e) {
+    ANCF3443_B12_matrix(L[e], W[e], H[e], B_inv, n_shape);
+    std::memcpy(B_inv_flat_out.data() + e * per, B_inv.data(),
+                static_cast<size_t>(per) * sizeof(double));
+  }
 }
 
 void ANCF3243_generate_beam_coordinates(int n_beam, Eigen::VectorXd &x12,

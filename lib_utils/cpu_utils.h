@@ -67,6 +67,18 @@ void ANCF3243_B12_matrix(double L, double W, double H,
                          Eigen::MatrixXd &B_inv_out, int n_shape);
 
 /**
+ * Construct per-element B_inv blocks for ANCF3243 and pack them as a flat array.
+ * Layout: for element e, its block occupies
+ *   B_inv_flat_out.segment(e * n_shape * n_shape, n_shape * n_shape)
+ * using Eigen's default column-major ordering of the n_shape×n_shape matrix.
+ */
+void ANCF3243_B12_matrix_flat_per_element(const Eigen::VectorXd &L,
+                                          const Eigen::VectorXd &W,
+                                          const Eigen::VectorXd &H,
+                                          Eigen::VectorXd &B_inv_flat_out,
+                                          int n_shape);
+
+/**
  * Generate 3D beam element coordinates for multiple ANCF3243 elements
  * @param n_beam Number of 3D elements
  * @param x12 Output x coordinates for all nodes
@@ -97,6 +109,16 @@ void ANCF3243_calculate_offsets(int n_beam, Eigen::VectorXi &offset_start,
  */
 void ANCF3443_B12_matrix(double L, double W, double H,
                          Eigen::MatrixXd &B_inv_out, int n_shape);
+
+/**
+ * Construct per-element B_inv blocks for ANCF3443 and pack them as a flat array.
+ * Layout matches ANCF3243_B12_matrix_flat_per_element.
+ */
+void ANCF3443_B12_matrix_flat_per_element(const Eigen::VectorXd &L,
+                                          const Eigen::VectorXd &W,
+                                          const Eigen::VectorXd &H,
+                                          Eigen::VectorXd &B_inv_flat_out,
+                                          int n_shape);
 
 /**
  * Generate 3D element coordinates for multiple ANCF3443 elements

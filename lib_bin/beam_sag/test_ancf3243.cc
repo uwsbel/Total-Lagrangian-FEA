@@ -5,17 +5,19 @@
  * (Newton / Nesterov / AdamW / VBD). Use `--solver=...` to select the solver.
  *
  * Example:
- *   ./bazel-bin/test_ancf3243 --solver=vbd --steps=50 --dt=1e-3 --csv
+ *   ./bazel-bin/test_ancf3243 --solver=vbd --steps=50 --dt=1e-3 --tip_force_z=3100 --vtu --csv
  */
 
 #include <cuda_runtime.h>
 
 #include <Eigen/Dense>
 #include <cmath>
+#include <filesystem>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <limits>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -27,6 +29,7 @@
 #include "../../lib_src/solvers/SyncedVBD.cuh"
 #include "../../lib_utils/cpu_utils.h"
 #include "../../lib_utils/mesh_utils.h"
+#include "../../lib_utils/visualization_utils.h"
 
 namespace {
 
@@ -34,26 +37,40 @@ constexpr double kE = 7e8;
 constexpr double kNu = 0.33;
 constexpr double kRho0 = 2700;
 
+constexpr double kDefaultL = 0.5;
+constexpr double kDefaultW = 0.1;
+constexpr double kDefaultH = 0.1;
+constexpr double kDefaultTipForceZ = 3100.0;
+constexpr int kDefaultNumElements = 30;
+
+constexpr int kVtuEvery = 20;
+constexpr const char* kVtuPrefix = "ancf3243";
+
 enum class SolverKind { kNewton, kNesterov, kAdamW, kVbd };
 
 struct Options {
   SolverKind solver = SolverKind::kVbd;
   int steps = 50;
   double dt = 1e-3;
+  double tip_force_z = std::numeric_limits<double>::quiet_NaN();
   double omega = std::numeric_limits<double>::quiet_NaN();  // VBD only
   bool write_csv = false;
   std::string csv_path;
+  bool write_vtu = false;
 };
 
 void PrintUsage(const char* argv0) {
   std::cout
-      << "Usage: " << argv0 << " [--solver=SOLVER] [--steps=N] [--dt=DT]\n"
-      << "                 [--omega=W] [--csv[=PATH]] [--help]\n\n"
+      << "Usage: " << argv0
+      << " [--solver=SOLVER] [--steps=N] [--dt=DT] [--tip_force_z=FZ]\n"
+      << "                 [--omega=W] [--csv[=PATH]] [--vtu] [--help]\n\n"
       << "  --solver=SOLVER   newton | nesterov | adamw | vbd (default: vbd)\n"
       << "  --steps=N         number of Solve() calls (default: 50)\n"
       << "  --dt=DT           time step passed to solver params (default: 1e-3)\n"
+      << "  --tip_force_z=FZ  vertical point force at tip node (default: 3100)\n"
       << "  --omega=W         VBD relaxation factor (default: 1.0)\n"
-      << "  --csv[=PATH]      write tip displacement CSV (default path depends on solver)\n";
+      << "  --csv[=PATH]      write tip displacement CSV (default path depends on solver)\n"
+      << "  --vtu             write VTU beam hex meshes to output/ancf3243/ (every 20 steps)\n";
 }
 
 bool StartsWith(const std::string& s, const std::string& prefix) {
@@ -149,6 +166,15 @@ bool ParseArgs(int argc, char** argv, Options& opt) {
       }
       continue;
     }
+    if (StartsWith(arg, "--tip_force_z=")) {
+      const std::string v =
+          arg.substr(std::string("--tip_force_z=").size());
+      if (!ParseDouble(v, opt.tip_force_z)) {
+        std::cerr << "Invalid --tip_force_z: " << v << "\n";
+        return false;
+      }
+      continue;
+    }
     if (StartsWith(arg, "--omega=")) {
       const std::string v = arg.substr(std::string("--omega=").size());
       if (!ParseDouble(v, opt.omega) || !(opt.omega > 0.0)) {
@@ -164,6 +190,10 @@ bool ParseArgs(int argc, char** argv, Options& opt) {
     if (StartsWith(arg, "--csv=")) {
       opt.write_csv = true;
       opt.csv_path = arg.substr(std::string("--csv=").size());
+      continue;
+    }
+    if (arg == "--vtu") {
+      opt.write_vtu = true;
       continue;
     }
     std::cerr << "Unknown argument: " << arg << "\n";
@@ -190,9 +220,21 @@ int main(int argc, char** argv) {
     return 1;
   }
 
-  const double L = 2.0, W = 1.0, H = 1.0;
+  const double L = kDefaultL;  // Element length.
+  const double W = kDefaultW;  // Cross-section width.
+  const double H = kDefaultH;  // Cross-section height.
+  const double beam_length = static_cast<double>(kDefaultNumElements) * L;
 
-  ANCFCPUUtils::GridMeshGenerator grid_gen(3 * L, 0.0, L, true, false);
+  if (std::isnan(opt.tip_force_z)) {
+    opt.tip_force_z = kDefaultTipForceZ;
+  }
+
+  const std::string vtu_out_dir = "output/ancf3243";
+  if (opt.write_vtu) {
+    std::filesystem::create_directories(vtu_out_dir);
+  }
+
+  ANCFCPUUtils::GridMeshGenerator grid_gen(beam_length, 0.0, L, true, false);
   grid_gen.generate_mesh();
 
   const int n_nodes = grid_gen.get_num_nodes();
@@ -200,7 +242,9 @@ int main(int argc, char** argv) {
 
   std::cout << "ANCF3243: nodes=" << n_nodes << " elements=" << n_elements
             << " coef=" << (4 * n_nodes) << " solver=" << SolverName(opt.solver)
-            << " steps=" << opt.steps << " dt=" << opt.dt << std::endl;
+            << " steps=" << opt.steps << " dt=" << opt.dt << " L=" << L
+            << " W=" << W << " H=" << H << " tip_force_z=" << opt.tip_force_z
+            << std::endl;
 
   GPU_ANCF3243_Data data(n_nodes, n_elements);
   data.Initialize();
@@ -222,7 +266,9 @@ int main(int argc, char** argv) {
 
   Eigen::VectorXd h_f_ext(data.get_n_coef() * 3);
   h_f_ext.setZero();
-  h_f_ext(3 * data.get_n_coef() - 10) = 3100.0;
+  const int tip_node = h_element_connectivity(n_elements - 1, 1);
+  const int tip_coef = tip_node * 4;
+  h_f_ext(tip_coef * 3 + 2) = opt.tip_force_z;
   data.SetExternalForce(h_f_ext);
 
   data.Setup(L, W, H, h_B_inv, Quadrature::gauss_xi_m_6, Quadrature::gauss_xi_3,
@@ -251,7 +297,26 @@ int main(int argc, char** argv) {
   data.CalcP();
   data.CalcInternalForce();
 
-  const int tip_idx = data.get_n_coef() - 4;
+  auto want_vtu = [&](int step) {
+    return opt.write_vtu && (step % kVtuEvery) == 0;
+  };
+
+  auto write_vtu = [&](int step, const Eigen::VectorXd& x12,
+                       const Eigen::VectorXd& y12, const Eigen::VectorXd& z12) {
+    std::ostringstream oss;
+    oss << vtu_out_dir << "/" << kVtuPrefix << "_" << SolverName(opt.solver)
+        << "_" << std::setw(6) << std::setfill('0') << step << ".vtu";
+    ANCFCPUUtils::VisualizationUtils::ExportANCF3243ToVTU(
+        x12, y12, z12, h_element_connectivity, W, H, oss.str());
+  };
+
+  if (want_vtu(0)) {
+    Eigen::VectorXd x12, y12, z12;
+    data.RetrievePositionToCPU(x12, y12, z12);
+    write_vtu(0, x12, y12, z12);
+  }
+
+  const int tip_idx = tip_coef;
   std::vector<double> tip_z_history;
   if (opt.write_csv) {
     tip_z_history.reserve(static_cast<size_t>(opt.steps));
@@ -265,10 +330,17 @@ int main(int argc, char** argv) {
       solver.SetParameters(&params);
       for (int step = 0; step < opt.steps; ++step) {
         solver.Solve();
-        if (opt.write_csv) {
+        const int out_step = step + 1;
+        const bool do_vtu  = want_vtu(out_step);
+        if (opt.write_csv || do_vtu) {
           Eigen::VectorXd x12, y12, z12;
           data.RetrievePositionToCPU(x12, y12, z12);
-          tip_z_history.push_back(z12(tip_idx));
+          if (opt.write_csv) {
+            tip_z_history.push_back(z12(tip_idx));
+          }
+          if (do_vtu) {
+            write_vtu(out_step, x12, y12, z12);
+          }
         }
       }
       break;
@@ -281,10 +353,17 @@ int main(int argc, char** argv) {
       solver.SetParameters(&params);
       for (int step = 0; step < opt.steps; ++step) {
         solver.Solve();
-        if (opt.write_csv) {
+        const int out_step = step + 1;
+        const bool do_vtu  = want_vtu(out_step);
+        if (opt.write_csv || do_vtu) {
           Eigen::VectorXd x12, y12, z12;
           data.RetrievePositionToCPU(x12, y12, z12);
-          tip_z_history.push_back(z12(tip_idx));
+          if (opt.write_csv) {
+            tip_z_history.push_back(z12(tip_idx));
+          }
+          if (do_vtu) {
+            write_vtu(out_step, x12, y12, z12);
+          }
         }
       }
       break;
@@ -298,10 +377,17 @@ int main(int argc, char** argv) {
       solver.SetParameters(&params);
       for (int step = 0; step < opt.steps; ++step) {
         solver.Solve();
-        if (opt.write_csv) {
+        const int out_step = step + 1;
+        const bool do_vtu  = want_vtu(out_step);
+        if (opt.write_csv || do_vtu) {
           Eigen::VectorXd x12, y12, z12;
           data.RetrievePositionToCPU(x12, y12, z12);
-          tip_z_history.push_back(z12(tip_idx));
+          if (opt.write_csv) {
+            tip_z_history.push_back(z12(tip_idx));
+          }
+          if (do_vtu) {
+            write_vtu(out_step, x12, y12, z12);
+          }
         }
       }
       break;
@@ -318,10 +404,17 @@ int main(int argc, char** argv) {
       solver.InitializeFixedMap();
       for (int step = 0; step < opt.steps; ++step) {
         solver.Solve();
-        if (opt.write_csv) {
+        const int out_step = step + 1;
+        const bool do_vtu  = want_vtu(out_step);
+        if (opt.write_csv || do_vtu) {
           Eigen::VectorXd x12, y12, z12;
           data.RetrievePositionToCPU(x12, y12, z12);
-          tip_z_history.push_back(z12(tip_idx));
+          if (opt.write_csv) {
+            tip_z_history.push_back(z12(tip_idx));
+          }
+          if (do_vtu) {
+            write_vtu(out_step, x12, y12, z12);
+          }
         }
       }
       break;

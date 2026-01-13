@@ -19,6 +19,7 @@ cc_binary(
         "//lib_src/solvers:solvers_syncedvbd",
         "//lib_utils:cpu_utils",
         "//lib_utils:mesh_utils",
+        "//lib_utils:visualization_utils",
         "@eigen//:eigen",
     ],
 )
@@ -41,6 +42,7 @@ cc_binary(
         "//lib_src/solvers:solvers_syncednewton",
         "//lib_src/solvers:solvers_syncedvbd",
         "//lib_utils:cpu_utils",
+        "//lib_utils:visualization_utils",
         "@eigen//:eigen",
     ],
 )
@@ -103,4 +105,3 @@ cc_binary(
         "@eigen//:eigen",
     ],
 )
-

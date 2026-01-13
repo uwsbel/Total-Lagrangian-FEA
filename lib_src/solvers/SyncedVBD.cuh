@@ -77,12 +77,14 @@ class SyncedVBDSolver : public SolverBase {
       d_data_          = typed_data->d_data;
       n_total_qp_      = Quadrature::N_TOTAL_QP_3_2_2;
       n_shape_         = Quadrature::N_SHAPE_3243;
+      typed_data->CalcDsDuPre();
     } else if (data->type == TYPE_3443) {
       type_            = TYPE_3443;
       auto *typed_data = static_cast<GPU_ANCF3443_Data *>(data);
       d_data_          = typed_data->d_data;
       n_total_qp_      = Quadrature::N_TOTAL_QP_4_4_3;
       n_shape_         = Quadrature::N_SHAPE_3443;
+      typed_data->CalcDsDuPre();
     } else if (data->type == TYPE_T10) {
       type_            = TYPE_T10;
       auto *typed_data = static_cast<GPU_FEAT10_Data *>(data);

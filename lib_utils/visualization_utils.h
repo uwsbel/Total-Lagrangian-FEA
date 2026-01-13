@@ -816,6 +816,251 @@ class VisualizationUtils {
     file.close();
     return true;
   }
+
+  /**
+   * Export an ANCF3443 mesh as extruded hexahedra (one hex per element).
+   * Uses only the nodal position DOF (dof 0) per node; gradient DOFs are ignored.
+   *
+   * For visualization convenience, this creates 8 points per element (no sharing)
+   * by extruding the 4 corner nodes along the element normal by +/- thickness/2.
+   *
+   * @param x12 Global x coefficient vector (size >= 4 * n_nodes)
+   * @param y12 Global y coefficient vector
+   * @param z12 Global z coefficient vector
+   * @param element_connectivity (n_elem x 4) node IDs (not coefficient IDs)
+   * @param thickness Extrusion thickness (e.g., H)
+   * @param filename Output VTU filename
+   */
+  static bool ExportANCF3443ToVTU(const Eigen::VectorXd& x12,
+                                  const Eigen::VectorXd& y12,
+                                  const Eigen::VectorXd& z12,
+                                  const Eigen::MatrixXi& element_connectivity,
+                                  double thickness,
+                                  const std::string& filename) {
+    std::ofstream file(filename);
+    if (!file.is_open()) {
+      std::cerr << "Error: Cannot open file " << filename << " for writing"
+                << std::endl;
+      return false;
+    }
+
+    const int numElements = element_connectivity.rows();
+    const int numPoints   = numElements * 8;
+
+    file << std::setprecision(15) << std::scientific;
+
+    file << "<?xml version=\"1.0\"?>\n";
+    file << "<VTKFile type=\"UnstructuredGrid\" version=\"1.0\" "
+            "byte_order=\"LittleEndian\">\n";
+    file << "  <UnstructuredGrid>\n";
+    file << "    <Piece NumberOfPoints=\"" << numPoints
+         << "\" NumberOfCells=\"" << numElements << "\">\n";
+
+    // Points
+    file << "      <Points>\n";
+    file << "        <DataArray type=\"Float64\" NumberOfComponents=\"3\" "
+            "format=\"ascii\">\n";
+
+    const double half = 0.5 * thickness;
+    for (int e = 0; e < numElements; ++e) {
+      Eigen::Vector3d p[4];
+      for (int n = 0; n < 4; ++n) {
+        const int node = element_connectivity(e, n);
+        const int idx  = node * 4;
+        p[n] = Eigen::Vector3d(x12(idx), y12(idx), z12(idx));
+      }
+
+      Eigen::Vector3d normal = (p[1] - p[0]).cross(p[3] - p[0]);
+      const double nrm = normal.norm();
+      if (nrm < 1e-12) {
+        normal = Eigen::Vector3d(0.0, 0.0, 1.0);
+      } else {
+        normal /= nrm;
+      }
+
+      const Eigen::Vector3d off = half * normal;
+      for (int n = 0; n < 4; ++n) {
+        const Eigen::Vector3d b = p[n] - off;
+        file << "          " << b.x() << " " << b.y() << " " << b.z() << "\n";
+      }
+      for (int n = 0; n < 4; ++n) {
+        const Eigen::Vector3d t = p[n] + off;
+        file << "          " << t.x() << " " << t.y() << " " << t.z() << "\n";
+      }
+    }
+
+    file << "        </DataArray>\n";
+    file << "      </Points>\n";
+
+    // Cells
+    file << "      <Cells>\n";
+    file << "        <DataArray type=\"Int32\" Name=\"connectivity\" "
+            "format=\"ascii\">\n";
+    for (int e = 0; e < numElements; ++e) {
+      const int base = e * 8;
+      file << "          " << base + 0 << " " << base + 1 << " " << base + 2
+           << " " << base + 3 << " " << base + 4 << " " << base + 5 << " "
+           << base + 6 << " " << base + 7 << "\n";
+    }
+    file << "        </DataArray>\n";
+
+    file << "        <DataArray type=\"Int32\" Name=\"offsets\" format=\"ascii\">\n";
+    for (int e = 0; e < numElements; ++e) {
+      file << "          " << (e + 1) * 8 << "\n";
+    }
+    file << "        </DataArray>\n";
+
+    // VTK_HEXAHEDRON = 12
+    file << "        <DataArray type=\"UInt8\" Name=\"types\" format=\"ascii\">\n";
+    for (int e = 0; e < numElements; ++e) {
+      file << "          12\n";
+    }
+    file << "        </DataArray>\n";
+    file << "      </Cells>\n";
+
+    file << "    </Piece>\n";
+    file << "  </UnstructuredGrid>\n";
+    file << "</VTKFile>\n";
+
+    file.close();
+    return true;
+  }
+
+  /**
+   * Export an ANCF3243 beam mesh as hexahedra (one hex per element).
+   * Uses only the nodal position DOF (dof 0) per node; gradient DOFs are ignored.
+   *
+   * For visualization convenience, this creates 8 points per element (no sharing)
+   * by building a rectangular cross-section (width x height) at each end node and
+   * connecting them into a hexahedron along the element tangent.
+   *
+   * @param x12 Global x coefficient vector (size >= 4 * n_nodes)
+   * @param y12 Global y coefficient vector
+   * @param z12 Global z coefficient vector
+   * @param element_connectivity (n_elem x 2) node IDs (not coefficient IDs)
+   * @param width Cross-section width (e.g., W)
+   * @param height Cross-section height (e.g., H)
+   * @param filename Output VTU filename
+   */
+  static bool ExportANCF3243ToVTU(const Eigen::VectorXd& x12,
+                                  const Eigen::VectorXd& y12,
+                                  const Eigen::VectorXd& z12,
+                                  const Eigen::MatrixXi& element_connectivity,
+                                  double width, double height,
+                                  const std::string& filename) {
+    std::ofstream file(filename);
+    if (!file.is_open()) {
+      std::cerr << "Error: Cannot open file " << filename << " for writing"
+                << std::endl;
+      return false;
+    }
+
+    const int numElements = element_connectivity.rows();
+    const int numPoints   = numElements * 8;
+
+    file << std::setprecision(15) << std::scientific;
+    file << "<?xml version=\"1.0\"?>\n";
+    file << "<VTKFile type=\"UnstructuredGrid\" version=\"1.0\" "
+            "byte_order=\"LittleEndian\">\n";
+    file << "  <UnstructuredGrid>\n";
+    file << "    <Piece NumberOfPoints=\"" << numPoints
+         << "\" NumberOfCells=\"" << numElements << "\">\n";
+
+    const double halfW = 0.5 * width;
+    const double halfH = 0.5 * height;
+
+    file << "      <Points>\n";
+    file << "        <DataArray type=\"Float64\" NumberOfComponents=\"3\" "
+            "format=\"ascii\">\n";
+    for (int e = 0; e < numElements; ++e) {
+      const int n0 = element_connectivity(e, 0);
+      const int n1 = element_connectivity(e, 1);
+      const int i0 = n0 * 4;
+      const int i1 = n1 * 4;
+
+      const Eigen::Vector3d p0(x12(i0), y12(i0), z12(i0));
+      const Eigen::Vector3d p1(x12(i1), y12(i1), z12(i1));
+
+      Eigen::Vector3d t = p1 - p0;
+      double tnorm      = t.norm();
+      if (tnorm < 1e-12) {
+        t = Eigen::Vector3d(1.0, 0.0, 0.0);
+        tnorm = 1.0;
+      }
+      t /= tnorm;
+
+      Eigen::Vector3d ref(0.0, 0.0, 1.0);
+      if (std::abs(t.dot(ref)) > 0.9) {
+        ref = Eigen::Vector3d(0.0, 1.0, 0.0);
+      }
+
+      Eigen::Vector3d n = t.cross(ref);
+      double nnorm      = n.norm();
+      if (nnorm < 1e-12) {
+        n = Eigen::Vector3d(0.0, 1.0, 0.0);
+        nnorm = 1.0;
+      }
+      n /= nnorm;
+
+      Eigen::Vector3d b = t.cross(n);
+      const double bnorm = b.norm();
+      if (bnorm > 1e-12) {
+        b /= bnorm;
+      } else {
+        b = Eigen::Vector3d(0.0, 0.0, 1.0);
+      }
+
+      const Eigen::Vector3d oW = halfW * n;
+      const Eigen::Vector3d oH = halfH * b;
+
+      const Eigen::Vector3d p0_0 = p0 - oW - oH;
+      const Eigen::Vector3d p0_1 = p0 + oW - oH;
+      const Eigen::Vector3d p0_2 = p0 + oW + oH;
+      const Eigen::Vector3d p0_3 = p0 - oW + oH;
+      const Eigen::Vector3d p1_0 = p1 - oW - oH;
+      const Eigen::Vector3d p1_1 = p1 + oW - oH;
+      const Eigen::Vector3d p1_2 = p1 + oW + oH;
+      const Eigen::Vector3d p1_3 = p1 - oW + oH;
+
+      for (const auto& p : {p0_0, p0_1, p0_2, p0_3, p1_0, p1_1, p1_2, p1_3}) {
+        file << "          " << p.x() << " " << p.y() << " " << p.z() << "\n";
+      }
+    }
+    file << "        </DataArray>\n";
+    file << "      </Points>\n";
+
+    file << "      <Cells>\n";
+    file << "        <DataArray type=\"Int32\" Name=\"connectivity\" "
+            "format=\"ascii\">\n";
+    for (int e = 0; e < numElements; ++e) {
+      const int base = e * 8;
+      file << "          " << base + 0 << " " << base + 1 << " " << base + 2
+           << " " << base + 3 << " " << base + 4 << " " << base + 5 << " "
+           << base + 6 << " " << base + 7 << "\n";
+    }
+    file << "        </DataArray>\n";
+
+    file << "        <DataArray type=\"Int32\" Name=\"offsets\" format=\"ascii\">\n";
+    for (int e = 0; e < numElements; ++e) {
+      file << "          " << (e + 1) * 8 << "\n";
+    }
+    file << "        </DataArray>\n";
+
+    // VTK_HEXAHEDRON = 12
+    file << "        <DataArray type=\"UInt8\" Name=\"types\" format=\"ascii\">\n";
+    for (int e = 0; e < numElements; ++e) {
+      file << "          12\n";
+    }
+    file << "        </DataArray>\n";
+    file << "      </Cells>\n";
+
+    file << "    </Piece>\n";
+    file << "  </UnstructuredGrid>\n";
+    file << "</VTKFile>\n";
+
+    file.close();
+    return true;
+  }
 };
 
 }  // namespace ANCFCPUUtils
