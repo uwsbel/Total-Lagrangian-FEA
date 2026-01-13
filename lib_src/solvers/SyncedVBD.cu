@@ -12,23 +12,24 @@
 
 #include <cooperative_groups.h>
 #include <cublas_v2.h>
+#include <thrust/device_ptr.h>
+#include <thrust/execution_policy.h>
+#include <thrust/scan.h>
+
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
 #include <iomanip>
 #include <type_traits>
-#include <thrust/device_ptr.h>
-#include <thrust/execution_policy.h>
-#include <thrust/scan.h>
 #include <vector>
 
+#include "../../lib_utils/cpu_utils.h"
 #include "../elements/ANCF3243Data.cuh"
 #include "../elements/ANCF3243DataFunc.cuh"
 #include "../elements/ANCF3443Data.cuh"
 #include "../elements/ANCF3443DataFunc.cuh"
 #include "../elements/FEAT10Data.cuh"
 #include "../elements/FEAT10DataFunc.cuh"
-#include "../../lib_utils/cpu_utils.h"
 #include "SyncedVBD.cuh"
 
 namespace cg = cooperative_groups;
@@ -44,8 +45,7 @@ constexpr int kVbdBlockThreads = 64;
 
 // Solve 3x3 linear system using Cramer's rule (optimized for small systems)
 __device__ __forceinline__ void solve_3x3_vbd(const double H[3][3],
-                                               const double R[3],
-                                               double dv[3]) {
+                                              const double R[3], double dv[3]) {
   // Compute determinant of H
   double det = H[0][0] * (H[1][1] * H[2][2] - H[1][2] * H[2][1]) -
                H[0][1] * (H[1][0] * H[2][2] - H[1][2] * H[2][0]) +
@@ -145,11 +145,11 @@ __device__ __forceinline__ double solver_grad_L_vbd(int tid, ElementType *data,
 
 template <typename ElementType>
 __global__ void vbd_build_fixed_map_kernel(ElementType *d_data,
-                                          int *d_fixed_map) {
-  int k = blockIdx.x * blockDim.x + threadIdx.x;
+                                           int *d_fixed_map) {
+  int k       = blockIdx.x * blockDim.x + threadIdx.x;
   int n_fixed = d_data->gpu_n_constraint() / 3;
   if (k < n_fixed) {
-    int node_idx = d_data->fixed_nodes()[k];
+    int node_idx          = d_data->fixed_nodes()[k];
     d_fixed_map[node_idx] = k;
   }
 }
@@ -169,9 +169,11 @@ __global__ void vbd_update_color_block_kernel(ElementType *d_data,
                 "kBlockSize must be power-of-two for reduction");
 
   const int tid = threadIdx.x;
-  if (tid >= kBlockSize) return;
+  if (tid >= kBlockSize)
+    return;
   const int node_slot = blockIdx.x;
-  if (node_slot >= color_count) return;
+  if (node_slot >= color_count)
+    return;
 
   const int node_i = d_solver->color_nodes()[color_start + node_slot];
 
@@ -188,23 +190,23 @@ __global__ void vbd_update_color_block_kernel(ElementType *d_data,
 
   // Mass-row contribution: (M_row_i/h) * (v - v_prev)
   {
-    const int *__restrict__ offsets = d_data->csr_offsets();
-    const int *__restrict__ columns = d_data->csr_columns();
+    const int *__restrict__ offsets   = d_data->csr_offsets();
+    const int *__restrict__ columns   = d_data->csr_columns();
     const double *__restrict__ values = d_data->csr_values();
-    const int row_start = offsets[node_i];
-    const int row_end   = offsets[node_i + 1];
+    const int row_start               = offsets[node_i];
+    const int row_end                 = offsets[node_i + 1];
     for (int idx = row_start + tid; idx < row_end; idx += blockDim.x) {
       const int node_j  = columns[idx];
       const double m_ij = values[idx];
       const int dof_j   = node_j * 3;
-      r0 += m_ij * (d_solver->v_guess()[dof_j + 0] -
-                    d_solver->v_prev()[dof_j + 0]) *
+      r0 += m_ij *
+            (d_solver->v_guess()[dof_j + 0] - d_solver->v_prev()[dof_j + 0]) *
             inv_h;
-      r1 += m_ij * (d_solver->v_guess()[dof_j + 1] -
-                    d_solver->v_prev()[dof_j + 1]) *
+      r1 += m_ij *
+            (d_solver->v_guess()[dof_j + 1] - d_solver->v_prev()[dof_j + 1]) *
             inv_h;
-      r2 += m_ij * (d_solver->v_guess()[dof_j + 2] -
-                    d_solver->v_prev()[dof_j + 2]) *
+      r2 += m_ij *
+            (d_solver->v_guess()[dof_j + 2] - d_solver->v_prev()[dof_j + 2]) *
             inv_h;
     }
   }
@@ -215,7 +217,7 @@ __global__ void vbd_update_color_block_kernel(ElementType *d_data,
     const int inc_end   = d_solver->incidence_offsets()[node_i + 1];
     const int n_inc     = inc_end - inc_start;
 
-    const int n_qp = d_solver->gpu_n_total_qp();
+    const int n_qp       = d_solver->gpu_n_total_qp();
     const int work_count = n_inc * n_qp;
 
     for (int w = tid; w < work_count; w += blockDim.x) {
@@ -233,9 +235,9 @@ __global__ void vbd_update_color_block_kernel(ElementType *d_data,
 
   // Shared-memory reduction (12 accumulators).
   __shared__ double smem[12 * kBlockSize];
-  double *s_r0 = smem;
-  double *s_r1 = s_r0 + kBlockSize;
-  double *s_r2 = s_r1 + kBlockSize;
+  double *s_r0  = smem;
+  double *s_r1  = s_r0 + kBlockSize;
+  double *s_r2  = s_r1 + kBlockSize;
   double *s_h00 = s_r2 + kBlockSize;
   double *s_h01 = s_h00 + kBlockSize;
   double *s_h02 = s_h01 + kBlockSize;
@@ -246,9 +248,9 @@ __global__ void vbd_update_color_block_kernel(ElementType *d_data,
   double *s_h21 = s_h20 + kBlockSize;
   double *s_h22 = s_h21 + kBlockSize;
 
-  s_r0[tid] = r0;
-  s_r1[tid] = r1;
-  s_r2[tid] = r2;
+  s_r0[tid]  = r0;
+  s_r1[tid]  = r1;
+  s_r2[tid]  = r2;
   s_h00[tid] = h00;
   s_h01[tid] = h01;
   s_h02[tid] = h02;
@@ -280,11 +282,12 @@ __global__ void vbd_update_color_block_kernel(ElementType *d_data,
     __syncthreads();
   }
 
-  if (tid != 0) return;
+  if (tid != 0)
+    return;
 
-  r0 = s_r0[0];
-  r1 = s_r1[0];
-  r2 = s_r2[0];
+  r0  = s_r0[0];
+  r1  = s_r1[0];
+  r2  = s_r2[0];
   h00 = s_h00[0];
   h01 = s_h01[0];
   h02 = s_h02[0];
@@ -302,15 +305,15 @@ __global__ void vbd_update_color_block_kernel(ElementType *d_data,
 
   double H_i[3][3];
   const double *mass_block = d_solver->mass_diag_blocks() + node_i * 9;
-  H_i[0][0] = mass_block[0] * inv_h + h00;
-  H_i[0][1] = mass_block[1] * inv_h + h01;
-  H_i[0][2] = mass_block[2] * inv_h + h02;
-  H_i[1][0] = mass_block[3] * inv_h + h10;
-  H_i[1][1] = mass_block[4] * inv_h + h11;
-  H_i[1][2] = mass_block[5] * inv_h + h12;
-  H_i[2][0] = mass_block[6] * inv_h + h20;
-  H_i[2][1] = mass_block[7] * inv_h + h21;
-  H_i[2][2] = mass_block[8] * inv_h + h22;
+  H_i[0][0]                = mass_block[0] * inv_h + h00;
+  H_i[0][1]                = mass_block[1] * inv_h + h01;
+  H_i[0][2]                = mass_block[2] * inv_h + h02;
+  H_i[1][0]                = mass_block[3] * inv_h + h10;
+  H_i[1][1]                = mass_block[4] * inv_h + h11;
+  H_i[1][2]                = mass_block[5] * inv_h + h12;
+  H_i[2][0]                = mass_block[6] * inv_h + h20;
+  H_i[2][1]                = mass_block[7] * inv_h + h21;
+  H_i[2][2]                = mass_block[8] * inv_h + h22;
 
   // Handle constraints (pin constraints)
   int k = -1;
@@ -375,11 +378,12 @@ __global__ void vbd_update_color_block_kernel(ElementType *d_data,
 
 template <typename ElementType>
 __global__ void vbd_update_pos_from_vel_color(SyncedVBDSolver *d_solver,
-                                             ElementType *d_data,
-                                             int color_start,
-                                             int color_count) {
+                                              ElementType *d_data,
+                                              int color_start,
+                                              int color_count) {
   const int idx = blockIdx.x * blockDim.x + threadIdx.x;
-  if (idx >= color_count) return;
+  if (idx >= color_count)
+    return;
 
   const int node_i = d_solver->color_nodes()[color_start + idx];
   const double h   = d_solver->solver_time_step();
@@ -435,7 +439,7 @@ __global__ void vbd_update_v_prev(SyncedVBDSolver *d_solver) {
 template <typename ElementType>
 __global__ void vbd_compute_constraint(ElementType *d_data,
                                        SyncedVBDSolver *d_solver) {
-  int tid = blockIdx.x * blockDim.x + threadIdx.x;
+  int tid     = blockIdx.x * blockDim.x + threadIdx.x;
   int n_fixed = d_solver->gpu_n_constraints() / 3;
   if (tid < n_fixed) {
     int node_idx = d_data->fixed_nodes()[tid];
@@ -451,7 +455,7 @@ __global__ void vbd_compute_constraint(ElementType *d_data,
 template <typename ElementType>
 __global__ void vbd_update_dual(ElementType *d_data,
                                 SyncedVBDSolver *d_solver) {
-  int tid = blockIdx.x * blockDim.x + threadIdx.x;
+  int tid           = blockIdx.x * blockDim.x + threadIdx.x;
   int n_constraints = d_solver->gpu_n_constraints();
   if (tid < n_constraints) {
     double rho = *d_solver->solver_rho();
@@ -465,17 +469,17 @@ __global__ void vbd_update_dual(ElementType *d_data,
 //   R_i = (M_ii/h)(v_i - v_prev_i) + f_int_i - f_ext_i + h*(lam + rho*c)
 // =====================================================
 
- template <typename ElementType>
- __global__ void vbd_compute_full_residual(ElementType *d_data,
+template <typename ElementType>
+__global__ void vbd_compute_full_residual(ElementType *d_data,
                                           SyncedVBDSolver *d_solver,
                                           double *d_residual) {
   int node_i = blockIdx.x * blockDim.x + threadIdx.x;
   if (node_i >= d_solver->get_n_coef())
     return;
 
-  const double h = d_solver->solver_time_step();
+  const double h     = d_solver->solver_time_step();
   const double inv_h = 1.0 / h;
-  const double rho = *d_solver->solver_rho();
+  const double rho   = *d_solver->solver_rho();
 
   // Get velocities
   double v_i[3];
@@ -487,34 +491,37 @@ __global__ void vbd_update_dual(ElementType *d_data,
   //   (M_row_i/h) * (v - v_prev)
   double R_i[3] = {0.0, 0.0, 0.0};
   {
-    const int *__restrict__ offsets = d_data->csr_offsets();
-    const int *__restrict__ columns = d_data->csr_columns();
+    const int *__restrict__ offsets   = d_data->csr_offsets();
+    const int *__restrict__ columns   = d_data->csr_columns();
     const double *__restrict__ values = d_data->csr_values();
 
     int row_start = offsets[node_i];
-    int row_end = offsets[node_i + 1];
+    int row_end   = offsets[node_i + 1];
 
     for (int idx = row_start; idx < row_end; ++idx) {
-      int node_j = columns[idx];
+      int node_j  = columns[idx];
       double m_ij = values[idx];
-      R_i[0] += m_ij * (d_solver->v_guess()[node_j * 3 + 0] -
-                       d_solver->v_prev()[node_j * 3 + 0]) *
-              inv_h;
-      R_i[1] += m_ij * (d_solver->v_guess()[node_j * 3 + 1] -
-                       d_solver->v_prev()[node_j * 3 + 1]) *
-              inv_h;
-      R_i[2] += m_ij * (d_solver->v_guess()[node_j * 3 + 2] -
-                       d_solver->v_prev()[node_j * 3 + 2]) *
-              inv_h;
+      R_i[0] += m_ij *
+                (d_solver->v_guess()[node_j * 3 + 0] -
+                 d_solver->v_prev()[node_j * 3 + 0]) *
+                inv_h;
+      R_i[1] += m_ij *
+                (d_solver->v_guess()[node_j * 3 + 1] -
+                 d_solver->v_prev()[node_j * 3 + 1]) *
+                inv_h;
+      R_i[2] += m_ij *
+                (d_solver->v_guess()[node_j * 3 + 2] -
+                 d_solver->v_prev()[node_j * 3 + 2]) *
+                inv_h;
     }
   }
 
   // Get incidence data for this node
   int inc_start = d_solver->incidence_offsets()[node_i];
-  int inc_end = d_solver->incidence_offsets()[node_i + 1];
+  int inc_end   = d_solver->incidence_offsets()[node_i + 1];
 
   double lambda = d_data->lambda();
-  double mu = d_data->mu();
+  double mu     = d_data->mu();
 
   constexpr int n_qp = Quadrature::N_QP_T10_5;
   double wq_cache[n_qp];
@@ -525,8 +532,8 @@ __global__ void vbd_update_dual(ElementType *d_data,
 
   // Loop over incident elements to compute f_int_i
   for (int inc_idx = inc_start; inc_idx < inc_end; ++inc_idx) {
-    int2 inc = d_solver->incidence_data()[inc_idx];
-    int elem_idx = inc.x;
+    int2 inc       = d_solver->incidence_data()[inc_idx];
+    int elem_idx   = inc.x;
     int local_node = inc.y;
 
     int global_nodes[10];
@@ -539,9 +546,12 @@ __global__ void vbd_update_dual(ElementType *d_data,
       double F[3][3] = {{0.0}};
       for (int a = 0; a < 10; ++a) {
         int gn = global_nodes[a];
-        double x_a0 = d_solver->x12_prev()[gn] + h * d_solver->v_guess()[gn * 3 + 0];
-        double x_a1 = d_solver->y12_prev()[gn] + h * d_solver->v_guess()[gn * 3 + 1];
-        double x_a2 = d_solver->z12_prev()[gn] + h * d_solver->v_guess()[gn * 3 + 2];
+        double x_a0 =
+            d_solver->x12_prev()[gn] + h * d_solver->v_guess()[gn * 3 + 0];
+        double x_a1 =
+            d_solver->y12_prev()[gn] + h * d_solver->v_guess()[gn * 3 + 1];
+        double x_a2 =
+            d_solver->z12_prev()[gn] + h * d_solver->v_guess()[gn * 3 + 2];
 
         double g0 = d_data->grad_N_ref(elem_idx, qp_idx)(a, 0);
         double g1 = d_data->grad_N_ref(elem_idx, qp_idx)(a, 1);
@@ -604,8 +614,8 @@ __global__ void vbd_update_dual(ElementType *d_data,
       h_a[2] = d_data->grad_N_ref(elem_idx, qp_idx)(local_node, 2);
 
       double detJ = d_data->detJ_ref(elem_idx, qp_idx);
-      double wq = wq_cache[qp_idx];
-      double dV = detJ * wq;
+      double wq   = wq_cache[qp_idx];
+      double dV   = detJ * wq;
 
       // f_int contribution
       for (int i = 0; i < 3; ++i) {
@@ -666,7 +676,7 @@ __global__ void vbd_compute_residual_norm(ElementType *d_data,
                                           double *d_res_sq) {
   extern __shared__ double sdata[];
 
-  int tid = blockIdx.x * blockDim.x + threadIdx.x;
+  int tid    = blockIdx.x * blockDim.x + threadIdx.x;
   int n_dofs = d_solver->get_n_coef() * 3;
 
   double local_sq = 0.0;
@@ -676,7 +686,7 @@ __global__ void vbd_compute_residual_norm(ElementType *d_data,
   }
 
   // Reduce within block
-  int local_tid = threadIdx.x;
+  int local_tid    = threadIdx.x;
   sdata[local_tid] = local_sq;
   __syncthreads();
 
@@ -698,10 +708,10 @@ __global__ void vbd_compute_residual_norm(ElementType *d_data,
 template <typename ElementType>
 __global__ void vbd_compute_p_kernel(ElementType *d_data,
                                      SyncedVBDSolver *d_solver) {
-  const int tid = blockIdx.x * blockDim.x + threadIdx.x;
+  const int tid    = blockIdx.x * blockDim.x + threadIdx.x;
   const int stride = blockDim.x * gridDim.x;
-  const int n_qp = d_solver->gpu_n_total_qp();
-  const int total = d_solver->get_n_beam() * n_qp;
+  const int n_qp   = d_solver->gpu_n_total_qp();
+  const int total  = d_solver->get_n_beam() * n_qp;
   for (int idx = tid; idx < total; idx += stride) {
     const int elem_idx = idx / n_qp;
     const int qp_idx   = idx - elem_idx * n_qp;
@@ -718,10 +728,10 @@ __global__ void vbd_clear_internal_force_kernel(ElementType *d_data) {
 template <typename ElementType>
 __global__ void vbd_compute_internal_force_kernel(ElementType *d_data,
                                                   SyncedVBDSolver *d_solver) {
-  const int tid = blockIdx.x * blockDim.x + threadIdx.x;
-  const int stride = blockDim.x * gridDim.x;
+  const int tid     = blockIdx.x * blockDim.x + threadIdx.x;
+  const int stride  = blockDim.x * gridDim.x;
   const int n_shape = d_solver->gpu_n_shape();
-  const int total = d_solver->get_n_beam() * n_shape;
+  const int total   = d_solver->get_n_beam() * n_shape;
   for (int idx = tid; idx < total; idx += stride) {
     const int elem_idx = idx / n_shape;
     const int node_idx = idx - elem_idx * n_shape;
@@ -731,18 +741,18 @@ __global__ void vbd_compute_internal_force_kernel(ElementType *d_data,
 
 template <typename ElementType>
 __global__ void vbd_constraints_eval_kernel(ElementType *d_data,
-                                           SyncedVBDSolver *d_solver) {
+                                            SyncedVBDSolver *d_solver) {
   (void)d_solver;
   compute_constraint_data(d_data);
 }
 
 template <typename ElementType>
 __global__ void vbd_compute_grad_l_kernel(ElementType *d_data,
-                                         SyncedVBDSolver *d_solver) {
-  int tid = blockIdx.x * blockDim.x + threadIdx.x;
+                                          SyncedVBDSolver *d_solver) {
+  int tid          = blockIdx.x * blockDim.x + threadIdx.x;
   const int n_dofs = d_solver->get_n_coef() * 3;
   if (tid < n_dofs) {
-    const double g = solver_grad_L_vbd(tid, d_data, d_solver);
+    const double g     = solver_grad_L_vbd(tid, d_data, d_solver);
     d_solver->g()[tid] = g;
   }
 }
@@ -841,11 +851,12 @@ void SyncedVBDSolver::InitializeColoring() {
   // Cache on host so we don't cudaMemcpy offsets every inner iteration
   if (h_color_offsets_cache_) {
     delete[] h_color_offsets_cache_;
-    h_color_offsets_cache_ = nullptr;
+    h_color_offsets_cache_      = nullptr;
     h_color_offsets_cache_size_ = 0;
   }
   h_color_offsets_cache_size_ = static_cast<int>(h_color_offsets.size());
-  h_color_offsets_cache_ = new int[static_cast<size_t>(h_color_offsets_cache_size_)];
+  h_color_offsets_cache_ =
+      new int[static_cast<size_t>(h_color_offsets_cache_size_)];
   std::memcpy(h_color_offsets_cache_, h_color_offsets.data(),
               static_cast<size_t>(h_color_offsets_cache_size_) * sizeof(int));
 
@@ -860,12 +871,12 @@ void SyncedVBDSolver::InitializeColoring() {
   {
     if (h_color_group_offsets_cache_) {
       delete[] h_color_group_offsets_cache_;
-      h_color_group_offsets_cache_ = nullptr;
+      h_color_group_offsets_cache_      = nullptr;
       h_color_group_offsets_cache_size_ = 0;
     }
     if (h_color_group_colors_cache_) {
       delete[] h_color_group_colors_cache_;
-      h_color_group_colors_cache_ = nullptr;
+      h_color_group_colors_cache_      = nullptr;
       h_color_group_colors_cache_size_ = 0;
     }
 
@@ -893,16 +904,17 @@ void SyncedVBDSolver::InitializeColoring() {
       const size_t idx = static_cast<size_t>(a) * static_cast<size_t>(n_words) +
                          static_cast<size_t>(word);
       if (idx >= conflict_bits.size()) {
-        std::cerr << "Color grouping error: conflict_bits index out of range (idx="
-                  << idx << ", size=" << conflict_bits.size() << ")"
-                  << std::endl;
+        std::cerr
+            << "Color grouping error: conflict_bits index out of range (idx="
+            << idx << ", size=" << conflict_bits.size() << ")" << std::endl;
         exit(EXIT_FAILURE);
       }
       return idx;
     };
 
     auto set_conflict = [&](int a, int b) {
-      if (a == b) return;
+      if (a == b)
+        return;
       const int bit = b & 63;
       conflict_bits[conflict_word_index(a, b)] |= (1ULL << bit);
     };
@@ -911,10 +923,10 @@ void SyncedVBDSolver::InitializeColoring() {
     for (int e = 0; e < n_elem; ++e) {
       for (int i = 0; i < nodes_per_elem; ++i) {
         const int node_i = h_connectivity(e, i);
-        const int c_i = colors[node_i];
+        const int c_i    = colors[node_i];
         for (int j = i + 1; j < nodes_per_elem; ++j) {
           const int node_j = h_connectivity(e, j);
-          const int c_j = colors[node_j];
+          const int c_j    = colors[node_j];
           set_conflict(c_i, c_j);
           set_conflict(c_j, c_i);
         }
@@ -922,9 +934,8 @@ void SyncedVBDSolver::InitializeColoring() {
     }
 
     auto conflicts = [&](int a, int b) -> bool {
-      const int bit = b & 63;
-      const uint64_t mask =
-          conflict_bits[conflict_word_index(a, b)];
+      const int bit       = b & 63;
+      const uint64_t mask = conflict_bits[conflict_word_index(a, b)];
       return (mask & (1ULL << bit)) != 0ULL;
     };
 
@@ -934,7 +945,8 @@ void SyncedVBDSolver::InitializeColoring() {
       bool placed = false;
       if (group_size > 1) {
         for (auto &g : groups) {
-          if (static_cast<int>(g.size()) >= group_size) continue;
+          if (static_cast<int>(g.size()) >= group_size)
+            continue;
           bool ok = true;
           for (int c2 : g) {
             if (conflicts(c2, c)) {
@@ -954,13 +966,15 @@ void SyncedVBDSolver::InitializeColoring() {
       }
     }
 
-    n_color_groups_ = static_cast<int>(groups.size());
+    n_color_groups_                   = static_cast<int>(groups.size());
     h_color_group_offsets_cache_size_ = n_color_groups_ + 1;
-    h_color_group_colors_cache_size_ = n_colors_;
-    h_color_group_offsets_cache_ = new int[static_cast<size_t>(h_color_group_offsets_cache_size_)];
-    h_color_group_colors_cache_ = new int[static_cast<size_t>(h_color_group_colors_cache_size_)];
+    h_color_group_colors_cache_size_  = n_colors_;
+    h_color_group_offsets_cache_ =
+        new int[static_cast<size_t>(h_color_group_offsets_cache_size_)];
+    h_color_group_colors_cache_ =
+        new int[static_cast<size_t>(h_color_group_colors_cache_size_)];
 
-    int cursor = 0;
+    int cursor                      = 0;
     h_color_group_offsets_cache_[0] = 0;
     for (int g = 0; g < n_color_groups_; ++g) {
       for (int c : groups[static_cast<size_t>(g)]) {
@@ -975,8 +989,8 @@ void SyncedVBDSolver::InitializeColoring() {
     }
 
     if (group_size > 1) {
-      std::cout << "VBD color grouping: group_size=" << group_size
-                << " => " << n_color_groups_ << " groups (from " << n_colors_
+      std::cout << "VBD color grouping: group_size=" << group_size << " => "
+                << n_color_groups_ << " groups (from " << n_colors_
                 << " colors)" << std::endl;
     }
   }
@@ -992,8 +1006,7 @@ void SyncedVBDSolver::InitializeColoring() {
     h_incidence_offsets[i + 1] = static_cast<int>(h_incidence_data.size());
   }
 
-  HANDLE_ERROR(
-      cudaMalloc(&d_incidence_offsets_, (n_coef_ + 1) * sizeof(int)));
+  HANDLE_ERROR(cudaMalloc(&d_incidence_offsets_, (n_coef_ + 1) * sizeof(int)));
   HANDLE_ERROR(cudaMemcpy(d_incidence_offsets_, h_incidence_offsets.data(),
                           (n_coef_ + 1) * sizeof(int), cudaMemcpyHostToDevice));
 
@@ -1019,7 +1032,8 @@ void SyncedVBDSolver::InitializeMassDiagBlocks() {
 
   // Allocate diagonal mass blocks (3x3 per node, stored as 9 doubles)
   HANDLE_ERROR(cudaMalloc(&d_mass_diag_blocks_, n_coef_ * 9 * sizeof(double)));
-  HANDLE_ERROR(cudaMemset(d_mass_diag_blocks_, 0, n_coef_ * 9 * sizeof(double)));
+  HANDLE_ERROR(
+      cudaMemset(d_mass_diag_blocks_, 0, n_coef_ * 9 * sizeof(double)));
 
   // For consistent mass, extract diagonal blocks from the CSR mass matrix.
   std::vector<int> offsets, columns;
@@ -1080,8 +1094,8 @@ void SyncedVBDSolver::InitializeFixedMap() {
 
   if (n_constraints_ > 0) {
     const int threads = 256;
-    int n_fixed = n_constraints_ / 3;
-    int blocks = (n_fixed + threads - 1) / threads;
+    int n_fixed       = n_constraints_ / 3;
+    int blocks        = (n_fixed + threads - 1) / threads;
 
     if (type_ == TYPE_T10) {
       vbd_build_fixed_map_kernel<<<blocks, threads>>>(
@@ -1111,8 +1125,8 @@ void SyncedVBDSolver::InitializeFixedMap() {
 double SyncedVBDSolver::compute_l2_norm_cublas(double *d_vec, int n_dofs) {
   cublasDnrm2(cublas_handle_, n_dofs, d_vec, 1, d_norm_temp_);
   double h_norm;
-  HANDLE_ERROR(
-      cudaMemcpy(&h_norm, d_norm_temp_, sizeof(double), cudaMemcpyDeviceToHost));
+  HANDLE_ERROR(cudaMemcpy(&h_norm, d_norm_temp_, sizeof(double),
+                          cudaMemcpyDeviceToHost));
   return h_norm;
 }
 
@@ -1130,13 +1144,13 @@ void SyncedVBDSolver::DestroyCudaGraphs() {
     post_outer_graph_exec_ = nullptr;
   }
 
-  graph_threads_ = 0;
-  graph_blocks_coef_ = 0;
-  graph_blocks_p_ = 0;
-  graph_n_colors_ = 0;
-  graph_n_constraints_ = 0;
+  graph_threads_          = 0;
+  graph_blocks_coef_      = 0;
+  graph_blocks_p_         = 0;
+  graph_n_colors_         = 0;
+  graph_n_constraints_    = 0;
   graph_color_group_size_ = 1;
-  graph_n_color_groups_ = 0;
+  graph_n_color_groups_   = 0;
 }
 
 bool SyncedVBDSolver::EnsureInnerSweepGraph(int threads, int blocks_p) {
@@ -1153,9 +1167,11 @@ bool SyncedVBDSolver::EnsureInnerSweepGraph(int threads, int blocks_p) {
       graph_n_constraints_ == n_constraints_ &&
       graph_color_group_size_ == h_color_group_size_ &&
       graph_n_color_groups_ == n_color_groups_;
-  if (signature_match) return false;
+  if (signature_match)
+    return false;
 
-  // If a previously captured graph exists but the signature changed, destroy it.
+  // If a previously captured graph exists but the signature changed, destroy
+  // it.
   if (inner_sweep_graph_exec_) {
     const bool shared_mismatch =
         graph_threads_ != threads || graph_n_constraints_ != n_constraints_;
@@ -1200,14 +1216,12 @@ bool SyncedVBDSolver::EnsureInnerSweepGraph(int threads, int blocks_p) {
   if (threads != kVbdBlockThreads) {
     std::cerr << "CUDA graph init expects threads=" << kVbdBlockThreads
               << " for vbd_update_color_block_kernel<*, " << kVbdBlockThreads
-              << ">."
-              << std::endl;
+              << ">." << std::endl;
     exit(EXIT_FAILURE);
   }
 
   if (!graph_capture_stream_) {
-    std::cerr << "CUDA graph capture stream is null; aborting."
-              << std::endl;
+    std::cerr << "CUDA graph capture stream is null; aborting." << std::endl;
     exit(EXIT_FAILURE);
   }
 
@@ -1217,7 +1231,7 @@ bool SyncedVBDSolver::EnsureInnerSweepGraph(int threads, int blocks_p) {
     // Stream capture executes the recorded kernels once. We only call this at
     // the first inner sweep so that execution counts as sweep 0.
     cudaGraph_t graph = nullptr;
-    cudaError_t err = cudaStreamSynchronize(0);
+    cudaError_t err   = cudaStreamSynchronize(0);
     if (err != cudaSuccess) {
       std::cerr << "cudaStreamSynchronize(default) failed during graph init: "
                 << cudaGetErrorString(err) << std::endl;
@@ -1233,20 +1247,21 @@ bool SyncedVBDSolver::EnsureInnerSweepGraph(int threads, int blocks_p) {
     err = cudaStreamBeginCapture(graph_capture_stream_,
                                  cudaStreamCaptureModeRelaxed);
     if (err != cudaSuccess) {
-      std::cerr << "cudaStreamBeginCapture failed: "
-                << cudaGetErrorString(err) << std::endl;
+      std::cerr << "cudaStreamBeginCapture failed: " << cudaGetErrorString(err)
+                << std::endl;
       exit(EXIT_FAILURE);
     }
 
     for (int g = 0; g < n_color_groups_; ++g) {
       const int group_begin = h_color_group_offsets_cache_[g];
-      const int group_end = h_color_group_offsets_cache_[g + 1];
+      const int group_end   = h_color_group_offsets_cache_[g + 1];
       for (int gi = group_begin; gi < group_end; ++gi) {
-        const int c = h_color_group_colors_cache_[gi];
+        const int c           = h_color_group_colors_cache_[gi];
         const int color_start = h_color_offsets_cache_[c];
         const int color_count =
             h_color_offsets_cache_[c + 1] - h_color_offsets_cache_[c];
-        if (color_count <= 0) continue;
+        if (color_count <= 0)
+          continue;
 
         const int blocks = color_count;
         vbd_update_color_block_kernel<T, kVbdBlockThreads>
@@ -1255,7 +1270,7 @@ bool SyncedVBDSolver::EnsureInnerSweepGraph(int threads, int blocks_p) {
 
         const int blocks_color = (color_count + threads - 1) / threads;
         vbd_update_pos_from_vel_color<<<blocks_color, threads, 0,
-                                       graph_capture_stream_>>>(
+                                        graph_capture_stream_>>>(
             d_vbd_solver_, typed_data, color_start, color_count);
       }
 
@@ -1282,7 +1297,7 @@ bool SyncedVBDSolver::EnsureInnerSweepGraph(int threads, int blocks_p) {
     }
 
     cudaGraphNode_t error_node = nullptr;
-    char log_buffer[4096] = {0};
+    char log_buffer[4096]      = {0};
     const cudaError_t inst_err =
         cudaGraphInstantiate(&inner_sweep_graph_exec_, graph, &error_node,
                              log_buffer, sizeof(log_buffer));
@@ -1312,12 +1327,12 @@ bool SyncedVBDSolver::EnsureInnerSweepGraph(int threads, int blocks_p) {
       exit(EXIT_FAILURE);
   }
 
-  graph_threads_ = threads;
-  graph_blocks_p_ = blocks_p;
-  graph_n_colors_ = n_colors_;
-  graph_n_constraints_ = n_constraints_;
+  graph_threads_          = threads;
+  graph_blocks_p_         = blocks_p;
+  graph_n_colors_         = n_colors_;
+  graph_n_constraints_    = n_constraints_;
   graph_color_group_size_ = h_color_group_size_;
-  graph_n_color_groups_ = n_color_groups_;
+  graph_n_color_groups_   = n_color_groups_;
   return true;
 }
 
@@ -1333,9 +1348,11 @@ bool SyncedVBDSolver::EnsurePostOuterGraph(int threads, int blocks_coef) {
       post_outer_graph_exec_ && graph_threads_ == threads &&
       graph_blocks_coef_ == blocks_coef && graph_n_colors_ == n_colors_ &&
       graph_n_constraints_ == n_constraints_;
-  if (signature_match) return false;
+  if (signature_match)
+    return false;
 
-  // If a previously captured graph exists but the signature changed, destroy it.
+  // If a previously captured graph exists but the signature changed, destroy
+  // it.
   if (post_outer_graph_exec_) {
     const bool shared_mismatch =
         graph_threads_ != threads || graph_n_constraints_ != n_constraints_;
@@ -1360,14 +1377,13 @@ bool SyncedVBDSolver::EnsurePostOuterGraph(int threads, int blocks_coef) {
   }
 
   if (!graph_capture_stream_) {
-    std::cerr << "CUDA graph capture stream is null; aborting."
-              << std::endl;
+    std::cerr << "CUDA graph capture stream is null; aborting." << std::endl;
     exit(EXIT_FAILURE);
   }
 
   auto capture_typed = [&](auto *typed_data) {
     cudaGraph_t graph = nullptr;
-    cudaError_t err = cudaStreamSynchronize(0);
+    cudaError_t err   = cudaStreamSynchronize(0);
     if (err != cudaSuccess) {
       std::cerr << "cudaStreamSynchronize(default) failed during graph init: "
                 << cudaGetErrorString(err) << std::endl;
@@ -1383,15 +1399,15 @@ bool SyncedVBDSolver::EnsurePostOuterGraph(int threads, int blocks_coef) {
     err = cudaStreamBeginCapture(graph_capture_stream_,
                                  cudaStreamCaptureModeRelaxed);
     if (err != cudaSuccess) {
-      std::cerr << "cudaStreamBeginCapture failed: "
-                << cudaGetErrorString(err) << std::endl;
+      std::cerr << "cudaStreamBeginCapture failed: " << cudaGetErrorString(err)
+                << std::endl;
       exit(EXIT_FAILURE);
     }
 
     vbd_update_pos_from_vel<<<blocks_coef, threads, 0, graph_capture_stream_>>>(
         d_vbd_solver_, typed_data);
     if (n_constraints_ > 0) {
-      const int n_fixed = n_constraints_ / 3;
+      const int n_fixed  = n_constraints_ / 3;
       const int blocks_c = (n_fixed + threads - 1) / threads;
       vbd_compute_constraint<<<blocks_c, threads, 0, graph_capture_stream_>>>(
           typed_data, d_vbd_solver_);
@@ -1413,7 +1429,7 @@ bool SyncedVBDSolver::EnsurePostOuterGraph(int threads, int blocks_coef) {
     }
 
     cudaGraphNode_t error_node = nullptr;
-    char log_buffer[4096] = {0};
+    char log_buffer[4096]      = {0};
     const cudaError_t inst_err =
         cudaGraphInstantiate(&post_outer_graph_exec_, graph, &error_node,
                              log_buffer, sizeof(log_buffer));
@@ -1443,12 +1459,12 @@ bool SyncedVBDSolver::EnsurePostOuterGraph(int threads, int blocks_coef) {
       exit(EXIT_FAILURE);
   }
 
-  graph_threads_ = threads;
-  graph_blocks_coef_ = blocks_coef;
-  graph_n_colors_ = n_colors_;
-  graph_n_constraints_ = n_constraints_;
+  graph_threads_          = threads;
+  graph_blocks_coef_      = blocks_coef;
+  graph_n_colors_         = n_colors_;
+  graph_n_constraints_    = n_constraints_;
   graph_color_group_size_ = h_color_group_size_;
-  graph_n_color_groups_ = n_color_groups_;
+  graph_n_color_groups_   = n_color_groups_;
   return true;
 }
 
@@ -1475,23 +1491,23 @@ void SyncedVBDSolver::OneStepVBD() {
   HANDLE_ERROR(cudaEventCreate(&stop));
 
   const int threads = kVbdBlockThreads;
-  const int n_dofs = n_coef_ * 3;
+  const int n_dofs  = n_coef_ * 3;
 
   auto one_step_typed = [&](auto *typed_data) {
     const int blocks_coef = (n_coef_ + threads - 1) / threads;
-    const int blocks_dof = (n_dofs + threads - 1) / threads;
+    const int blocks_dof  = (n_dofs + threads - 1) / threads;
 
     int blocks_p = 0;
     {
       const int total_qp = n_beam_ * n_total_qp_;
-      blocks_p = (total_qp + threads - 1) / threads;
+      blocks_p           = (total_qp + threads - 1) / threads;
       blocks_p = std::max(1, std::min(blocks_p, max_grid_stride_blocks));
     }
 
     int blocks_if = 0;
     {
       const int total_if = n_beam_ * n_shape_;
-      blocks_if = (total_if + threads - 1) / threads;
+      blocks_if          = (total_if + threads - 1) / threads;
       blocks_if = std::max(1, std::min(blocks_if, max_grid_stride_blocks));
     }
 
@@ -1591,7 +1607,7 @@ void SyncedVBDSolver::OneStepVBD() {
     }
 
     {
-      const int total = n_beam_ * n_total_qp_;
+      const int total  = n_beam_ * n_total_qp_;
       const int blocks = (total + threads - 1) / threads;
       vbd_compute_p_kernel<<<blocks, threads>>>(typed_data, d_vbd_solver_);
     }

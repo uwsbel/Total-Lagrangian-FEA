@@ -208,7 +208,7 @@ class SyncedNewtonSolver : public SolverBase {
 
     h_inner_atol_ = p->inner_atol;
     h_inner_rtol_ = p->inner_rtol;
-    h_outer_tol_ = p->outer_tol;
+    h_outer_tol_  = p->outer_tol;
 
     h_max_outer_ = p->max_outer;
     h_max_inner_ = p->max_inner;
@@ -336,8 +336,9 @@ class SyncedNewtonSolver : public SolverBase {
     return n_beam_;
   }
 
-  // Host accessor for device velocity guess pointer (layout: [vx0, vy0, vz0, ..])
-  double* GetVelocityGuessDevicePtr() const {
+  // Host accessor for device velocity guess pointer (layout: [vx0, vy0, vz0,
+  // ..])
+  double *GetVelocityGuessDevicePtr() const {
     return d_v_guess_;
   }
 
@@ -396,7 +397,9 @@ class SyncedNewtonSolver : public SolverBase {
   double *d_norm_temp_;  // Reusable temp for cuBLAS norms
 
   // Analysis reuse flags
-  bool fixed_sparsity_pattern_;  // User-set flag: if true, matrix structure is fixed
-  bool analysis_done_;           // Internal state: tracks if analysis has been performed
-  bool factorization_done_;      // Internal state: tracks if factorization has been performed (needed for refactorization)
+  bool fixed_sparsity_pattern_;  // User-set flag: if true, matrix structure is
+                                 // fixed
+  bool analysis_done_;  // Internal state: tracks if analysis has been performed
+  bool factorization_done_;  // Internal state: tracks if factorization has been
+                             // performed (needed for refactorization)
 };

@@ -1,12 +1,12 @@
 #include "cpu_utils.h"
 
-#include <fstream>
-#include <iostream>
-#include <sstream>
 #include <algorithm>
-#include <numeric>
 #include <climits>
 #include <cstring>
+#include <fstream>
+#include <iostream>
+#include <numeric>
+#include <sstream>
 #include <stdexcept>
 
 namespace ANCFCPUUtils {
@@ -18,7 +18,7 @@ namespace ANCFCPUUtils {
 std::vector<std::set<int>> BuildVertexAdjacency(
     const Eigen::MatrixXi &element_connectivity, int n_nodes) {
   std::vector<std::set<int>> adj(n_nodes);
-  int n_elem = element_connectivity.rows();
+  int n_elem         = element_connectivity.rows();
   int nodes_per_elem = element_connectivity.cols();
 
   for (int e = 0; e < n_elem; ++e) {
@@ -38,7 +38,7 @@ std::vector<std::set<int>> BuildVertexAdjacency(
 Eigen::VectorXi GreedyVertexColoring(
     const std::vector<std::set<int>> &adjacency) {
   int n = static_cast<int>(adjacency.size());
-  
+
   // Compute degrees and sort by decreasing degree
   std::vector<int> degrees(n);
   for (int i = 0; i < n; ++i) {
@@ -76,17 +76,17 @@ Eigen::VectorXi GreedyVertexColoring(
 
 bool ValidateColoring(const Eigen::MatrixXi &element_connectivity,
                       const Eigen::VectorXi &colors) {
-  int n_elem = element_connectivity.rows();
+  int n_elem         = element_connectivity.rows();
   int nodes_per_elem = element_connectivity.cols();
 
   for (int e = 0; e < n_elem; ++e) {
     std::set<int> elem_colors;
     for (int i = 0; i < nodes_per_elem; ++i) {
       int node = element_connectivity(e, i);
-      int c = colors[node];
+      int c    = colors[node];
       if (elem_colors.count(c)) {
-        std::cerr << "Invalid coloring: element " << e << " has duplicate color "
-                  << c << std::endl;
+        std::cerr << "Invalid coloring: element " << e
+                  << " has duplicate color " << c << std::endl;
         return false;
       }
       elem_colors.insert(c);
@@ -98,7 +98,7 @@ bool ValidateColoring(const Eigen::MatrixXi &element_connectivity,
 std::vector<std::vector<std::pair<int, int>>> BuildNodeIncidence(
     const Eigen::MatrixXi &element_connectivity, int n_nodes) {
   std::vector<std::vector<std::pair<int, int>>> incidence(n_nodes);
-  int n_elem = element_connectivity.rows();
+  int n_elem         = element_connectivity.rows();
   int nodes_per_elem = element_connectivity.cols();
 
   for (int e = 0; e < n_elem; ++e) {
@@ -111,7 +111,7 @@ std::vector<std::vector<std::pair<int, int>>> BuildNodeIncidence(
 }
 
 std::vector<std::vector<int>> BuildColorToNodes(const Eigen::VectorXi &colors,
-                                                 int n_colors) {
+                                                int n_colors) {
   std::vector<std::vector<int>> color_to_nodes(n_colors);
   for (int i = 0; i < colors.size(); ++i) {
     int c = colors[i];

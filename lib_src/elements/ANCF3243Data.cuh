@@ -19,11 +19,11 @@
  *==============================================================
  *==============================================================*/
 
-#include "../../lib_utils/cuda_utils.h"
 #include "../../lib_utils/cpu_utils.h"
+#include "../../lib_utils/cuda_utils.h"
 #include "../../lib_utils/quadrature_utils.h"
-#include "ElementBase.h"
 #include "../materials/MaterialModel.cuh"
+#include "ElementBase.h"
 
 // Definition of GPU_ANCF3243 and data access device functions
 #pragma once
@@ -31,14 +31,23 @@
 //
 // define a SAP data strucutre
 struct GPU_ANCF3243_Data : public ElementBase {
+  // Constraint modes:
+  // - kConstraintFixedCoefficients: legacy fixed coefficient constraints via
+  //   d_fixed_nodes[] and x12_jac/y12_jac/z12_jac targets.
+  // - kConstraintLinearCSR: general linear constraints with explicit J in CSR
+  //   and per-row rhs targets.
+  static constexpr int kConstraintNone              = 0;
+  static constexpr int kConstraintFixedCoefficients = 1;
+  static constexpr int kConstraintLinearCSR         = 2;
+
 #if defined(__CUDACC__)
 
   // Const get functions
   __device__ const Eigen::Map<Eigen::MatrixXd> B_inv(int elem_idx) const {
     const int row_size = Quadrature::N_SHAPE_3243;
     const int col_size = Quadrature::N_SHAPE_3243;
-    return Eigen::Map<Eigen::MatrixXd>(
-        d_B_inv + elem_idx * row_size * col_size, row_size, col_size);
+    return Eigen::Map<Eigen::MatrixXd>(d_B_inv + elem_idx * row_size * col_size,
+                                       row_size, col_size);
   }
 
   __device__ Eigen::Map<Eigen::MatrixXd> grad_N_ref(int elem_idx,
@@ -46,8 +55,8 @@ struct GPU_ANCF3243_Data : public ElementBase {
     const int row_size = Quadrature::N_SHAPE_3243;
     const int col_size = 3;
     double *qp_data =
-        d_grad_N_ref +
-        (elem_idx * Quadrature::N_TOTAL_QP_3_2_2 + qp_idx) * row_size * col_size;
+        d_grad_N_ref + (elem_idx * Quadrature::N_TOTAL_QP_3_2_2 + qp_idx) *
+                           row_size * col_size;
     return Eigen::Map<Eigen::MatrixXd>(qp_data, row_size, col_size);
   }
 
@@ -284,6 +293,14 @@ struct GPU_ANCF3243_Data : public ElementBase {
     return Eigen::Map<Eigen::VectorXd>(d_constraint, n_constraint);
   }
 
+  __device__ const double *constraint_rhs() const {
+    return d_constraint_rhs;
+  }
+
+  __device__ int constraint_mode_device() const {
+    return constraint_mode;
+  }
+
   __device__ Eigen::Map<Eigen::VectorXi> fixed_nodes() {
     return Eigen::Map<Eigen::VectorXi>(d_fixed_nodes, n_constraint / 3);
   }
@@ -374,17 +391,29 @@ struct GPU_ANCF3243_Data : public ElementBase {
     return d_csr_values;
   }
 
-  __device__ int *cj_csr_offsets() { return d_cj_csr_offsets; }
+  __device__ int *cj_csr_offsets() {
+    return d_cj_csr_offsets;
+  }
 
-  __device__ int *cj_csr_columns() { return d_cj_csr_columns; }
+  __device__ int *cj_csr_columns() {
+    return d_cj_csr_columns;
+  }
 
-  __device__ double *cj_csr_values() { return d_cj_csr_values; }
+  __device__ double *cj_csr_values() {
+    return d_cj_csr_values;
+  }
 
-  __device__ int *j_csr_offsets() { return d_j_csr_offsets; }
+  __device__ int *j_csr_offsets() {
+    return d_j_csr_offsets;
+  }
 
-  __device__ int *j_csr_columns() { return d_j_csr_columns; }
+  __device__ int *j_csr_columns() {
+    return d_j_csr_columns;
+  }
 
-  __device__ double *j_csr_values() { return d_j_csr_values; }
+  __device__ double *j_csr_values() {
+    return d_j_csr_values;
+  }
 
   __device__ int nnz() {
     return *d_nnz;
@@ -404,19 +433,19 @@ struct GPU_ANCF3243_Data : public ElementBase {
   // Constructor
   GPU_ANCF3243_Data(int num_nodes, int num_elements)
       : n_nodes(num_nodes), n_elements(num_elements) {
-    n_beam = num_elements;  // Initialize n_beam with n_elements
-    n_coef = 4 * n_nodes;   // Non-overlapping DOFs: 4 DOFs per node
-    type   = TYPE_3243;
+    n_beam          = num_elements;  // Initialize n_beam with n_elements
+    n_coef          = 4 * n_nodes;   // Non-overlapping DOFs: 4 DOFs per node
+    type            = TYPE_3243;
+    constraint_mode = kConstraintNone;
   }
 
   void Initialize() {
-    HANDLE_ERROR(cudaMalloc(
-        &d_B_inv,
-        n_beam * Quadrature::N_SHAPE_3243 * Quadrature::N_SHAPE_3243 *
-            sizeof(double)));
-    HANDLE_ERROR(cudaMalloc(&d_grad_N_ref, n_beam * Quadrature::N_TOTAL_QP_3_2_2 *
-                                               Quadrature::N_SHAPE_3243 * 3 *
-                                               sizeof(double)));
+    HANDLE_ERROR(cudaMalloc(&d_B_inv, n_beam * Quadrature::N_SHAPE_3243 *
+                                          Quadrature::N_SHAPE_3243 *
+                                          sizeof(double)));
+    HANDLE_ERROR(cudaMalloc(&d_grad_N_ref,
+                            n_beam * Quadrature::N_TOTAL_QP_3_2_2 *
+                                Quadrature::N_SHAPE_3243 * 3 * sizeof(double)));
     HANDLE_ERROR(cudaMalloc(
         &d_detJ_ref, n_beam * Quadrature::N_TOTAL_QP_3_2_2 * sizeof(double)));
 
@@ -480,10 +509,11 @@ struct GPU_ANCF3243_Data : public ElementBase {
   }
 
   void Setup(const Eigen::VectorXd &length, const Eigen::VectorXd &width,
-             const Eigen::VectorXd &height,
-             const Eigen::VectorXd &gauss_xi_m, const Eigen::VectorXd &gauss_xi,
-             const Eigen::VectorXd &gauss_eta, const Eigen::VectorXd &gauss_zeta,
-             const Eigen::VectorXd &weight_xi_m, const Eigen::VectorXd &weight_xi,
+             const Eigen::VectorXd &height, const Eigen::VectorXd &gauss_xi_m,
+             const Eigen::VectorXd &gauss_xi, const Eigen::VectorXd &gauss_eta,
+             const Eigen::VectorXd &gauss_zeta,
+             const Eigen::VectorXd &weight_xi_m,
+             const Eigen::VectorXd &weight_xi,
              const Eigen::VectorXd &weight_eta,
              const Eigen::VectorXd &weight_zeta, const Eigen::VectorXd &h_x12,
              const Eigen::VectorXd &h_y12, const Eigen::VectorXd &h_z12,
@@ -507,8 +537,9 @@ struct GPU_ANCF3243_Data : public ElementBase {
       ANCFCPUUtils::ANCF3243_B12_matrix_flat_per_element(
           length, width, height, h_B_inv_flat, Quadrature::N_SHAPE_3243);
     } catch (const std::exception &e) {
-      std::cerr << "GPU_ANCF3243_Data::Setup: failed to build per-element B_inv: "
-                << e.what() << std::endl;
+      std::cerr
+          << "GPU_ANCF3243_Data::Setup: failed to build per-element B_inv: "
+          << e.what() << std::endl;
       return;
     }
     const int n_binv = static_cast<int>(h_B_inv_flat.size());
@@ -555,7 +586,8 @@ struct GPU_ANCF3243_Data : public ElementBase {
     HANDLE_ERROR(cudaMemcpy(d_z12, h_z12.data(), n_coef * sizeof(double),
                             cudaMemcpyHostToDevice));
 
-    HANDLE_ERROR(cudaMemcpy(d_element_connectivity, h_element_connectivity.data(),
+    HANDLE_ERROR(
+        cudaMemcpy(d_element_connectivity, h_element_connectivity.data(),
                    n_elements * 2 * sizeof(int), cudaMemcpyHostToDevice));
 
     cudaMemset(d_f_int, 0, n_coef * 3 * sizeof(double));
@@ -577,10 +609,10 @@ struct GPU_ANCF3243_Data : public ElementBase {
     HANDLE_ERROR(cudaMemcpy(d_L, length.data(), n_beam * sizeof(double),
                             cudaMemcpyHostToDevice));
 
-    double rho0        = 0.0;
-    double nu          = 0.0;
-    double E           = 0.0;
-    double mu = E / (2 * (1 + nu));  // Shear modulus μ
+    double rho0 = 0.0;
+    double nu   = 0.0;
+    double E    = 0.0;
+    double mu   = E / (2 * (1 + nu));  // Shear modulus μ
     double lambda =
         (E * nu) / ((1 + nu) * (1 - 2 * nu));  // Lamé’s first parameter λ
     double eta_damp    = 0.0;
@@ -614,13 +646,13 @@ struct GPU_ANCF3243_Data : public ElementBase {
     HANDLE_ERROR(cudaMemcpy(d_data, this, sizeof(GPU_ANCF3243_Data),
                             cudaMemcpyHostToDevice));
 
-    is_setup = true;
+    is_setup                 = true;
     is_reference_precomputed = false;
   }
 
   void Setup(double length, double width, double height,
-             const Eigen::VectorXd &gauss_xi_m,
-             const Eigen::VectorXd &gauss_xi, const Eigen::VectorXd &gauss_eta,
+             const Eigen::VectorXd &gauss_xi_m, const Eigen::VectorXd &gauss_xi,
+             const Eigen::VectorXd &gauss_eta,
              const Eigen::VectorXd &gauss_zeta,
              const Eigen::VectorXd &weight_xi_m,
              const Eigen::VectorXd &weight_xi,
@@ -701,7 +733,7 @@ struct GPU_ANCF3243_Data : public ElementBase {
     HANDLE_ERROR(cudaMemcpy(d_nu, &nu, sizeof(double), cudaMemcpyHostToDevice));
     HANDLE_ERROR(cudaMemcpy(d_E, &E, sizeof(double), cudaMemcpyHostToDevice));
 
-    double mu = E / (2 * (1 + nu));
+    double mu     = E / (2 * (1 + nu));
     double lambda = (E * nu) / ((1 + nu) * (1 - 2 * nu));
     HANDLE_ERROR(cudaMemcpy(d_mu, &mu, sizeof(double), cudaMemcpyHostToDevice));
     HANDLE_ERROR(
@@ -750,7 +782,8 @@ struct GPU_ANCF3243_Data : public ElementBase {
       return;
     }
 
-    n_constraint = fixed_nodes.size() * 3;
+    n_constraint    = fixed_nodes.size() * 3;
+    constraint_mode = kConstraintFixedCoefficients;
 
     HANDLE_ERROR(cudaMalloc(&d_constraint, n_constraint * sizeof(double)));
     HANDLE_ERROR(cudaMalloc(&d_fixed_nodes, fixed_nodes.size() * sizeof(int)));
@@ -759,6 +792,145 @@ struct GPU_ANCF3243_Data : public ElementBase {
     HANDLE_ERROR(cudaMemcpy(d_fixed_nodes, fixed_nodes.data(),
                             fixed_nodes.size() * sizeof(int),
                             cudaMemcpyHostToDevice));
+
+    is_constraints_setup = true;
+    if (d_data) {
+      HANDLE_ERROR(cudaMemcpy(d_data, this, sizeof(GPU_ANCF3243_Data),
+                              cudaMemcpyHostToDevice));
+    }
+  }
+
+  // General linear constraints:
+  //   c = J * x - rhs
+  // where x is the flattened coefficient vector in solver ordering
+  // (coef_index major, then xyz component), J is CSR (rows = constraints,
+  // cols = n_coef*3), and rhs is per-row target.
+  //
+  // This uploads both J (CSR) and J^T (CSR).
+  void SetLinearConstraintsCSR(const std::vector<int> &j_offsets,
+                               const std::vector<int> &j_columns,
+                               const std::vector<double> &j_values,
+                               const Eigen::VectorXd &rhs) {
+    if (is_constraints_setup) {
+      std::cerr << "GPU_ANCF3243_Data CONSTRAINT is already set up."
+                << std::endl;
+      return;
+    }
+    if (j_offsets.empty() || j_offsets.front() != 0) {
+      std::cerr << "SetLinearConstraintsCSR: invalid offsets." << std::endl;
+      return;
+    }
+    if (static_cast<int>(rhs.size()) + 1 !=
+        static_cast<int>(j_offsets.size())) {
+      std::cerr << "SetLinearConstraintsCSR: offsets/rhs size mismatch."
+                << std::endl;
+      return;
+    }
+    if (j_columns.size() != j_values.size()) {
+      std::cerr << "SetLinearConstraintsCSR: columns/values size mismatch."
+                << std::endl;
+      return;
+    }
+
+    const int nnz = static_cast<int>(j_columns.size());
+    if (j_offsets.back() != nnz) {
+      std::cerr << "SetLinearConstraintsCSR: offsets.back != nnz." << std::endl;
+      return;
+    }
+
+    const int n_dofs = n_coef * 3;
+    for (int c : j_columns) {
+      if (c < 0 || c >= n_dofs) {
+        std::cerr << "SetLinearConstraintsCSR: column out of range."
+                  << std::endl;
+        return;
+      }
+    }
+
+    d_fixed_nodes   = nullptr;
+    n_constraint    = static_cast<int>(rhs.size());
+    constraint_mode = kConstraintLinearCSR;
+
+    HANDLE_ERROR(cudaMalloc(&d_constraint, n_constraint * sizeof(double)));
+    HANDLE_ERROR(cudaMemset(d_constraint, 0, n_constraint * sizeof(double)));
+
+    HANDLE_ERROR(cudaMalloc(&d_constraint_rhs, n_constraint * sizeof(double)));
+    HANDLE_ERROR(cudaMemcpy(d_constraint_rhs, rhs.data(),
+                            n_constraint * sizeof(double),
+                            cudaMemcpyHostToDevice));
+
+    // J (CSR): rows=constraints, cols=dofs.
+    HANDLE_ERROR(
+        cudaMalloc((void **)&d_j_csr_offsets,
+                   static_cast<size_t>(n_constraint + 1) * sizeof(int)));
+    HANDLE_ERROR(cudaMalloc((void **)&d_j_csr_columns,
+                            static_cast<size_t>(nnz) * sizeof(int)));
+    HANDLE_ERROR(cudaMalloc((void **)&d_j_csr_values,
+                            static_cast<size_t>(nnz) * sizeof(double)));
+    HANDLE_ERROR(cudaMalloc((void **)&d_j_nnz, sizeof(int)));
+
+    HANDLE_ERROR(cudaMemcpy(d_j_csr_offsets, j_offsets.data(),
+                            static_cast<size_t>(n_constraint + 1) * sizeof(int),
+                            cudaMemcpyHostToDevice));
+    HANDLE_ERROR(cudaMemcpy(d_j_csr_columns, j_columns.data(),
+                            static_cast<size_t>(nnz) * sizeof(int),
+                            cudaMemcpyHostToDevice));
+    HANDLE_ERROR(cudaMemcpy(d_j_csr_values, j_values.data(),
+                            static_cast<size_t>(nnz) * sizeof(double),
+                            cudaMemcpyHostToDevice));
+    HANDLE_ERROR(
+        cudaMemcpy(d_j_nnz, &nnz, sizeof(int), cudaMemcpyHostToDevice));
+    is_j_csr_setup = true;
+
+    // Build J^T (CSR) on host: rows=dofs, cols=constraints.
+    std::vector<int> jt_offsets(static_cast<size_t>(n_dofs + 1), 0);
+    std::vector<int> jt_columns(static_cast<size_t>(nnz), 0);
+    std::vector<double> jt_values(static_cast<size_t>(nnz), 0.0);
+
+    std::vector<int> counts(static_cast<size_t>(n_dofs), 0);
+    for (int idx = 0; idx < nnz; ++idx) {
+      counts[static_cast<size_t>(j_columns[static_cast<size_t>(idx)])] += 1;
+    }
+    int running = 0;
+    for (int i = 0; i < n_dofs; ++i) {
+      jt_offsets[static_cast<size_t>(i)] = running;
+      running += counts[static_cast<size_t>(i)];
+    }
+    jt_offsets[static_cast<size_t>(n_dofs)] = nnz;
+
+    std::vector<int> positions = jt_offsets;
+    for (int row = 0; row < n_constraint; ++row) {
+      const int start = j_offsets[static_cast<size_t>(row)];
+      const int end   = j_offsets[static_cast<size_t>(row + 1)];
+      for (int idx = start; idx < end; ++idx) {
+        const int col = j_columns[static_cast<size_t>(idx)];
+        const int out = positions[static_cast<size_t>(col)]++;
+        jt_columns[static_cast<size_t>(out)] = row;
+        jt_values[static_cast<size_t>(out)] =
+            j_values[static_cast<size_t>(idx)];
+      }
+    }
+
+    HANDLE_ERROR(cudaMalloc((void **)&d_cj_csr_offsets,
+                            static_cast<size_t>(n_dofs + 1) * sizeof(int)));
+    HANDLE_ERROR(cudaMalloc((void **)&d_cj_csr_columns,
+                            static_cast<size_t>(nnz) * sizeof(int)));
+    HANDLE_ERROR(cudaMalloc((void **)&d_cj_csr_values,
+                            static_cast<size_t>(nnz) * sizeof(double)));
+    HANDLE_ERROR(cudaMalloc((void **)&d_cj_nnz, sizeof(int)));
+
+    HANDLE_ERROR(cudaMemcpy(d_cj_csr_offsets, jt_offsets.data(),
+                            static_cast<size_t>(n_dofs + 1) * sizeof(int),
+                            cudaMemcpyHostToDevice));
+    HANDLE_ERROR(cudaMemcpy(d_cj_csr_columns, jt_columns.data(),
+                            static_cast<size_t>(nnz) * sizeof(int),
+                            cudaMemcpyHostToDevice));
+    HANDLE_ERROR(cudaMemcpy(d_cj_csr_values, jt_values.data(),
+                            static_cast<size_t>(nnz) * sizeof(double),
+                            cudaMemcpyHostToDevice));
+    HANDLE_ERROR(
+        cudaMemcpy(d_cj_nnz, &nnz, sizeof(int), cudaMemcpyHostToDevice));
+    is_cj_csr_setup = true;
 
     is_constraints_setup = true;
     if (d_data) {
@@ -839,7 +1011,14 @@ struct GPU_ANCF3243_Data : public ElementBase {
 
     if (is_constraints_setup) {
       HANDLE_ERROR(cudaFree(d_constraint));
-      HANDLE_ERROR(cudaFree(d_fixed_nodes));
+      if (d_fixed_nodes) {
+        HANDLE_ERROR(cudaFree(d_fixed_nodes));
+        d_fixed_nodes = nullptr;
+      }
+      if (d_constraint_rhs) {
+        HANDLE_ERROR(cudaFree(d_constraint_rhs));
+        d_constraint_rhs = nullptr;
+      }
     }
 
     HANDLE_ERROR(cudaFree(d_data));
@@ -859,7 +1038,9 @@ struct GPU_ANCF3243_Data : public ElementBase {
 
   void ConvertToCSR_ConstraintJac();
 
-  void BuildConstraintJacobianCSR() { ConvertToCSR_ConstraintJac(); }
+  void BuildConstraintJacobianCSR() {
+    ConvertToCSR_ConstraintJac();
+  }
 
   void CalcP();
 
@@ -899,6 +1080,14 @@ struct GPU_ANCF3243_Data : public ElementBase {
     return is_constraints_setup;
   }
 
+  int GetConstraintMode() const {
+    return constraint_mode;
+  }
+
+  void RetrieveConstraintJacobianCSRToCPU(std::vector<int> &offsets,
+                                          std::vector<int> &columns,
+                                          std::vector<double> &values);
+
   GPU_ANCF3243_Data *d_data;  // Storing GPU copy of SAPGPUData
 
   int n_nodes;
@@ -937,6 +1126,7 @@ struct GPU_ANCF3243_Data : public ElementBase {
 
   double *d_constraint;
   int *d_fixed_nodes;
+  double *d_constraint_rhs = nullptr;
 
   // Constraint Jacobian J^T in CSR format
   int *d_cj_csr_offsets;
@@ -953,10 +1143,11 @@ struct GPU_ANCF3243_Data : public ElementBase {
   // force related parameters
   double *d_f_int, *d_f_ext;
 
-  bool is_setup             = false;
-  bool is_constraints_setup = false;
-  bool is_csr_setup         = false;
-  bool is_cj_csr_setup      = false;
-  bool is_j_csr_setup       = false;
+  bool is_setup                 = false;
+  bool is_constraints_setup     = false;
+  bool is_csr_setup             = false;
+  bool is_cj_csr_setup          = false;
+  bool is_j_csr_setup           = false;
   bool is_reference_precomputed = false;
+  int constraint_mode           = kConstraintNone;
 };

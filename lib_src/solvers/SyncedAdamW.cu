@@ -260,13 +260,14 @@ __global__ void one_step_adamw_kernel_impl(ElementType *d_data,
             norm_v_curr = sqrt(norm_v_curr);
 
             const double inner_tol = d_adamw_solver->solver_inner_tol();
-            const double rtol = d_adamw_solver->solver_inner_rtol();
-            const double tol_abs = inner_tol * (1.0 + norm_v_curr);
+            const double rtol      = d_adamw_solver->solver_inner_rtol();
+            const double tol_abs   = inner_tol * (1.0 + norm_v_curr);
             const double tol_rel =
                 (rtol > 0.0 && norm_g0 > 0.0) ? (rtol * norm_g0) : 0.0;
 
             printf(
-                "norm_g: %.17f, norm_v_curr: %.17f, tol_abs: %.17f, rtol*g0: %.17f\n",
+                "norm_g: %.17f, norm_v_curr: %.17f, tol_abs: %.17f, rtol*g0: "
+                "%.17f\n",
                 *d_adamw_solver->norm_g(), norm_v_curr, tol_abs, tol_rel);
 
             if (*d_adamw_solver->norm_g() <= tol_abs ||

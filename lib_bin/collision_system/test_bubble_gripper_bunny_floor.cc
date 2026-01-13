@@ -39,7 +39,7 @@ const double rho0 = 1000.0;  // Density (kg/m^3)
 // Simulation parameters
 const double gravity = -9.81;  // Gravity acceleration (m/s^2)
 const double dt      = 5e-4;   // Time step (s)
-const int num_steps  = 3000;   // Number of simulation steps (3x longer duration)
+const int num_steps  = 3000;  // Number of simulation steps (3x longer duration)
 const double grip_speed =
     0.00002;  // Gripper closing speed per step (m, slower again)
 
@@ -47,10 +47,10 @@ const double grip_speed =
 const double contact_damping  = 0.0;  // no Drake-style damping amplification
 const double contact_friction = 0.7;  // moderate friction
 
-using ANCFCPUUtils::VisualizationUtils;
 using ANCFCPUUtils::rotationX;
 using ANCFCPUUtils::translation;
 using ANCFCPUUtils::uniformScale;
+using ANCFCPUUtils::VisualizationUtils;
 
 int main(int argc, char** argv) {
   std::cout << "========================================" << std::endl;
@@ -93,9 +93,8 @@ int main(int argc, char** argv) {
   }
 
   // Load scaled bunny (center)
-  int mesh_bunny =
-      mesh_manager.LoadMesh(mesh_path + "bunny_3k.1.node",
-                            mesh_path + "bunny_3k.1.ele", "bunny");
+  int mesh_bunny = mesh_manager.LoadMesh(mesh_path + "bunny_3k.1.node",
+                                         mesh_path + "bunny_3k.1.ele", "bunny");
   if (mesh_bunny < 0) {
     std::cerr << "Failed to load bunny mesh" << std::endl;
     return 1;
@@ -107,9 +106,9 @@ int main(int argc, char** argv) {
   mesh_manager.TransformMesh(mesh_bunny, uniformScale(bunny_scale));
 
   // Load floor slab (table)
-  int mesh_floor = mesh_manager.LoadMesh(mesh_path + "1_1_01_floor.1.node",
-                                         mesh_path + "1_1_01_floor.1.ele",
-                                         "floor");
+  int mesh_floor =
+      mesh_manager.LoadMesh(mesh_path + "1_1_01_floor.1.node",
+                            mesh_path + "1_1_01_floor.1.ele", "floor");
   if (mesh_floor < 0) {
     std::cerr << "Failed to load floor mesh" << std::endl;
     return 1;
@@ -224,7 +223,7 @@ int main(int argc, char** argv) {
     double floor_min_z = 1e10, floor_max_z = -1e10;
 
     for (int i = 0; i < inst_floor.num_nodes; ++i) {
-      int idx = inst_floor.node_offset + i;
+      int idx     = inst_floor.node_offset + i;
       floor_min_x = std::min(floor_min_x, nodes_pre_floor(idx, 0));
       floor_max_x = std::max(floor_max_x, nodes_pre_floor(idx, 0));
       floor_min_y = std::min(floor_min_y, nodes_pre_floor(idx, 1));
@@ -304,7 +303,7 @@ int main(int argc, char** argv) {
   // Fix floor bottom layer: all nodes with z near the floor minimum
   double floor_z_min = 1e10;
   for (int i = 0; i < inst_floor.num_nodes; ++i) {
-    int idx = inst_floor.node_offset + i;
+    int idx     = inst_floor.node_offset + i;
     floor_z_min = std::min(floor_z_min, initial_nodes(idx, 2));
   }
   const double floor_z_fix_threshold = floor_z_min + 1e-6;

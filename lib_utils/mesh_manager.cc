@@ -127,25 +127,27 @@ bool readZipEntries(std::istream& is, std::vector<ZipEntry>& entries) {
     // Handle ZIP64 extended information (extra field ID 0x0001)
     uint64_t actual_compressed_size   = compressed_size;
     uint64_t actual_uncompressed_size = uncompressed_size;
-    
+
     if (extra_len > 0) {
       size_t extra_start = is.tellg();
       size_t extra_end   = extra_start + extra_len;
-      
+
       while (static_cast<size_t>(is.tellg()) + 4 <= extra_end) {
-        uint16_t header_id  = readUint16LE(is);
-        uint16_t data_size  = readUint16LE(is);
-        
+        uint16_t header_id = readUint16LE(is);
+        uint16_t data_size = readUint16LE(is);
+
         if (header_id == 0x0001) {  // ZIP64 extended information
           // Read ZIP64 sizes if they were set to 0xFFFFFFFF
           if (uncompressed_size == 0xFFFFFFFF && data_size >= 8) {
             actual_uncompressed_size = readUint32LE(is);
-            actual_uncompressed_size |= (static_cast<uint64_t>(readUint32LE(is)) << 32);
+            actual_uncompressed_size |=
+                (static_cast<uint64_t>(readUint32LE(is)) << 32);
             data_size -= 8;
           }
           if (compressed_size == 0xFFFFFFFF && data_size >= 8) {
             actual_compressed_size = readUint32LE(is);
-            actual_compressed_size |= (static_cast<uint64_t>(readUint32LE(is)) << 32);
+            actual_compressed_size |=
+                (static_cast<uint64_t>(readUint32LE(is)) << 32);
             data_size -= 8;
           }
           // Skip remaining ZIP64 data (relative header offset, disk start)
@@ -301,7 +303,7 @@ bool MeshManager::LoadScalarFieldFromNpz(int mesh_id,
       reinterpret_cast<const double*>(npy_data.data() + data_offset);
 
   // Try to load original_vertex_ids for mapping
-  std::string ids_name     = "original_vertex_ids.npy";
+  std::string ids_name      = "original_vertex_ids.npy";
   const ZipEntry* ids_entry = nullptr;
   for (const auto& e : entries) {
     if (e.filename == ids_name) {

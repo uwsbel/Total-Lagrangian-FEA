@@ -1,10 +1,14 @@
 bazel-*
 .bazel_*
+.DS_Store
+**/.DS_Store
 .vscode
 __pycache__/
 *.py[cod]
 test-scripts/hydropatch_proto/.venv
+test-scripts/**/net_*.ancf3243mesh
 temp/*
 node_x_history*.csv
 tip_z_history*.csv
 .~lock.*
+output/

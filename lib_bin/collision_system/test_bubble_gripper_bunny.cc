@@ -41,10 +41,10 @@ const double grip_speed =
 const double contact_damping  = 0.0;  // no Drake-style damping amplification
 const double contact_friction = 0.3;  // moderate friction
 
-using ANCFCPUUtils::VisualizationUtils;
 using ANCFCPUUtils::rotationX;
 using ANCFCPUUtils::rotationY;
 using ANCFCPUUtils::translation;
+using ANCFCPUUtils::VisualizationUtils;
 
 int main(int argc, char** argv) {
   std::cout << "========================================" << std::endl;

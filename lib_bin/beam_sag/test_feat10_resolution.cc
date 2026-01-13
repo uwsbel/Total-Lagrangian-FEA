@@ -7,9 +7,12 @@
  * Note: pass `--solver=adamw` to use `SyncedAdamWNocoopSolver`.
  *
  * Examples:
- *   ./bazel-bin/test_feat10_resolution --solver=adamw --res=8 --steps=50 --dt=1e-3 --csv
- *   ./bazel-bin/test_feat10_resolution --solver=vbd   --res=8 --steps=50 --dt=1e-3 --omega=1.8 --csv=out.csv
- *   ./bazel-bin/test_feat10_resolution --solver=newton --res=8 --steps=50 --dt=1e-3 --csv
+ *   ./bazel-bin/test_feat10_resolution --solver=adamw --res=8 --steps=50
+ * --dt=1e-3 --csv
+ *   ./bazel-bin/test_feat10_resolution --solver=vbd   --res=8 --steps=50
+ * --dt=1e-3 --omega=1.8 --csv=out.csv
+ *   ./bazel-bin/test_feat10_resolution --solver=newton --res=8 --steps=50
+ * --dt=1e-3 --csv
  */
 
 #include <cuda_runtime.h>
@@ -25,43 +28,42 @@
 #include <string>
 #include <vector>
 
-#include "../../lib_utils/quadrature_utils.h"
 #include "../../lib_src/elements/FEAT10Data.cuh"
 #include "../../lib_src/solvers/SyncedAdamWNocoop.cuh"
 #include "../../lib_src/solvers/SyncedNewton.cuh"
 #include "../../lib_src/solvers/SyncedVBD.cuh"
 #include "../../lib_utils/cpu_utils.h"
+#include "../../lib_utils/quadrature_utils.h"
 
 namespace {
 
-constexpr double kE = 7e8;
-constexpr double kNu = 0.33;
+constexpr double kE    = 7e8;
+constexpr double kNu   = 0.33;
 constexpr double kRho0 = 2700;
 
 enum class SolverKind { kNewton, kVbd, kAdamW };
 
 struct Options {
   SolverKind solver = SolverKind::kAdamW;
-  int steps = 50;
-  double dt = 1e-3;
-  double omega = std::numeric_limits<double>::quiet_NaN();  // VBD only
-  int res = 8;                                              // 0/2/4/8/16/32
-  bool write_csv = false;
+  int steps         = 50;
+  double dt         = 1e-3;
+  double omega      = std::numeric_limits<double>::quiet_NaN();  // VBD only
+  int res           = 8;  // 0/2/4/8/16/32
+  bool write_csv    = false;
   std::string csv_path;
 };
 
 void PrintUsage(const char* argv0) {
-  std::cout
-      << "Usage: " << argv0
-      << " [--solver=SOLVER] [--res=R] [--steps=N] [--dt=DT]\n"
-      << "                 [--omega=W] [--csv[=PATH]] [--help]\n\n"
-      << "  --solver=SOLVER   newton | vbd | adamw (default: adamw)\n"
-      << "                   (adamw uses SyncedAdamWNocoopSolver)\n"
-      << "  --res=R            0 | 2 | 4 | 8 | 16 | 32 (default: 8)\n"
-      << "  --steps=N          number of Solve() calls (default: 50)\n"
-      << "  --dt=DT            time step (default: 1e-3)\n"
-      << "  --omega=W          VBD relaxation factor (default: 1.8)\n"
-      << "  --csv[=PATH]       write target-node x history CSV\n";
+  std::cout << "Usage: " << argv0
+            << " [--solver=SOLVER] [--res=R] [--steps=N] [--dt=DT]\n"
+            << "                 [--omega=W] [--csv[=PATH]] [--help]\n\n"
+            << "  --solver=SOLVER   newton | vbd | adamw (default: adamw)\n"
+            << "                   (adamw uses SyncedAdamWNocoopSolver)\n"
+            << "  --res=R            0 | 2 | 4 | 8 | 16 | 32 (default: 8)\n"
+            << "  --steps=N          number of Solve() calls (default: 50)\n"
+            << "  --dt=DT            time step (default: 1e-3)\n"
+            << "  --omega=W          VBD relaxation factor (default: 1.8)\n"
+            << "  --csv[=PATH]       write target-node x history CSV\n";
 }
 
 bool StartsWith(const std::string& s, const std::string& prefix) {
@@ -71,8 +73,9 @@ bool StartsWith(const std::string& s, const std::string& prefix) {
 bool ParseInt(const std::string& s, int& out) {
   try {
     size_t idx = 0;
-    int v = std::stoi(s, &idx);
-    if (idx != s.size()) return false;
+    int v      = std::stoi(s, &idx);
+    if (idx != s.size())
+      return false;
     out = v;
     return true;
   } catch (...) {
@@ -83,8 +86,9 @@ bool ParseInt(const std::string& s, int& out) {
 bool ParseDouble(const std::string& s, double& out) {
   try {
     size_t idx = 0;
-    double v = std::stod(s, &idx);
-    if (idx != s.size()) return false;
+    double v   = std::stod(s, &idx);
+    if (idx != s.size())
+      return false;
     out = v;
     return true;
   } catch (...) {
@@ -137,7 +141,7 @@ bool ParseArgs(int argc, char** argv, Options& opt) {
     }
     if (StartsWith(arg, "--res=")) {
       const std::string v = arg.substr(std::string("--res=").size());
-      int r = 0;
+      int r               = 0;
       if (!ParseInt(v, r) ||
           !(r == 0 || r == 2 || r == 4 || r == 8 || r == 16 || r == 32)) {
         std::cerr << "Invalid --res: " << v << "\n";
@@ -176,7 +180,7 @@ bool ParseArgs(int argc, char** argv, Options& opt) {
     }
     if (StartsWith(arg, "--csv=")) {
       opt.write_csv = true;
-      opt.csv_path = arg.substr(std::string("--csv=").size());
+      opt.csv_path  = arg.substr(std::string("--csv=").size());
       continue;
     }
     std::cerr << "Unknown argument: " << arg << "\n";
@@ -186,8 +190,10 @@ bool ParseArgs(int argc, char** argv, Options& opt) {
 }
 
 std::string JoinPath(const std::string& a, const std::string& b) {
-  if (a.empty()) return b;
-  if (a.back() == '/') return a + b;
+  if (a.empty())
+    return b;
+  if (a.back() == '/')
+    return a + b;
   return a + "/" + b;
 }
 
@@ -206,7 +212,7 @@ int main(int argc, char** argv) {
     return 1;
   }
 
-  int device_count = 0;
+  int device_count          = 0;
   const cudaError_t dev_err = cudaGetDeviceCount(&device_count);
   if (dev_err != cudaSuccess || device_count <= 0) {
     std::cerr << "No CUDA device visible (cudaGetDeviceCount returned "
@@ -232,14 +238,14 @@ int main(int argc, char** argv) {
   Eigen::MatrixXd nodes;
   Eigen::MatrixXi elements;
   int plot_target_node = 0;
-  int n_nodes = 0;
-  int n_elems = 0;
+  int n_nodes          = 0;
+  int n_elems          = 0;
 
-  const std::string res_str = std::to_string(opt.res);
-  const std::string node_file =
-      mesh_path("data/meshes/T10/resolution/beam_3x2x1_res" + res_str + ".1.node");
-  const std::string elem_file =
-      mesh_path("data/meshes/T10/resolution/beam_3x2x1_res" + res_str + ".1.ele");
+  const std::string res_str   = std::to_string(opt.res);
+  const std::string node_file = mesh_path(
+      "data/meshes/T10/resolution/beam_3x2x1_res" + res_str + ".1.node");
+  const std::string elem_file = mesh_path(
+      "data/meshes/T10/resolution/beam_3x2x1_res" + res_str + ".1.ele");
 
   n_nodes = ANCFCPUUtils::FEAT10_read_nodes(node_file.c_str(), nodes);
   n_elems = ANCFCPUUtils::FEAT10_read_elements(elem_file.c_str(), elements);
@@ -369,9 +375,9 @@ int main(int argc, char** argv) {
       break;
     }
     case SolverKind::kVbd: {
-      const double omega = std::isnan(opt.omega) ? 1.8 : opt.omega;
-      SyncedVBDParams params = {1e-4,  1e-4,  1e-4,  1e14, 5,   500,  opt.dt,
-                                omega, 1e-12, 25,     1};
+      const double omega     = std::isnan(opt.omega) ? 1.8 : opt.omega;
+      SyncedVBDParams params = {1e-4,   1e-4,  1e-4,  1e14, 5, 500,
+                                opt.dt, omega, 1e-12, 25,   1};
       SyncedVBDSolver solver(&data, data.get_n_constraint());
       solver.Setup();
       solver.SetParameters(&params);
@@ -387,20 +393,20 @@ int main(int argc, char** argv) {
     case SolverKind::kAdamW: {
       SyncedAdamWNocoopParams params;
       if (opt.res == 0) {
-        params = {2e-4, 0.9, 0.999, 1e-8, 1e-4, 0.995, 1e-1, 1e-6,
-                  1e14, 5,   800,  opt.dt, 20,   1e-4};
+        params = {2e-4, 0.9,  0.999, 1e-8, 1e-4,   0.995, 1e-1,
+                  1e-6, 1e14, 5,     800,  opt.dt, 20,    1e-4};
       } else if (opt.res == 2) {
-        params = {2e-4, 0.9, 0.999, 1e-8, 1e-4, 0.995, 1e-1, 1e-6,
-                  1e14, 5,   800,  opt.dt, 20,   1e-4};
+        params = {2e-4, 0.9,  0.999, 1e-8, 1e-4,   0.995, 1e-1,
+                  1e-6, 1e14, 5,     800,  opt.dt, 20,    1e-4};
       } else if (opt.res == 4) {
-        params = {2e-4, 0.9, 0.999, 1e-8, 1e-4, 0.995, 1e-1, 1e-6,
-                  1e14, 5,   800,  opt.dt, 20,   1e-4};
+        params = {2e-4, 0.9,  0.999, 1e-8, 1e-4,   0.995, 1e-1,
+                  1e-6, 1e14, 5,     800,  opt.dt, 20,    1e-4};
       } else if (opt.res == 8) {
-        params = {2.5e-4, 0.9, 0.999, 1e-8, 1e-4, 0.998, 1e-1, 1e-6,
-                  1e14,   5,   800,  opt.dt, 20,   1e-4};
+        params = {2.5e-4, 0.9,  0.999, 1e-8, 1e-4,   0.998, 1e-1,
+                  1e-6,   1e14, 5,     800,  opt.dt, 20,    1e-4};
       } else if (opt.res == 16) {
-        params = {2.5e-4, 0.9, 0.999, 1e-8, 1e-4, 0.998, 1e-1, 1e-6,
-                  1e14,   5,   800,  opt.dt, 20,   1e-4};
+        params = {2.5e-4, 0.9,  0.999, 1e-8, 1e-4,   0.998, 1e-1,
+                  1e-6,   1e14, 5,     800,  opt.dt, 20,    1e-4};
       } else {
         std::cerr << "Unsupported resolution" << std::endl;
         return 1;

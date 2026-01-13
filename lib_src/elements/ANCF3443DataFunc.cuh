@@ -12,10 +12,11 @@
  *==============================================================
  *==============================================================*/
 
-#include "ANCF3443Data.cuh"
-#include "../materials/SVK.cuh"
-#include "../materials/MooneyRivlin.cuh"
 #include <cmath>
+
+#include "../materials/MooneyRivlin.cuh"
+#include "../materials/SVK.cuh"
+#include "ANCF3443Data.cuh"
 
 // forward-declare solver type (pointer-only used here)
 struct SyncedNewtonSolver;
@@ -55,8 +56,8 @@ __device__ __forceinline__ void ancf3443_solve_3x3_system(double A[3][3],
     if (pivot_row != k) {
 #pragma unroll
       for (int j = 0; j < 4; j++) {
-        double tmp       = aug[k][j];
-        aug[k][j]        = aug[pivot_row][j];
+        double tmp        = aug[k][j];
+        aug[k][j]         = aug[pivot_row][j];
         aug[pivot_row][j] = tmp;
       }
     }
@@ -538,16 +539,48 @@ __device__ __forceinline__ void compute_constraint_data(
     GPU_ANCF3443_Data *d_data) {
   int thread_idx = blockIdx.x * blockDim.x + threadIdx.x;
 
-  if (thread_idx < d_data->gpu_n_constraint() / 3) {
-    d_data->constraint()[thread_idx * 3 + 0] =
-        d_data->x12()(d_data->fixed_nodes()[thread_idx]) -
-        d_data->x12_jac()(d_data->fixed_nodes()[thread_idx]);
-    d_data->constraint()[thread_idx * 3 + 1] =
-        d_data->y12()(d_data->fixed_nodes()[thread_idx]) -
-        d_data->y12_jac()(d_data->fixed_nodes()[thread_idx]);
-    d_data->constraint()[thread_idx * 3 + 2] =
-        d_data->z12()(d_data->fixed_nodes()[thread_idx]) -
-        d_data->z12_jac()(d_data->fixed_nodes()[thread_idx]);
+  const int mode = d_data->constraint_mode_device();
+
+  if (mode == GPU_ANCF3443_Data::kConstraintFixedCoefficients) {
+    if (thread_idx < d_data->gpu_n_constraint() / 3) {
+      d_data->constraint()[thread_idx * 3 + 0] =
+          d_data->x12()(d_data->fixed_nodes()[thread_idx]) -
+          d_data->x12_jac()(d_data->fixed_nodes()[thread_idx]);
+      d_data->constraint()[thread_idx * 3 + 1] =
+          d_data->y12()(d_data->fixed_nodes()[thread_idx]) -
+          d_data->y12_jac()(d_data->fixed_nodes()[thread_idx]);
+      d_data->constraint()[thread_idx * 3 + 2] =
+          d_data->z12()(d_data->fixed_nodes()[thread_idx]) -
+          d_data->z12_jac()(d_data->fixed_nodes()[thread_idx]);
+    }
+    return;
+  }
+
+  if (mode == GPU_ANCF3443_Data::kConstraintLinearCSR) {
+    const int row = thread_idx;
+    if (row >= d_data->gpu_n_constraint()) {
+      return;
+    }
+
+    const int start = d_data->j_csr_offsets()[row];
+    const int end   = d_data->j_csr_offsets()[row + 1];
+    double sum      = 0.0;
+    for (int idx = start; idx < end; ++idx) {
+      const int col  = d_data->j_csr_columns()[idx];
+      const double w = d_data->j_csr_values()[idx];
+      const int coef = col / 3;
+      const int comp = col - coef * 3;
+      double v       = 0.0;
+      if (comp == 0)
+        v = d_data->x12()(coef);
+      if (comp == 1)
+        v = d_data->y12()(coef);
+      if (comp == 2)
+        v = d_data->z12()(coef);
+      sum += w * v;
+    }
+    d_data->constraint()(row) = sum - d_data->constraint_rhs()[row];
+    return;
   }
 }
 
@@ -608,9 +641,9 @@ __device__ __forceinline__ void vbd_accumulate_residual_and_hessian_diag(
   const double Fh1 = F10 * ha0 + F11 * ha1 + F12 * ha2;
   const double Fh2 = F20 * ha0 + F21 * ha1 + F22 * ha2;
 
-  const double hij        = ha0 * ha0 + ha1 * ha1 + ha2 * ha2;
-  const double Fh_dot_Fh  = Fh0 * Fh0 + Fh1 * Fh1 + Fh2 * Fh2;
-  const double weight_k   = dt * dV;
+  const double hij       = ha0 * ha0 + ha1 * ha1 + ha2 * ha2;
+  const double Fh_dot_Fh = Fh0 * Fh0 + Fh1 * Fh1 + Fh2 * Fh2;
+  const double weight_k  = dt * dV;
 
   double Kblock[3][3];
   if (d_data->material_model() == MATERIAL_MODEL_MOONEY_RIVLIN) {
@@ -637,9 +670,8 @@ __device__ __forceinline__ void vbd_accumulate_residual_and_hessian_diag(
     }
   } else {
     const double Fh_vec[3] = {Fh0, Fh1, Fh2};
-    const double FFT[3][3] = {{FFT00, FFT01, FFT02},
-                              {FFT10, FFT11, FFT12},
-                              {FFT20, FFT21, FFT22}};
+    const double FFT[3][3] = {
+        {FFT00, FFT01, FFT02}, {FFT10, FFT11, FFT12}, {FFT20, FFT21, FFT22}};
     svk_compute_tangent_block(Fh_vec, Fh_vec, hij, trE, Fh_dot_Fh, FFT,
                               d_data->lambda(), d_data->mu(), weight_k, Kblock);
   }
@@ -777,11 +809,12 @@ __device__ __forceinline__ void compute_hessian_assemble_csr<GPU_ANCF3443_Data>(
       d_data->weight_zeta()(qp_idx % Quadrature::N_QP_3);
   double dV = d_data->detJ_ref(elem_idx, qp_idx) * scale;
 
-  const bool use_mr = (d_data->material_model() == MATERIAL_MODEL_MOONEY_RIVLIN);
+  const bool use_mr =
+      (d_data->material_model() == MATERIAL_MODEL_MOONEY_RIVLIN);
   double A_mr[3][3][3][3];
   if (use_mr) {
-    mr_compute_tangent_tensor(F, d_data->mu10(), d_data->mu01(), d_data->kappa(),
-                              A_mr);
+    mr_compute_tangent_tensor(F, d_data->mu10(), d_data->mu01(),
+                              d_data->kappa(), A_mr);
   }
 
   // Local K_elem (48 x 48)
@@ -823,7 +856,7 @@ __device__ __forceinline__ void compute_hessian_assemble_csr<GPU_ANCF3443_Data>(
         }
       } else {
         svk_compute_tangent_block(Fh[i], Fh[j], h_ij, trE, Fhj_dot_Fhi, FFT,
-                                 lambda, mu, dV, Kblock);
+                                  lambda, mu, dV, Kblock);
       }
 
       for (int d = 0; d < 3; d++) {

@@ -26,6 +26,13 @@ cc_library(
 )
 
 cc_library(
+    name = "cli_utils",
+    srcs = ["cli_utils.cc"],
+    hdrs = ["cli_utils.h"],
+    copts = ["--std=c++17"],
+)
+
+cc_library(
     name = "mesh_manager",
     srcs = ["mesh_manager.cc"],
     hdrs = ["mesh_manager.h"],
@@ -80,4 +87,3 @@ cc_library(
     copts = ["--std=c++17"],
     deps = ["//lib_src/collision:collision_system_interface"],
 )
-

@@ -33,10 +33,10 @@ class ElementBase {
   virtual __host__ __device__ int get_n_coef() const = 0;
 
   // Core computation functions (actually implemented and used)
-  virtual void CalcMassMatrix()     = 0;
-  virtual void CalcInternalForce()  = 0;
-  virtual void CalcConstraintData() = 0;
-  virtual void CalcP()              = 0;
+  virtual void CalcMassMatrix()                                            = 0;
+  virtual void CalcInternalForce()                                         = 0;
+  virtual void CalcConstraintData()                                        = 0;
+  virtual void CalcP()                                                     = 0;
   virtual void RetrieveInternalForceToCPU(Eigen::VectorXd &internal_force) = 0;
   virtual void RetrieveConstraintDataToCPU(Eigen::VectorXd &constraint)    = 0;
   virtual void RetrieveConstraintJacobianToCPU(

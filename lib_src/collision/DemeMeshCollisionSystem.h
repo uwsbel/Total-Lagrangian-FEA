@@ -53,8 +53,7 @@ struct DemeMeshCollisionBody {
 class DemeMeshCollisionSystem final : public CollisionSystem {
  public:
   DemeMeshCollisionSystem(std::vector<DemeMeshCollisionBody> bodies,
-                          double friction,
-                          bool enable_self_collision);
+                          double friction, bool enable_self_collision);
 
   ~DemeMeshCollisionSystem() override;
 
@@ -75,7 +74,7 @@ class DemeMeshCollisionSystem final : public CollisionSystem {
     // `solver_->Initialize()`.
     std::shared_ptr<deme::DEMMesh> mesh_handle;
     unsigned int owner = 0;
-    size_t tri_start = 0;
+    size_t tri_start   = 0;
   };
 
   std::vector<RuntimeBody> bodies_;
@@ -86,7 +85,7 @@ class DemeMeshCollisionSystem final : public CollisionSystem {
 
   // FE node buffer (device)
   double* d_nodes_xyz_ = nullptr;
-  int n_nodes_ = 0;
+  int n_nodes_         = 0;
 
   // Output buffer (device): length 3*n_nodes_
   double* d_f_contact_ = nullptr;

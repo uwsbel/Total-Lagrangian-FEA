@@ -29,10 +29,10 @@ struct SyncedVBDParams {
   double inner_tol, inner_rtol, outer_tol, rho;
   int max_outer, max_inner;
   double time_step;
-  double omega;            // Relaxation factor (default 1.0)
-  double hess_eps;         // Regularization for local Hessian (default 1e-12)
+  double omega;     // Relaxation factor (default 1.0)
+  double hess_eps;  // Regularization for local Hessian (default 1e-12)
   int convergence_check_interval;
-  int color_group_size;    // Group multiple colors per refresh (default 1)
+  int color_group_size;  // Group multiple colors per refresh (default 1)
 };
 
 class SyncedVBDSolver : public SolverBase {
@@ -97,7 +97,8 @@ class SyncedVBDSolver : public SolverBase {
     }
 
     if (d_data_ == nullptr) {
-      std::cerr << "d_data_ is null in SyncedVBDSolver constructor" << std::endl;
+      std::cerr << "d_data_ is null in SyncedVBDSolver constructor"
+                << std::endl;
     }
 
     // Allocate velocity and state buffers
@@ -160,7 +161,7 @@ class SyncedVBDSolver : public SolverBase {
 
     // Dedicated stream for CUDA graph capture (do not use default stream).
     HANDLE_ERROR(cudaStreamCreateWithFlags(&graph_capture_stream_,
-                                          cudaStreamNonBlocking));
+                                           cudaStreamNonBlocking));
   }
 
   ~SyncedVBDSolver() {
@@ -195,31 +196,43 @@ class SyncedVBDSolver : public SolverBase {
     cudaFree(d_z12_prev);
 
     // Free coloring data
-    if (d_colors_) cudaFree(d_colors_);
-    if (d_color_offsets_) cudaFree(d_color_offsets_);
-    if (d_color_nodes_) cudaFree(d_color_nodes_);
-    if (d_incidence_offsets_) cudaFree(d_incidence_offsets_);
-    if (d_incidence_data_) cudaFree(d_incidence_data_);
-    if (d_mass_diag_blocks_) cudaFree(d_mass_diag_blocks_);
+    if (d_colors_)
+      cudaFree(d_colors_);
+    if (d_color_offsets_)
+      cudaFree(d_color_offsets_);
+    if (d_color_nodes_)
+      cudaFree(d_color_nodes_);
+    if (d_incidence_offsets_)
+      cudaFree(d_incidence_offsets_);
+    if (d_incidence_data_)
+      cudaFree(d_incidence_data_);
+    if (d_mass_diag_blocks_)
+      cudaFree(d_mass_diag_blocks_);
 
-    if (h_color_offsets_cache_) delete[] h_color_offsets_cache_;
-    if (d_fixed_map_) cudaFree(d_fixed_map_);
+    if (h_color_offsets_cache_)
+      delete[] h_color_offsets_cache_;
+    if (d_fixed_map_)
+      cudaFree(d_fixed_map_);
 
-    if (cublas_handle_) cublasDestroy(cublas_handle_);
-    if (d_norm_temp_) cudaFree(d_norm_temp_);
+    if (cublas_handle_)
+      cublasDestroy(cublas_handle_);
+    if (d_norm_temp_)
+      cudaFree(d_norm_temp_);
 
-    if (h_color_group_offsets_cache_) delete[] h_color_group_offsets_cache_;
-    if (h_color_group_colors_cache_) delete[] h_color_group_colors_cache_;
+    if (h_color_group_offsets_cache_)
+      delete[] h_color_group_offsets_cache_;
+    if (h_color_group_colors_cache_)
+      delete[] h_color_group_colors_cache_;
   }
 
   void SetParameters(void *params) override {
     SyncedVBDParams *p = static_cast<SyncedVBDParams *>(params);
 
-    h_inner_tol_ = p->inner_tol;
-    h_inner_rtol_ = p->inner_rtol;
-    h_outer_tol_ = p->outer_tol;
-    h_max_outer_ = p->max_outer;
-    h_max_inner_ = p->max_inner;
+    h_inner_tol_           = p->inner_tol;
+    h_inner_rtol_          = p->inner_rtol;
+    h_outer_tol_           = p->outer_tol;
+    h_max_outer_           = p->max_outer;
+    h_max_inner_           = p->max_inner;
     h_conv_check_interval_ = p->convergence_check_interval;
     h_color_group_size_ = (p->color_group_size > 0 ? p->color_group_size : 1);
 
@@ -286,23 +299,53 @@ class SyncedVBDSolver : public SolverBase {
     return Eigen::Map<Eigen::VectorXd>(d_g_, 3 * n_coef_);
   }
 
-  __device__ int gpu_n_constraints() { return n_constraints_; }
-  __device__ int gpu_n_total_qp() { return n_total_qp_; }
-  __device__ int gpu_n_shape() { return n_shape_; }
+  __device__ int gpu_n_constraints() {
+    return n_constraints_;
+  }
+  __device__ int gpu_n_total_qp() {
+    return n_total_qp_;
+  }
+  __device__ int gpu_n_shape() {
+    return n_shape_;
+  }
 
-  __device__ double *norm_g() { return d_norm_g_; }
-  __device__ int *inner_flag() { return d_inner_flag_; }
-  __device__ int *outer_flag() { return d_outer_flag_; }
-  __device__ double *solver_rho() { return d_solver_rho_; }
+  __device__ double *norm_g() {
+    return d_norm_g_;
+  }
+  __device__ int *inner_flag() {
+    return d_inner_flag_;
+  }
+  __device__ int *outer_flag() {
+    return d_outer_flag_;
+  }
+  __device__ double *solver_rho() {
+    return d_solver_rho_;
+  }
 
-  __device__ double solver_inner_tol() const { return *d_inner_tol_; }
-  __device__ double solver_inner_rtol() const { return *d_inner_rtol_; }
-  __device__ double solver_outer_tol() const { return *d_outer_tol_; }
-  __device__ int solver_max_outer() const { return *d_max_outer_; }
-  __device__ int solver_max_inner() const { return *d_max_inner_; }
-  __device__ double solver_time_step() const { return *d_time_step_; }
-  __device__ double solver_omega() const { return *d_omega_; }
-  __device__ double solver_hess_eps() const { return *d_hess_eps_; }
+  __device__ double solver_inner_tol() const {
+    return *d_inner_tol_;
+  }
+  __device__ double solver_inner_rtol() const {
+    return *d_inner_rtol_;
+  }
+  __device__ double solver_outer_tol() const {
+    return *d_outer_tol_;
+  }
+  __device__ int solver_max_outer() const {
+    return *d_max_outer_;
+  }
+  __device__ int solver_max_inner() const {
+    return *d_max_inner_;
+  }
+  __device__ double solver_time_step() const {
+    return *d_time_step_;
+  }
+  __device__ double solver_omega() const {
+    return *d_omega_;
+  }
+  __device__ double solver_hess_eps() const {
+    return *d_hess_eps_;
+  }
   __device__ int solver_convergence_check_interval() const {
     return *d_convergence_check_interval_;
   }
@@ -318,25 +361,49 @@ class SyncedVBDSolver : public SolverBase {
   }
 
   // Coloring accessors
-  __device__ int n_colors() const { return n_colors_; }
-  __device__ int *colors() { return d_colors_; }
-  __device__ int *color_offsets() { return d_color_offsets_; }
-  __device__ int *color_nodes() { return d_color_nodes_; }
-  __device__ int *incidence_offsets() { return d_incidence_offsets_; }
-  __device__ int2 *incidence_data() { return d_incidence_data_; }
-  __device__ double *mass_diag_blocks() { return d_mass_diag_blocks_; }
-  __device__ int *fixed_map() { return d_fixed_map_; }
+  __device__ int n_colors() const {
+    return n_colors_;
+  }
+  __device__ int *colors() {
+    return d_colors_;
+  }
+  __device__ int *color_offsets() {
+    return d_color_offsets_;
+  }
+  __device__ int *color_nodes() {
+    return d_color_nodes_;
+  }
+  __device__ int *incidence_offsets() {
+    return d_incidence_offsets_;
+  }
+  __device__ int2 *incidence_data() {
+    return d_incidence_data_;
+  }
+  __device__ double *mass_diag_blocks() {
+    return d_mass_diag_blocks_;
+  }
+  __device__ int *fixed_map() {
+    return d_fixed_map_;
+  }
 #endif
 
-  __host__ __device__ int get_n_coef() const { return n_coef_; }
-  __host__ __device__ int get_n_beam() const { return n_beam_; }
+  __host__ __device__ int get_n_coef() const {
+    return n_coef_;
+  }
+  __host__ __device__ int get_n_beam() const {
+    return n_beam_;
+  }
 
   // Host accessor for device velocity guess pointer
-  double *GetVelocityGuessDevicePtr() const { return d_v_guess_; }
+  double *GetVelocityGuessDevicePtr() const {
+    return d_v_guess_;
+  }
 
   void OneStepVBD();
 
-  void Solve() override { OneStepVBD(); }
+  void Solve() override {
+    OneStepVBD();
+  }
 
   double compute_l2_norm_cublas(double *d_vec, int n_dofs);
 
@@ -367,18 +434,21 @@ class SyncedVBDSolver : public SolverBase {
   // Coloring data structures
   bool coloring_initialized_;
   int n_colors_;
-  int *d_colors_;           // Color assignment per node (n_coef_)
-  int *d_color_offsets_;    // Offsets into color_nodes for each color (n_colors_+1)
-  int *d_color_nodes_;      // Flat array of node indices grouped by color
-  int *d_incidence_offsets_; // Offset into incidence_data per node (n_coef_+1)
-  int2 *d_incidence_data_;   // (element_idx, local_node_idx) pairs
-  int *h_color_offsets_cache_;   // Host cache of d_color_offsets_ (n_colors_+1)
+  int *d_colors_;             // Color assignment per node (n_coef_)
+  int *d_color_offsets_;      // Offsets into color_nodes for each color
+                              // (n_colors_+1)
+  int *d_color_nodes_;        // Flat array of node indices grouped by color
+  int *d_incidence_offsets_;  // Offset into incidence_data per node (n_coef_+1)
+  int2 *d_incidence_data_;    // (element_idx, local_node_idx) pairs
+  int *h_color_offsets_cache_;  // Host cache of d_color_offsets_ (n_colors_+1)
   int h_color_offsets_cache_size_;
-  int h_color_group_size_;           // Desired number of colors per group
-  int n_color_groups_;               // Number of groups in schedule
-  int *h_color_group_offsets_cache_; // Offsets into h_color_group_colors_cache_
+  int h_color_group_size_;  // Desired number of colors per group
+  int n_color_groups_;      // Number of groups in schedule
+  int *
+      h_color_group_offsets_cache_;  // Offsets into h_color_group_colors_cache_
   int h_color_group_offsets_cache_size_;
-  int *h_color_group_colors_cache_;  // Flat list of color indices (size n_colors_)
+  int *h_color_group_colors_cache_;  // Flat list of color indices (size
+                                     // n_colors_)
   int h_color_group_colors_cache_size_;
   bool fixed_map_initialized_;
   int *d_fixed_map_;  // (n_coef_) node->k in fixed_nodes, or -1 if not fixed

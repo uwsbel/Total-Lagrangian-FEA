@@ -5,7 +5,8 @@
  * (Newton / Nesterov / AdamW / VBD). Use `--solver=...` to select the solver.
  *
  * Example:
- *   ./bazel-bin/test_ancf3443 --solver=vbd --steps=50 --dt=1e-3 --omega=1.8 --csv
+ *   ./bazel-bin/test_ancf3443 --solver=vbd --steps=50 --dt=1e-3 --omega=1.8
+ * --csv
  */
 
 #include <cuda_runtime.h>
@@ -21,37 +22,37 @@
 #include <string>
 #include <vector>
 
-#include "../../lib_utils/quadrature_utils.h"
 #include "../../lib_src/elements/ANCF3443Data.cuh"
 #include "../../lib_src/solvers/SyncedAdamWNocoop.cuh"
 #include "../../lib_src/solvers/SyncedNesterov.cuh"
 #include "../../lib_src/solvers/SyncedNewton.cuh"
 #include "../../lib_src/solvers/SyncedVBD.cuh"
+#include "../../lib_utils/quadrature_utils.h"
 #include "../../lib_utils/visualization_utils.h"
 
 namespace {
 
-constexpr double kE = 7e8;
-constexpr double kNu = 0.33;
+constexpr double kE    = 7e8;
+constexpr double kNu   = 0.33;
 constexpr double kRho0 = 2700;
 
-constexpr double kDefaultL = 2.0;
-constexpr double kDefaultW = 1.0;
-constexpr double kDefaultH = 0.1;
-constexpr int kVtuEvery = 20;
+constexpr double kDefaultL       = 2.0;
+constexpr double kDefaultW       = 1.0;
+constexpr double kDefaultH       = 0.1;
+constexpr int kVtuEvery          = 20;
 constexpr const char* kVtuPrefix = "ancf3443";
 
 enum class SolverKind { kNewton, kNesterov, kAdamW, kVbd };
 
 struct Options {
-  SolverKind solver = SolverKind::kVbd;
-  int n_beam = 2;
-  int steps = 50;
-  double dt = 1e-3;
+  SolverKind solver  = SolverKind::kVbd;
+  int n_beam         = 2;
+  int steps          = 50;
+  double dt          = 1e-3;
   double tip_force_z = std::numeric_limits<double>::quiet_NaN();
-  double lrratio = 0.5;
-  double omega = std::numeric_limits<double>::quiet_NaN();  // VBD only
-  bool write_csv = false;
+  double lrratio     = 0.5;
+  double omega       = std::numeric_limits<double>::quiet_NaN();  // VBD only
+  bool write_csv     = false;
   std::string csv_path;
   bool write_vtu = false;
 };
@@ -65,12 +66,16 @@ void PrintUsage(const char* argv0) {
       << "  --solver=SOLVER   newton | nesterov | adamw | vbd (default: vbd)\n"
       << "  --n_beam=N        number of elements (default: 2)\n"
       << "  --steps=N         number of Solve() calls (default: 50)\n"
-      << "  --dt=DT           time step passed to solver params (default: 1e-3)\n"
-      << "  --tip_force_z=FZ  total vertical force on free edge (default: -1000*0.1)\n"
+      << "  --dt=DT           time step passed to solver params (default: "
+         "1e-3)\n"
+      << "  --tip_force_z=FZ  total vertical force on free edge (default: "
+         "-1000*0.1)\n"
       << "  --lrratio=R       load ratio on -y tip node (default: 0.5)\n"
       << "  --omega=W         VBD relaxation factor (default: 1.8)\n"
-      << "  --csv[=PATH]      write tip displacement CSV (default path depends on solver)\n"
-      << "  --vtu             write VTU hex meshes to output/ancf3443/ (every 20 steps)\n";
+      << "  --csv[=PATH]      write tip displacement CSV (default path depends "
+         "on solver)\n"
+      << "  --vtu             write VTU hex meshes to output/ancf3443/ (every "
+         "20 steps)\n";
 }
 
 bool StartsWith(const std::string& s, const std::string& prefix) {
@@ -80,8 +85,9 @@ bool StartsWith(const std::string& s, const std::string& prefix) {
 bool ParseInt(const std::string& s, int& out) {
   try {
     size_t idx = 0;
-    int v = std::stoi(s, &idx);
-    if (idx != s.size()) return false;
+    int v      = std::stoi(s, &idx);
+    if (idx != s.size())
+      return false;
     out = v;
     return true;
   } catch (...) {
@@ -92,8 +98,9 @@ bool ParseInt(const std::string& s, int& out) {
 bool ParseDouble(const std::string& s, double& out) {
   try {
     size_t idx = 0;
-    double v = std::stod(s, &idx);
-    if (idx != s.size()) return false;
+    double v   = std::stod(s, &idx);
+    if (idx != s.size())
+      return false;
     out = v;
     return true;
   } catch (...) {
@@ -175,8 +182,7 @@ bool ParseArgs(int argc, char** argv, Options& opt) {
       continue;
     }
     if (StartsWith(arg, "--tip_force_z=")) {
-      const std::string v =
-          arg.substr(std::string("--tip_force_z=").size());
+      const std::string v = arg.substr(std::string("--tip_force_z=").size());
       if (!ParseDouble(v, opt.tip_force_z)) {
         std::cerr << "Invalid --tip_force_z: " << v << "\n";
         return false;
@@ -206,7 +212,7 @@ bool ParseArgs(int argc, char** argv, Options& opt) {
     }
     if (StartsWith(arg, "--csv=")) {
       opt.write_csv = true;
-      opt.csv_path = arg.substr(std::string("--csv=").size());
+      opt.csv_path  = arg.substr(std::string("--csv=").size());
       continue;
     }
     if (arg == "--vtu") {
@@ -282,9 +288,9 @@ int main(int argc, char** argv) {
   const int tip_node_b = element_connectivity(tip_elem, 2);
 
   // Identify -y / +y tip nodes from initial geometry.
-  const int tip_a_coef = tip_node_a * 4;
-  const int tip_b_coef = tip_node_b * 4;
-  const bool a_is_neg_y = h_y12(tip_a_coef) <= h_y12(tip_b_coef);
+  const int tip_a_coef     = tip_node_a * 4;
+  const int tip_b_coef     = tip_node_b * 4;
+  const bool a_is_neg_y    = h_y12(tip_a_coef) <= h_y12(tip_b_coef);
   const int tip_node_neg_y = a_is_neg_y ? tip_node_a : tip_node_b;
   const int tip_node_pos_y = a_is_neg_y ? tip_node_b : tip_node_a;
 
@@ -300,14 +306,13 @@ int main(int argc, char** argv) {
                         (1.0 - opt.lrratio) * opt.tip_force_z);
   data.SetExternalForce(h_f_ext);
 
-  data.Setup(L, W, H, Quadrature::gauss_xi_m_7,
-             Quadrature::gauss_eta_m_7, Quadrature::gauss_zeta_m_3,
-             Quadrature::gauss_xi_4, Quadrature::gauss_eta_4,
-             Quadrature::gauss_zeta_3, Quadrature::weight_xi_m_7,
-             Quadrature::weight_eta_m_7, Quadrature::weight_zeta_m_3,
-             Quadrature::weight_xi_4, Quadrature::weight_eta_4,
-             Quadrature::weight_zeta_3, h_x12, h_y12, h_z12,
-             element_connectivity);
+  data.Setup(L, W, H, Quadrature::gauss_xi_m_7, Quadrature::gauss_eta_m_7,
+             Quadrature::gauss_zeta_m_3, Quadrature::gauss_xi_4,
+             Quadrature::gauss_eta_4, Quadrature::gauss_zeta_3,
+             Quadrature::weight_xi_m_7, Quadrature::weight_eta_m_7,
+             Quadrature::weight_zeta_m_3, Quadrature::weight_xi_4,
+             Quadrature::weight_eta_4, Quadrature::weight_zeta_3, h_x12, h_y12,
+             h_z12, element_connectivity);
 
   data.SetDensity(kRho0);
   data.SetDamping(0.0, 0.0);
@@ -371,8 +376,8 @@ int main(int argc, char** argv) {
       break;
     }
     case SolverKind::kNesterov: {
-      SyncedNesterovParams params = {1.0e-8, 1e14, 1.0e-6, 1.0e-6, 5, 300,
-                                     opt.dt};
+      SyncedNesterovParams params = {1.0e-8, 1e14, 1.0e-6, 1.0e-6,
+                                     5,      300,  opt.dt};
       SyncedNesterovSolver solver(&data, data.get_n_constraint());
       solver.Setup();
       solver.SetParameters(&params);
@@ -394,9 +399,9 @@ int main(int argc, char** argv) {
       break;
     }
     case SolverKind::kAdamW: {
-      SyncedAdamWNocoopParams params = {
-          2e-4, 0.9, 0.999, 1e-8, 1e-4, 0.995, 1e-1,
-          1e-6, 1e14, 5,    500,  opt.dt, 10,  0.0};
+      SyncedAdamWNocoopParams params = {2e-4,  0.9,    0.999, 1e-8, 1e-4,
+                                        0.995, 1e-1,   1e-6,  1e14, 5,
+                                        500,   opt.dt, 10,    0.0};
       SyncedAdamWNocoopSolver solver(&data, data.get_n_constraint());
       solver.Setup();
       solver.SetParameters(&params);
@@ -418,9 +423,9 @@ int main(int argc, char** argv) {
       break;
     }
     case SolverKind::kVbd: {
-      const double omega = std::isnan(opt.omega) ? 1.8 : opt.omega;
-      SyncedVBDParams params = {1e-4,  1e-4,  1e-4,  1e14, 5,   500,  opt.dt,
-                                omega, 1e-12, 25,     1};
+      const double omega     = std::isnan(opt.omega) ? 1.8 : opt.omega;
+      SyncedVBDParams params = {1e-4,   1e-4,  1e-4,  1e14, 5, 500,
+                                opt.dt, omega, 1e-12, 25,   1};
       SyncedVBDSolver solver(&data, data.get_n_constraint());
       solver.Setup();
       solver.SetParameters(&params);

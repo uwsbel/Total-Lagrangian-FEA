@@ -6,7 +6,8 @@ namespace ANCFCPUUtils {
 
 bool WriteObj(const SurfaceTriMesh& mesh, const std::string& path) {
   std::ofstream out(path);
-  if (!out.is_open()) return false;
+  if (!out.is_open())
+    return false;
 
   for (const auto& v : mesh.vertices) {
     out << "v " << v.x() << " " << v.y() << " " << v.z() << "\n";
@@ -20,4 +21,3 @@ bool WriteObj(const SurfaceTriMesh& mesh, const std::string& path) {
 }
 
 }  // namespace ANCFCPUUtils
-

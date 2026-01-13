@@ -10,13 +10,12 @@
  *   Newton (cuDSS) only.
  */
 
+#include <cublas_v2.h>
 #include <cuda_runtime.h>
 
-#include <cublas_v2.h>
-
+#include <Eigen/Dense>
 #include <chrono>
 #include <cmath>
-#include <Eigen/Dense>
 #include <cstdlib>
 #include <filesystem>
 #include <iomanip>
@@ -27,12 +26,12 @@
 #include <string>
 #include <vector>
 
-#include "../../lib_src/elements/FEAT10Data.cuh"
-#include "../../lib_src/solvers/SyncedNewton.cuh"
-#include "../../lib_utils/cuda_utils.h"
 #include "../../lib_src/collision/DemeMeshCollisionSystem.h"
 #include "../../lib_src/collision/HydroelasticPatchCollisionSystem.h"
+#include "../../lib_src/elements/FEAT10Data.cuh"
+#include "../../lib_src/solvers/SyncedNewton.cuh"
 #include "../../lib_utils/cpu_utils.h"
+#include "../../lib_utils/cuda_utils.h"
 #include "../../lib_utils/mesh_manager.h"
 #include "../../lib_utils/quadrature_utils.h"
 #include "../../lib_utils/surface_trimesh_extract.h"
@@ -40,16 +39,17 @@
 
 // Material properties (for deformable items)
 const double E_val = 1e7;    // Young's modulus (Pa)
-const double nu    = 0.3;   // Poisson's ratio
-const double rho0  = 500.0; // Density (kg/m^3)
+const double nu    = 0.3;    // Poisson's ratio
+const double rho0  = 500.0;  // Density (kg/m^3)
 
 // Simulation parameters
-const double gravity = -9.81; // Gravity acceleration (m/s^2)
-const double dt      = 2e-4;  // Time step (s)
-const int    num_steps_default = 10000;
+const double gravity        = -9.81;  // Gravity acceleration (m/s^2)
+const double dt             = 2e-4;   // Time step (s)
+const int num_steps_default = 10000;
 
 // Contact parameters
-// Damping is critical for stability when contact begins; raise default to reduce bounce.
+// Damping is critical for stability when contact begins; raise default to
+// reduce bounce.
 const double contact_damping_default  = 50.0;
 const double contact_friction_default = 0.6;
 
@@ -58,8 +58,12 @@ using ANCFCPUUtils::VisualizationUtils;
 struct BBox {
   Eigen::Vector3d min;
   Eigen::Vector3d max;
-  Eigen::Vector3d size() const { return max - min; }
-  Eigen::Vector3d center() const { return 0.5 * (min + max); }
+  Eigen::Vector3d size() const {
+    return max - min;
+  }
+  Eigen::Vector3d center() const {
+    return 0.5 * (min + max);
+  }
 };
 
 static BBox ComputeBBox(const Eigen::MatrixXd& nodes,
@@ -69,12 +73,12 @@ static BBox ComputeBBox(const Eigen::MatrixXd& nodes,
   bb.max = Eigen::Vector3d(-1e30, -1e30, -1e30);
   for (int i = 0; i < inst.num_nodes; ++i) {
     const int idx = inst.node_offset + i;
-    bb.min(0) = std::min(bb.min(0), nodes(idx, 0));
-    bb.min(1) = std::min(bb.min(1), nodes(idx, 1));
-    bb.min(2) = std::min(bb.min(2), nodes(idx, 2));
-    bb.max(0) = std::max(bb.max(0), nodes(idx, 0));
-    bb.max(1) = std::max(bb.max(1), nodes(idx, 1));
-    bb.max(2) = std::max(bb.max(2), nodes(idx, 2));
+    bb.min(0)     = std::min(bb.min(0), nodes(idx, 0));
+    bb.min(1)     = std::min(bb.min(1), nodes(idx, 1));
+    bb.min(2)     = std::min(bb.min(2), nodes(idx, 2));
+    bb.max(0)     = std::max(bb.max(0), nodes(idx, 0));
+    bb.max(1)     = std::max(bb.max(1), nodes(idx, 1));
+    bb.max(2)     = std::max(bb.max(2), nodes(idx, 2));
   }
   return bb;
 }
@@ -92,21 +96,24 @@ static void PrintBBox(const std::string& label, const BBox& bb) {
 }
 
 static bool BBoxOverlaps(const BBox& a, const BBox& b, double eps = 0.0) {
-  const bool overlap_x = (a.min(0) <= b.max(0) + eps) && (a.max(0) + eps >= b.min(0));
-  const bool overlap_y = (a.min(1) <= b.max(1) + eps) && (a.max(1) + eps >= b.min(1));
-  const bool overlap_z = (a.min(2) <= b.max(2) + eps) && (a.max(2) + eps >= b.min(2));
+  const bool overlap_x =
+      (a.min(0) <= b.max(0) + eps) && (a.max(0) + eps >= b.min(0));
+  const bool overlap_y =
+      (a.min(1) <= b.max(1) + eps) && (a.max(1) + eps >= b.min(1));
+  const bool overlap_z =
+      (a.min(2) <= b.max(2) + eps) && (a.max(2) + eps >= b.min(2));
   return overlap_x && overlap_y && overlap_z;
 }
 
 namespace {
 
 struct Options {
-  double contact_damping  = contact_damping_default;
-  double contact_friction = contact_friction_default;
-  bool enable_self_collision = false;
+  double contact_damping        = contact_damping_default;
+  double contact_friction       = contact_friction_default;
+  bool enable_self_collision    = false;
   std::string collision_backend = "hydro";  // hydro | deme
-  int max_steps = num_steps_default;
-  int export_interval = 25;
+  int max_steps                 = num_steps_default;
+  int export_interval           = 25;
 };
 
 bool StartsWith(const std::string& s, const std::string& prefix) {
@@ -117,7 +124,8 @@ bool ParseInt(const std::string& s, int& out) {
   try {
     size_t idx = 0;
     int v      = std::stoi(s, &idx);
-    if (idx != s.size()) return false;
+    if (idx != s.size())
+      return false;
     out = v;
     return true;
   } catch (...) {
@@ -129,7 +137,8 @@ bool ParseDouble(const std::string& s, double& out) {
   try {
     size_t idx = 0;
     double v   = std::stod(s, &idx);
-    if (idx != s.size()) return false;
+    if (idx != s.size())
+      return false;
     out = v;
     return true;
   } catch (...) {
@@ -138,12 +147,14 @@ bool ParseDouble(const std::string& s, double& out) {
 }
 
 void PrintUsage(const char* argv0) {
-  std::cout
-      << "Usage:\n"
-      << "  " << argv0
-      << " [contact_damping] [contact_friction] [self_collision(0/1)] [max_steps] [export_interval]\n"
-      << "  " << argv0 << " [positional args...] [--collision=hydro|deme] [--help]\n"
-      << "  " << argv0 << " [positional args...] --collision hydro|deme [--help]\n";
+  std::cout << "Usage:\n"
+            << "  " << argv0
+            << " [contact_damping] [contact_friction] [self_collision(0/1)] "
+               "[max_steps] [export_interval]\n"
+            << "  " << argv0
+            << " [positional args...] [--collision=hydro|deme] [--help]\n"
+            << "  " << argv0
+            << " [positional args...] --collision hydro|deme [--help]\n";
 }
 
 bool ParseArgs(int argc, char** argv, Options& opt) {
@@ -184,28 +195,33 @@ bool ParseArgs(int argc, char** argv, Options& opt) {
     // Backward-compatible positional args.
     switch (positional_index) {
       case 0: {
-        if (!ParseDouble(arg, opt.contact_damping)) return false;
+        if (!ParseDouble(arg, opt.contact_damping))
+          return false;
         break;
       }
       case 1: {
-        if (!ParseDouble(arg, opt.contact_friction)) return false;
+        if (!ParseDouble(arg, opt.contact_friction))
+          return false;
         break;
       }
       case 2: {
         int v = 0;
-        if (!ParseInt(arg, v)) return false;
+        if (!ParseInt(arg, v))
+          return false;
         opt.enable_self_collision = (v != 0);
         break;
       }
       case 3: {
         int v = 0;
-        if (!ParseInt(arg, v) || v <= 0) return false;
+        if (!ParseInt(arg, v) || v <= 0)
+          return false;
         opt.max_steps = v;
         break;
       }
       case 4: {
         int v = 0;
-        if (!ParseInt(arg, v)) return false;
+        if (!ParseInt(arg, v))
+          return false;
         opt.export_interval = v;
         break;
       }
@@ -222,7 +238,8 @@ bool ParseArgs(int argc, char** argv, Options& opt) {
 
 static void CheckCublas(cublasStatus_t status, const char* what) {
   if (status != CUBLAS_STATUS_SUCCESS) {
-    std::cerr << "cuBLAS error (" << what << "): status=" << int(status) << "\n";
+    std::cerr << "cuBLAS error (" << what << "): status=" << int(status)
+              << "\n";
     std::exit(1);
   }
 }
@@ -260,8 +277,7 @@ int main(int argc, char** argv) {
                             floor_mesh_path + "1_1_01_floor.1.ele", "floor");
   const int mesh_dragon1 =
       mesh_manager.LoadMesh(item_mesh_path + "dragon.node",
-                            item_mesh_path + "dragon.ele",
-                            "dragon_1");
+                            item_mesh_path + "dragon.ele", "dragon_1");
   if (mesh_floor < 0 || mesh_dragon1 < 0) {
     std::cerr << "Failed to load one or more meshes.\n"
               << "  floor path: " << floor_mesh_path << "\n"
@@ -283,9 +299,8 @@ int main(int argc, char** argv) {
   // =========================================================================
   bool ok0 = mesh_manager.LoadScalarFieldFromNpz(
       mesh_floor, floor_mesh_path + "1_1_01_floor.1.npz", "p_vertex");
-  bool ok1 = mesh_manager.LoadScalarFieldFromNpz(mesh_dragon1,
-                                                 item_mesh_path + "dragon.npz",
-                                                 "p_vertex");
+  bool ok1 = mesh_manager.LoadScalarFieldFromNpz(
+      mesh_dragon1, item_mesh_path + "dragon.npz", "p_vertex");
   if (!ok0 || !ok1) {
     std::cerr << "Failed to load pressure fields from NPZ\n";
     return 1;
@@ -302,22 +317,20 @@ int main(int argc, char** argv) {
                                ANCFCPUUtils::uniformScale(floor_scale));
 
     const Eigen::MatrixXd& nodes0 = mesh_manager.GetAllNodes();
-    const BBox bb_floor = ComputeBBox(nodes0, inst_floor);
-    const BBox bb_d1  = ComputeBBox(nodes0, inst_dragon1);
+    const BBox bb_floor           = ComputeBBox(nodes0, inst_floor);
+    const BBox bb_d1              = ComputeBBox(nodes0, inst_dragon1);
 
     std::cout << "Initial bounding boxes:\n";
     PrintBBox("floor", bb_floor);
     PrintBBox("dragon_1", bb_d1);
 
-    auto centerMeshAt = [&](int mesh_id,
-                            const ANCFCPUUtils::MeshInstance& inst,
+    auto centerMeshAt = [&](int mesh_id, const ANCFCPUUtils::MeshInstance& inst,
                             const Eigen::Vector3d& target_center) {
       const Eigen::MatrixXd& nodes_before = mesh_manager.GetAllNodes();
-      const BBox bb = ComputeBBox(nodes_before, inst);
-      const Eigen::Vector3d delta = target_center - bb.center();
-      mesh_manager.TransformMesh(mesh_id,
-                                 ANCFCPUUtils::translation(delta(0), delta(1),
-                                                          delta(2)));
+      const BBox bb                       = ComputeBBox(nodes_before, inst);
+      const Eigen::Vector3d delta         = target_center - bb.center();
+      mesh_manager.TransformMesh(
+          mesh_id, ANCFCPUUtils::translation(delta(0), delta(1), delta(2)));
     };
 
     // Place the floor so its top surface is at z=0 and centered at (0,0).
@@ -328,7 +341,7 @@ int main(int argc, char** argv) {
     const Eigen::MatrixXd& nodes_floor_placed = mesh_manager.GetAllNodes();
     const BBox bb_floor_placed = ComputeBBox(nodes_floor_placed, inst_floor);
     const Eigen::Vector3d floor_center = bb_floor_placed.center();
-    const double floor_top_z = bb_floor_placed.max(2);
+    const double floor_top_z           = bb_floor_placed.max(2);
 
     const double xy_offset = 0.05;  // small lateral offsets (stay near center)
     const double base_gap  = 0.05;  // initial clearance above the floor
@@ -341,8 +354,8 @@ int main(int argc, char** argv) {
                                  floor_top_z + base_gap + dz_d));
 
     const Eigen::MatrixXd& nodes1 = mesh_manager.GetAllNodes();
-    BBox bb_floor_final  = ComputeBBox(nodes1, inst_floor);
-    BBox bb_dragon_final = ComputeBBox(nodes1, inst_dragon1);
+    BBox bb_floor_final           = ComputeBBox(nodes1, inst_floor);
+    BBox bb_dragon_final          = ComputeBBox(nodes1, inst_dragon1);
 
     std::cout << "Placed floor and item:\n";
     PrintBBox("floor", bb_floor_final);
@@ -384,7 +397,7 @@ int main(int argc, char** argv) {
   double floor_z_min = 1e30;
   for (int i = 0; i < inst_floor.num_nodes; ++i) {
     const int idx = inst_floor.node_offset + i;
-    floor_z_min = std::min(floor_z_min, initial_nodes(idx, 2));
+    floor_z_min   = std::min(floor_z_min, initial_nodes(idx, 2));
   }
   const double floor_z_fix_threshold = floor_z_min + 1e-6;
   for (int i = 0; i < inst_floor.num_nodes; ++i) {
@@ -436,8 +449,8 @@ int main(int argc, char** argv) {
         lumped_mass(i) = sum;
       }
     } else {
-      std::cerr << "Warning: unexpected mass CSR offsets size " << offsets.size()
-                << " (expected " << (n_nodes + 1)
+      std::cerr << "Warning: unexpected mass CSR offsets size "
+                << offsets.size() << " (expected " << (n_nodes + 1)
                 << "); using unit mass for gravity.\n";
       lumped_mass.setOnes();
     }
@@ -447,7 +460,7 @@ int main(int argc, char** argv) {
   // Solver setup
   // =========================================================================
   SyncedNewtonParams params = {1e-4, 0.0, 1e-6, 1e12, 3, 10, dt};
-  auto newton_solver = std::make_unique<SyncedNewtonSolver>(
+  auto newton_solver        = std::make_unique<SyncedNewtonSolver>(
       &gpu_t10_data, gpu_t10_data.get_n_constraint());
   newton_solver->Setup();
   newton_solver->SetParameters(&params);
@@ -476,23 +489,26 @@ int main(int argc, char** argv) {
         opt.enable_self_collision);
   } else if (opt.collision_backend == "deme") {
     ANCFCPUUtils::SurfaceTriMesh floor_surface =
-        ANCFCPUUtils::ExtractSurfaceTriMesh(initial_nodes, elements, inst_floor);
+        ANCFCPUUtils::ExtractSurfaceTriMesh(initial_nodes, elements,
+                                            inst_floor);
     ANCFCPUUtils::SurfaceTriMesh item_surface =
-        ANCFCPUUtils::ExtractSurfaceTriMesh(initial_nodes, elements, inst_dragon1);
+        ANCFCPUUtils::ExtractSurfaceTriMesh(initial_nodes, elements,
+                                            inst_dragon1);
     std::vector<DemeMeshCollisionBody> bodies;
     {
       DemeMeshCollisionBody body;
-      body.surface = std::move(floor_surface);
-      body.family = 0;
+      body.surface            = std::move(floor_surface);
+      body.family             = 0;
       body.split_into_patches = false;
       bodies.push_back(std::move(body));
     }
     {
       DemeMeshCollisionBody body;
-      body.surface = std::move(item_surface);
-      body.family = 1;
+      body.surface            = std::move(item_surface);
+      body.family             = 1;
       body.split_into_patches = true;
-      body.patch_angle_deg = -1.0f;  // Use `DEME_PATCH_ANGLE_DEG` (default is medium-aggressive).
+      body.patch_angle_deg =
+          -1.0f;  // Use `DEME_PATCH_ANGLE_DEG` (default is medium-aggressive).
       bodies.push_back(std::move(body));
     }
     collision_system = std::make_unique<DemeMeshCollisionSystem>(
@@ -508,18 +524,18 @@ int main(int argc, char** argv) {
   HANDLE_ERROR(cudaMalloc(&d_nodes_collision, n_nodes * 3 * sizeof(double)));
   HANDLE_ERROR(cudaMemcpy(d_nodes_collision, gpu_t10_data.GetX12DevicePtr(),
                           n_nodes * sizeof(double), cudaMemcpyDeviceToDevice));
-  HANDLE_ERROR(
-      cudaMemcpy(d_nodes_collision + n_nodes, gpu_t10_data.GetY12DevicePtr(),
-                 n_nodes * sizeof(double), cudaMemcpyDeviceToDevice));
+  HANDLE_ERROR(cudaMemcpy(d_nodes_collision + n_nodes,
+                          gpu_t10_data.GetY12DevicePtr(),
+                          n_nodes * sizeof(double), cudaMemcpyDeviceToDevice));
   HANDLE_ERROR(cudaMemcpy(d_nodes_collision + 2 * n_nodes,
-                          gpu_t10_data.GetZ12DevicePtr(), n_nodes * sizeof(double),
-                          cudaMemcpyDeviceToDevice));
+                          gpu_t10_data.GetZ12DevicePtr(),
+                          n_nodes * sizeof(double), cudaMemcpyDeviceToDevice));
 
   collision_system->BindNodesDevicePtr(d_nodes_collision, n_nodes);
 
   // Precompute gravity on host once and keep it on device.
   Eigen::VectorXd h_f_gravity = Eigen::VectorXd::Zero(n_nodes * 3);
-  auto addGravityForInstance = [&](const ANCFCPUUtils::MeshInstance& inst) {
+  auto addGravityForInstance  = [&](const ANCFCPUUtils::MeshInstance& inst) {
     for (int i = 0; i < inst.num_nodes; ++i) {
       const int idx = inst.node_offset + i;
       h_f_gravity(3 * idx + 2) += lumped_mass(idx) * gravity;
@@ -551,35 +567,34 @@ int main(int argc, char** argv) {
     HANDLE_ERROR(
         cudaMemcpy(d_nodes_collision + n_nodes, gpu_t10_data.GetY12DevicePtr(),
                    n_nodes * sizeof(double), cudaMemcpyDeviceToDevice));
-    HANDLE_ERROR(cudaMemcpy(d_nodes_collision + 2 * n_nodes,
-                            gpu_t10_data.GetZ12DevicePtr(), n_nodes * sizeof(double),
-                            cudaMemcpyDeviceToDevice));
+    HANDLE_ERROR(cudaMemcpy(
+        d_nodes_collision + 2 * n_nodes, gpu_t10_data.GetZ12DevicePtr(),
+        n_nodes * sizeof(double), cudaMemcpyDeviceToDevice));
 
     // 2) Collision detection + contact forces
     CollisionSystemInput coll_in;
     coll_in.d_nodes_xyz = d_nodes_collision;
-    coll_in.n_nodes = n_nodes;
-    coll_in.d_vel_xyz = d_vel_guess;
-    coll_in.dt = dt;
+    coll_in.n_nodes     = n_nodes;
+    coll_in.d_vel_xyz   = d_vel_guess;
+    coll_in.dt          = dt;
 
     CollisionSystemParams coll_params;
-    coll_params.damping = opt.contact_damping;
+    coll_params.damping  = opt.contact_damping;
     coll_params.friction = opt.contact_friction;
 
     collision_system->Step(coll_in, coll_params);
     const int num_contacts = collision_system->GetNumContacts();
 
     // 3) External forces: contact + gravity
-    HANDLE_ERROR(cudaMemcpy(gpu_t10_data.GetExternalForceDevicePtr(), d_f_gravity,
-                            n_nodes * 3 * sizeof(double),
+    HANDLE_ERROR(cudaMemcpy(gpu_t10_data.GetExternalForceDevicePtr(),
+                            d_f_gravity, n_nodes * 3 * sizeof(double),
                             cudaMemcpyDeviceToDevice));
 
     if (num_contacts > 0) {
       const double alpha = 1.0;
-      CheckCublas(cublasDaxpy(
-                      cublas_handle, n_nodes * 3, &alpha,
-                      collision_system->GetExternalForcesDevicePtr(), 1,
-                      gpu_t10_data.GetExternalForceDevicePtr(), 1),
+      CheckCublas(cublasDaxpy(cublas_handle, n_nodes * 3, &alpha,
+                              collision_system->GetExternalForcesDevicePtr(), 1,
+                              gpu_t10_data.GetExternalForceDevicePtr(), 1),
                   "cublasDaxpy(contact + gravity)");
     }
 
@@ -594,20 +609,19 @@ int main(int argc, char** argv) {
       Eigen::MatrixXd current_nodes(n_nodes, 3);
       Eigen::VectorXd displacement(n_nodes * 3);
       for (int i = 0; i < n_nodes; ++i) {
-        current_nodes(i, 0)       = x12_current(i);
-        current_nodes(i, 1)       = y12_current(i);
-        current_nodes(i, 2)       = z12_current(i);
-        displacement(3 * i + 0)   = x12_current(i) - initial_nodes(i, 0);
-        displacement(3 * i + 1)   = y12_current(i) - initial_nodes(i, 1);
-        displacement(3 * i + 2)   = z12_current(i) - initial_nodes(i, 2);
+        current_nodes(i, 0)     = x12_current(i);
+        current_nodes(i, 1)     = y12_current(i);
+        current_nodes(i, 2)     = z12_current(i);
+        displacement(3 * i + 0) = x12_current(i) - initial_nodes(i, 0);
+        displacement(3 * i + 1) = y12_current(i) - initial_nodes(i, 1);
+        displacement(3 * i + 2) = z12_current(i) - initial_nodes(i, 2);
       }
 
       std::ostringstream filename;
       filename << "output/item_drop/mesh_" << std::setfill('0') << std::setw(4)
                << step << ".vtu";
-      VisualizationUtils::ExportMeshWithDisplacement(current_nodes, elements,
-                                                     displacement,
-                                                     filename.str());
+      VisualizationUtils::ExportMeshWithDisplacement(
+          current_nodes, elements, displacement, filename.str());
 
       std::ostringstream patch_filename;
       patch_filename << "output/item_drop/patches_" << std::setfill('0')
@@ -626,9 +640,9 @@ int main(int argc, char** argv) {
       auto t1 = std::chrono::high_resolution_clock::now();
       const double step_ms =
           std::chrono::duration<double, std::milli>(t1 - t0).count();
-      std::cout << "Step " << std::setw(4) << step << ": pairs="
-                << std::setw(6) << collision_system->GetNumContacts() << ", ms="
-                << std::fixed << std::setprecision(2) << step_ms << "\n";
+      std::cout << "Step " << std::setw(4) << step << ": pairs=" << std::setw(6)
+                << collision_system->GetNumContacts() << ", ms=" << std::fixed
+                << std::setprecision(2) << step_ms << "\n";
     }
   }
 

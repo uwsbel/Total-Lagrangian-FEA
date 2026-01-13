@@ -9,8 +9,8 @@ namespace ANCFCPUUtils {
 // A linear triangle soup surface mesh using global node IDs as vertex keys.
 //
 // Intended as an element-agnostic representation that can be extracted from
-// different FE discretizations (T10 today; ANCF later) and consumed by collision
-// backends (DEME, etc).
+// different FE discretizations (T10 today; ANCF later) and consumed by
+// collision backends (DEME, etc).
 struct SurfaceTriMesh {
   // Unique global node IDs used by this surface mesh.
   std::vector<int> global_node_ids;
@@ -25,4 +25,3 @@ struct SurfaceTriMesh {
 bool WriteObj(const SurfaceTriMesh& mesh, const std::string& path);
 
 }  // namespace ANCFCPUUtils
-

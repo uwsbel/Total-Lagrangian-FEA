@@ -128,11 +128,11 @@ class VisualizationUtils {
     for (const auto& patch : patches) {
       if (patch.isValid && patch.numVertices >= 3) {
         double len = normalLineLength[arrowIdx];
-        file << "          " << patch.centroid.x - len * patch.normal.x
-             << " " << patch.centroid.y - len * patch.normal.y << " "
+        file << "          " << patch.centroid.x - len * patch.normal.x << " "
+             << patch.centroid.y - len * patch.normal.y << " "
              << patch.centroid.z - len * patch.normal.z << "\n";
-        file << "          " << patch.centroid.x + len * patch.normal.x
-             << " " << patch.centroid.y + len * patch.normal.y << " "
+        file << "          " << patch.centroid.x + len * patch.normal.x << " "
+             << patch.centroid.y + len * patch.normal.y << " "
              << patch.centroid.z + len * patch.normal.z << "\n";
         arrowIdx++;
       }
@@ -710,7 +710,8 @@ class VisualizationUtils {
    *
    * @param nodes Node coordinates (n_nodes x 3)
    * @param elements Element connectivity (n_elements x nodes_per_element)
-   * @param displacement Displacement vector (3 * n_nodes), layout: [dx0, dy0, dz0, dx1, ...]
+   * @param displacement Displacement vector (3 * n_nodes), layout: [dx0, dy0,
+   * dz0, dx1, ...]
    * @param filename Output VTU filename
    * @return true if export successful
    */
@@ -754,12 +755,15 @@ class VisualizationUtils {
             "Vectors=\"displacement\">\n";
 
     // Displacement magnitude
-    file << "        <DataArray type=\"Float64\" Name=\"displacement_magnitude\" "
+    file << "        <DataArray type=\"Float64\" "
+            "Name=\"displacement_magnitude\" "
             "format=\"ascii\">\n";
     for (int i = 0; i < numNodes; ++i) {
-      double dx  = (i * 3 < displacement.size()) ? displacement(i * 3) : 0.0;
-      double dy  = (i * 3 + 1 < displacement.size()) ? displacement(i * 3 + 1) : 0.0;
-      double dz  = (i * 3 + 2 < displacement.size()) ? displacement(i * 3 + 2) : 0.0;
+      double dx = (i * 3 < displacement.size()) ? displacement(i * 3) : 0.0;
+      double dy =
+          (i * 3 + 1 < displacement.size()) ? displacement(i * 3 + 1) : 0.0;
+      double dz =
+          (i * 3 + 2 < displacement.size()) ? displacement(i * 3 + 2) : 0.0;
       double mag = std::sqrt(dx * dx + dy * dy + dz * dz);
       file << "          " << mag << "\n";
     }
@@ -770,8 +774,10 @@ class VisualizationUtils {
             "NumberOfComponents=\"3\" format=\"ascii\">\n";
     for (int i = 0; i < numNodes; ++i) {
       double dx = (i * 3 < displacement.size()) ? displacement(i * 3) : 0.0;
-      double dy = (i * 3 + 1 < displacement.size()) ? displacement(i * 3 + 1) : 0.0;
-      double dz = (i * 3 + 2 < displacement.size()) ? displacement(i * 3 + 2) : 0.0;
+      double dy =
+          (i * 3 + 1 < displacement.size()) ? displacement(i * 3 + 1) : 0.0;
+      double dz =
+          (i * 3 + 2 < displacement.size()) ? displacement(i * 3 + 2) : 0.0;
       file << "          " << dx << " " << dy << " " << dz << "\n";
     }
     file << "        </DataArray>\n";
@@ -819,10 +825,12 @@ class VisualizationUtils {
 
   /**
    * Export an ANCF3443 mesh as extruded hexahedra (one hex per element).
-   * Uses only the nodal position DOF (dof 0) per node; gradient DOFs are ignored.
+   * Uses only the nodal position DOF (dof 0) per node; gradient DOFs are
+   * ignored.
    *
-   * For visualization convenience, this creates 8 points per element (no sharing)
-   * by extruding the 4 corner nodes along the element normal by +/- thickness/2.
+   * For visualization convenience, this creates 8 points per element (no
+   * sharing) by extruding the 4 corner nodes along the element normal by +/-
+   * thickness/2.
    *
    * Hex connectivity follows VTK_HEXAHEDRON (type 12) convention:
    * points [0,1,2,3] form the bottom quad, and [4,5,6,7] the top quad with the
@@ -859,8 +867,8 @@ class VisualizationUtils {
     file << "<VTKFile type=\"UnstructuredGrid\" version=\"1.0\" "
             "byte_order=\"LittleEndian\">\n";
     file << "  <UnstructuredGrid>\n";
-    file << "    <Piece NumberOfPoints=\"" << numPoints
-         << "\" NumberOfCells=\"" << numElements << "\">\n";
+    file << "    <Piece NumberOfPoints=\"" << numPoints << "\" NumberOfCells=\""
+         << numElements << "\">\n";
 
     // Points
     file << "      <Points>\n";
@@ -873,7 +881,7 @@ class VisualizationUtils {
       for (int n = 0; n < 4; ++n) {
         const int node = element_connectivity(e, n);
         const int idx  = node * 4;
-        p[n] = Eigen::Vector3d(x12(idx), y12(idx), z12(idx));
+        p[n]           = Eigen::Vector3d(x12(idx), y12(idx), z12(idx));
       }
 
       // Compute an element normal using a right-hand rule:
@@ -882,7 +890,7 @@ class VisualizationUtils {
       // (see the function docstring). If the node order is reversed, the normal
       // (and thus the meaning of "top" (+off) vs "bottom" (-off)) flips.
       Eigen::Vector3d normal = (p[1] - p[0]).cross(p[3] - p[0]);
-      const double nrm = normal.norm();
+      const double nrm       = normal.norm();
       if (nrm < 1e-12) {
         normal = Eigen::Vector3d(0.0, 0.0, 1.0);
       } else {
@@ -915,14 +923,16 @@ class VisualizationUtils {
     }
     file << "        </DataArray>\n";
 
-    file << "        <DataArray type=\"Int32\" Name=\"offsets\" format=\"ascii\">\n";
+    file << "        <DataArray type=\"Int32\" Name=\"offsets\" "
+            "format=\"ascii\">\n";
     for (int e = 0; e < numElements; ++e) {
       file << "          " << (e + 1) * 8 << "\n";
     }
     file << "        </DataArray>\n";
 
     // VTK_HEXAHEDRON = 12
-    file << "        <DataArray type=\"UInt8\" Name=\"types\" format=\"ascii\">\n";
+    file << "        <DataArray type=\"UInt8\" Name=\"types\" "
+            "format=\"ascii\">\n";
     for (int e = 0; e < numElements; ++e) {
       file << "          12\n";
     }
@@ -939,17 +949,19 @@ class VisualizationUtils {
 
   /**
    * Export an ANCF3243 beam mesh as hexahedra (one hex per element).
-   * Uses only the nodal position DOF (dof 0) per node; gradient DOFs are ignored.
+   * Uses only the nodal position DOF (dof 0) per node; gradient DOFs are
+   * ignored.
    *
-   * For visualization convenience, this creates 8 points per element (no sharing)
-   * by building a rectangular cross-section (width x height) at each end node and
-   * connecting them into a hexahedron along the element tangent.
+   * For visualization convenience, this creates 8 points per element (no
+   * sharing) by building a rectangular cross-section (width x height) at each
+   * end node and connecting them into a hexahedron along the element tangent.
    *
    * Hex connectivity follows VTK_HEXAHEDRON (type 12) convention:
    * points [0,1,2,3] form the cross-section at node0, and [4,5,6,7] the
-   * corresponding cross-section at node1. The local frame is constructed from the
-   * chord tangent and an arbitrary reference vector (fallback if near-parallel);
-   * this is intended for quick visualization, not exact ANCF geometry.
+   * corresponding cross-section at node1. The local frame is constructed from
+   * the chord tangent and an arbitrary reference vector (fallback if
+   * near-parallel); this is intended for quick visualization, not exact ANCF
+   * geometry.
    *
    * @param x12 Global x coefficient vector (size >= 4 * n_nodes)
    * @param y12 Global y coefficient vector
@@ -980,8 +992,8 @@ class VisualizationUtils {
     file << "<VTKFile type=\"UnstructuredGrid\" version=\"1.0\" "
             "byte_order=\"LittleEndian\">\n";
     file << "  <UnstructuredGrid>\n";
-    file << "    <Piece NumberOfPoints=\"" << numPoints
-         << "\" NumberOfCells=\"" << numElements << "\">\n";
+    file << "    <Piece NumberOfPoints=\"" << numPoints << "\" NumberOfCells=\""
+         << numElements << "\">\n";
 
     const double halfW = 0.5 * width;
     const double halfH = 0.5 * height;
@@ -1001,7 +1013,7 @@ class VisualizationUtils {
       Eigen::Vector3d t = p1 - p0;
       double tnorm      = t.norm();
       if (tnorm < 1e-12) {
-        t = Eigen::Vector3d(1.0, 0.0, 0.0);
+        t     = Eigen::Vector3d(1.0, 0.0, 0.0);
         tnorm = 1.0;
       }
       t /= tnorm;
@@ -1014,12 +1026,12 @@ class VisualizationUtils {
       Eigen::Vector3d n = t.cross(ref);
       double nnorm      = n.norm();
       if (nnorm < 1e-12) {
-        n = Eigen::Vector3d(0.0, 1.0, 0.0);
+        n     = Eigen::Vector3d(0.0, 1.0, 0.0);
         nnorm = 1.0;
       }
       n /= nnorm;
 
-      Eigen::Vector3d b = t.cross(n);
+      Eigen::Vector3d b  = t.cross(n);
       const double bnorm = b.norm();
       if (bnorm > 1e-12) {
         b /= bnorm;
@@ -1057,14 +1069,16 @@ class VisualizationUtils {
     }
     file << "        </DataArray>\n";
 
-    file << "        <DataArray type=\"Int32\" Name=\"offsets\" format=\"ascii\">\n";
+    file << "        <DataArray type=\"Int32\" Name=\"offsets\" "
+            "format=\"ascii\">\n";
     for (int e = 0; e < numElements; ++e) {
       file << "          " << (e + 1) * 8 << "\n";
     }
     file << "        </DataArray>\n";
 
     // VTK_HEXAHEDRON = 12
-    file << "        <DataArray type=\"UInt8\" Name=\"types\" format=\"ascii\">\n";
+    file << "        <DataArray type=\"UInt8\" Name=\"types\" "
+            "format=\"ascii\">\n";
     for (int e = 0; e < numElements; ++e) {
       file << "          12\n";
     }
