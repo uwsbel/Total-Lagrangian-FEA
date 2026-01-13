@@ -18,6 +18,9 @@
 #include <thrust/execution_policy.h>
 #include <thrust/scan.h>
 
+#include <algorithm>
+#include <vector>
+
 #include "../elements/ANCF3243Data.cuh"
 #include "../elements/ANCF3243DataFunc.cuh"
 #include "../elements/ANCF3443Data.cuh"
@@ -158,7 +161,7 @@ __device__ int binary_search_column(const int *cols, int n_cols, int target) {
 // n_dofs^2.
 template <typename ElementType>
 __global__ void build_dof_row_nnz_from_coef_csr(ElementType *d_data, int n_coef,
-                                               int *d_row_nnz) {
+                                                int *d_row_nnz) {
   int coef_i = blockIdx.x * blockDim.x + threadIdx.x;
   if (coef_i >= n_coef)
     return;
@@ -167,7 +170,7 @@ __global__ void build_dof_row_nnz_from_coef_csr(ElementType *d_data, int n_coef,
   int deg            = offsets[coef_i + 1] - offsets[coef_i];
   int row_nnz        = deg * 3;
 
-  int base = 3 * coef_i;
+  int base            = 3 * coef_i;
   d_row_nnz[base + 0] = row_nnz;
   d_row_nnz[base + 1] = row_nnz;
   d_row_nnz[base + 2] = row_nnz;
@@ -175,8 +178,8 @@ __global__ void build_dof_row_nnz_from_coef_csr(ElementType *d_data, int n_coef,
 
 template <typename ElementType>
 __global__ void fill_dof_cols_from_coef_csr(ElementType *d_data, int n_coef,
-                                           const int *d_dof_row_offsets,
-                                           int *d_dof_col_indices) {
+                                            const int *d_dof_row_offsets,
+                                            int *d_dof_col_indices) {
   int dof_row = blockIdx.x * blockDim.x + threadIdx.x;
   int n_dofs  = 3 * n_coef;
   if (dof_row >= n_dofs)
@@ -193,14 +196,13 @@ __global__ void fill_dof_cols_from_coef_csr(ElementType *d_data, int n_coef,
   // Expand each coefficient neighbor into {x,y,z} DOF columns.
   // Column ordering is sorted if coefficient columns are sorted.
   for (int idx = row_start; idx < row_end; ++idx) {
-    int coef_j   = columns[idx];
-    int base_col = 3 * coef_j;
+    int coef_j               = columns[idx];
+    int base_col             = 3 * coef_j;
     d_dof_col_indices[out++] = base_col + 0;
     d_dof_col_indices[out++] = base_col + 1;
     d_dof_col_indices[out++] = base_col + 2;
   }
 }
-
 
 // =====================================================
 // SPARSE HESSIAN: Assembly Kernels
@@ -315,8 +317,8 @@ __global__ void assemble_sparse_hessian_constraints(
 
   // Loop over non-zero columns in J (DOFs connected to this constraint)
   for (int idx_i = row_start; idx_i < row_end; idx_i++) {
-    int dof_i    = j_columns[idx_i];
-    double J_ic  = j_values[idx_i];
+    int dof_i   = j_columns[idx_i];
+    double J_ic = j_values[idx_i];
 
     // Inner loop over the same set of DOFs
     for (int idx_j = row_start; idx_j < row_end; idx_j++) {
@@ -328,8 +330,8 @@ __global__ void assemble_sparse_hessian_constraints(
       int row_begin  = d_csr_row_offsets[dof_i];
       int row_length = d_csr_row_offsets[dof_i + 1] - row_begin;
 
-      int pos = binary_search_column(&d_csr_col_indices[row_begin],
-                                     row_length, dof_j);
+      int pos = binary_search_column(&d_csr_col_indices[row_begin], row_length,
+                                     dof_j);
 
       if (pos >= 0) {
         atomicAdd(&d_csr_values[row_begin + pos], factor * J_ic * J_jc);
@@ -460,7 +462,7 @@ __global__ void cudss_solve_constraints_eval(
     ElementType *d_data, SyncedNewtonSolver *d_newton_solver) {
   int tid = blockIdx.x * blockDim.x + threadIdx.x;
 
-  if (tid < d_newton_solver->gpu_n_constraints() / 3) {
+  if (tid < d_newton_solver->gpu_n_constraints()) {
     compute_constraint_data(d_data);
   }
 }
@@ -547,6 +549,134 @@ void SyncedNewtonSolver::AnalyzeHessianSparsity() {
 
   std::cout << "Analyzing Hessian sparsity pattern..." << std::endl;
 
+  // Special-case: ANCF3243 with general (linear CSR) constraints needs a
+  // constraint-aware sparsity pattern. The default coefficient-adjacency
+  // expansion only captures element couplings, and would miss J^T J
+  // off-diagonal blocks that connect otherwise-disconnected mesh components.
+  if (type_ == TYPE_3243 && n_constraints_ > 0) {
+    auto *typed_data = static_cast<GPU_ANCF3243_Data *>(h_data_);
+    if (typed_data->GetConstraintMode() ==
+        GPU_ANCF3243_Data::kConstraintLinearCSR) {
+      typed_data->BuildMassCSRPattern();
+      typed_data->BuildConstraintJacobianCSR();
+
+      std::vector<int> mass_offsets;
+      std::vector<int> mass_columns;
+      std::vector<double> mass_values;
+      typed_data->RetrieveMassCSRToCPU(mass_offsets, mass_columns, mass_values);
+
+      std::vector<int> j_offsets;
+      std::vector<int> j_columns;
+      std::vector<double> j_values;
+      typed_data->RetrieveConstraintJacobianCSRToCPU(j_offsets, j_columns,
+                                                     j_values);
+
+      const int n_dofs = 3 * n_coef_;
+
+      std::vector<std::vector<int>> coef_adj(static_cast<size_t>(n_coef_));
+      for (int i = 0; i < n_coef_; ++i) {
+        coef_adj[static_cast<size_t>(i)].push_back(i);
+      }
+
+      if (static_cast<int>(mass_offsets.size()) == n_coef_ + 1) {
+        for (int i = 0; i < n_coef_; ++i) {
+          const int start = mass_offsets[static_cast<size_t>(i)];
+          const int end   = mass_offsets[static_cast<size_t>(i + 1)];
+          for (int idx = start; idx < end; ++idx) {
+            const int j = mass_columns[static_cast<size_t>(idx)];
+            if (j < 0 || j >= n_coef_)
+              continue;
+            coef_adj[static_cast<size_t>(i)].push_back(j);
+          }
+        }
+      }
+
+      if (static_cast<int>(j_offsets.size()) == n_constraints_ + 1) {
+        std::vector<int> row_coefs;
+        row_coefs.reserve(8);
+        for (int r = 0; r < n_constraints_; ++r) {
+          row_coefs.clear();
+          const int start = j_offsets[static_cast<size_t>(r)];
+          const int end   = j_offsets[static_cast<size_t>(r + 1)];
+          for (int idx = start; idx < end; ++idx) {
+            const int dof = j_columns[static_cast<size_t>(idx)];
+            if (dof < 0 || dof >= n_dofs)
+              continue;
+            const int coef = dof / 3;
+            if (coef < 0 || coef >= n_coef_)
+              continue;
+            row_coefs.push_back(coef);
+          }
+          std::sort(row_coefs.begin(), row_coefs.end());
+          row_coefs.erase(std::unique(row_coefs.begin(), row_coefs.end()),
+                          row_coefs.end());
+          for (size_t a = 0; a < row_coefs.size(); ++a) {
+            for (size_t b = a; b < row_coefs.size(); ++b) {
+              const int ia = row_coefs[a];
+              const int ib = row_coefs[b];
+              coef_adj[static_cast<size_t>(ia)].push_back(ib);
+              coef_adj[static_cast<size_t>(ib)].push_back(ia);
+            }
+          }
+        }
+      }
+
+      for (int i = 0; i < n_coef_; ++i) {
+        auto &nbrs = coef_adj[static_cast<size_t>(i)];
+        std::sort(nbrs.begin(), nbrs.end());
+        nbrs.erase(std::unique(nbrs.begin(), nbrs.end()), nbrs.end());
+      }
+
+      std::vector<int> dof_offsets(static_cast<size_t>(n_dofs) + 1, 0);
+      std::vector<int> dof_columns;
+      dof_columns.reserve(static_cast<size_t>(n_dofs) * 16);
+
+      int running = 0;
+      for (int dof_row = 0; dof_row < n_dofs; ++dof_row) {
+        const int coef_i = dof_row / 3;
+        const auto &nbrs = coef_adj[static_cast<size_t>(coef_i)];
+
+        dof_offsets[static_cast<size_t>(dof_row)] = running;
+        for (int coef_j : nbrs) {
+          const int base = 3 * coef_j;
+          dof_columns.push_back(base + 0);
+          dof_columns.push_back(base + 1);
+          dof_columns.push_back(base + 2);
+          running += 3;
+        }
+      }
+      dof_offsets[static_cast<size_t>(n_dofs)] = running;
+
+      h_nnz_ = running;
+      HANDLE_ERROR(cudaMalloc(&d_csr_row_offsets_,
+                              static_cast<size_t>(n_dofs + 1) * sizeof(int)));
+      HANDLE_ERROR(cudaMalloc(&d_csr_col_indices_,
+                              static_cast<size_t>(h_nnz_) * sizeof(int)));
+      HANDLE_ERROR(cudaMalloc(&d_csr_values_,
+                              static_cast<size_t>(h_nnz_) * sizeof(double)));
+
+      HANDLE_ERROR(cudaMemcpy(d_csr_row_offsets_, dof_offsets.data(),
+                              static_cast<size_t>(n_dofs + 1) * sizeof(int),
+                              cudaMemcpyHostToDevice));
+      HANDLE_ERROR(cudaMemcpy(d_csr_col_indices_, dof_columns.data(),
+                              static_cast<size_t>(h_nnz_) * sizeof(int),
+                              cudaMemcpyHostToDevice));
+      HANDLE_ERROR(cudaMemset(d_csr_values_, 0,
+                              static_cast<size_t>(h_nnz_) * sizeof(double)));
+
+      std::cout << "Sparse Hessian (constraint-aware): " << n_dofs << " x "
+                << n_dofs << ", nnz = " << h_nnz_ << " ("
+                << (100.0 * static_cast<double>(h_nnz_)) /
+                       (static_cast<double>(n_dofs) *
+                        static_cast<double>(n_dofs))
+                << "%)" << std::endl;
+
+      sparse_hessian_initialized_ = true;
+      std::cout << "Sparsity analysis complete." << std::endl;
+      return;
+    }
+  }
+
   // Ensure the coefficient-level adjacency CSR exists on the ElementData.
   // This CSR is built from element connectivity (via BuildMassCSRPattern) and
   // provides a compact graph we can expand into a DOF-level Hessian pattern.
@@ -578,10 +708,12 @@ void SyncedNewtonSolver::AnalyzeHessianSparsity() {
 
   // 1) Compute DOF-level row nnz by expanding coefficient adjacency rows.
   int *d_row_nnz = nullptr;
-  HANDLE_ERROR(cudaMalloc(&d_row_nnz, static_cast<size_t>(n_dofs) * sizeof(int)));
-  HANDLE_ERROR(cudaMemset(d_row_nnz, 0, static_cast<size_t>(n_dofs) * sizeof(int)));
+  HANDLE_ERROR(
+      cudaMalloc(&d_row_nnz, static_cast<size_t>(n_dofs) * sizeof(int)));
+  HANDLE_ERROR(
+      cudaMemset(d_row_nnz, 0, static_cast<size_t>(n_dofs) * sizeof(int)));
 
-  const int threads = 256;
+  const int threads     = 256;
   const int blocks_coef = (n_coef_ + threads - 1) / threads;
   if (type_ == TYPE_T10) {
     build_dof_row_nnz_from_coef_csr<<<blocks_coef, threads>>>(
@@ -596,8 +728,8 @@ void SyncedNewtonSolver::AnalyzeHessianSparsity() {
   HANDLE_ERROR(cudaDeviceSynchronize());
 
   // 2) Prefix-sum to build CSR row offsets.
-  HANDLE_ERROR(
-      cudaMalloc(&d_csr_row_offsets_, static_cast<size_t>(n_dofs + 1) * sizeof(int)));
+  HANDLE_ERROR(cudaMalloc(&d_csr_row_offsets_,
+                          static_cast<size_t>(n_dofs + 1) * sizeof(int)));
 
   thrust::device_ptr<int> nnz_ptr(d_row_nnz);
   int zero = 0;
@@ -605,7 +737,8 @@ void SyncedNewtonSolver::AnalyzeHessianSparsity() {
                           cudaMemcpyHostToDevice));
 
   int *d_temp_scan = nullptr;
-  HANDLE_ERROR(cudaMalloc(&d_temp_scan, static_cast<size_t>(n_dofs) * sizeof(int)));
+  HANDLE_ERROR(
+      cudaMalloc(&d_temp_scan, static_cast<size_t>(n_dofs) * sizeof(int)));
   thrust::device_ptr<int> temp_ptr(d_temp_scan);
   thrust::inclusive_scan(thrust::device, nnz_ptr, nnz_ptr + n_dofs, temp_ptr);
 
@@ -618,8 +751,10 @@ void SyncedNewtonSolver::AnalyzeHessianSparsity() {
                           cudaMemcpyDeviceToHost));
 
   // 3) Allocate CSR columns/values and fill column indices.
-  HANDLE_ERROR(cudaMalloc(&d_csr_col_indices_, static_cast<size_t>(h_nnz_) * sizeof(int)));
-  HANDLE_ERROR(cudaMalloc(&d_csr_values_, static_cast<size_t>(h_nnz_) * sizeof(double)));
+  HANDLE_ERROR(cudaMalloc(&d_csr_col_indices_,
+                          static_cast<size_t>(h_nnz_) * sizeof(int)));
+  HANDLE_ERROR(
+      cudaMalloc(&d_csr_values_, static_cast<size_t>(h_nnz_) * sizeof(double)));
 
   const int blocks_dof = (n_dofs + threads - 1) / threads;
   if (type_ == TYPE_T10) {
@@ -697,8 +832,16 @@ void SyncedNewtonSolver::OneStepNewtonCuDSS() {
   int numBlocks_internal_force =
       (n_beam_ * n_shape_ + threadsPerBlock - 1) / threadsPerBlock;
   int numBlocks_grad_l = (n_coef_ * 3 + threadsPerBlock - 1) / threadsPerBlock;
+  int n_constraints_eval = n_constraints_ / 3;
+  if (type_ == TYPE_3243 && n_constraints_ > 0) {
+    auto *typed_data = static_cast<GPU_ANCF3243_Data *>(h_data_);
+    if (typed_data->GetConstraintMode() ==
+        GPU_ANCF3243_Data::kConstraintLinearCSR) {
+      n_constraints_eval = n_constraints_;
+    }
+  }
   int numBlocks_constraints_eval =
-      (n_constraints_ / 3 + threadsPerBlock - 1) / threadsPerBlock;
+      (n_constraints_eval + threadsPerBlock - 1) / threadsPerBlock;
   int numBlocks_initialize_prehess =
       (n_coef_ * 3 + threadsPerBlock - 1) / threadsPerBlock;
 
@@ -726,8 +869,8 @@ void SyncedNewtonSolver::OneStepNewtonCuDSS() {
 
     // CuDSS Solver Setup
     cudssAlgType_t reorder = CUDSS_ALG_DEFAULT;
-    CUDSS_OK(cudssConfigSet(cudss_config_, CUDSS_CONFIG_REORDERING_ALG, &reorder,
-                            sizeof(reorder)));
+    CUDSS_OK(cudssConfigSet(cudss_config_, CUDSS_CONFIG_REORDERING_ALG,
+                            &reorder, sizeof(reorder)));
     // Disable iterative refinement for faster solves
     int ir_n_steps = 0;
     CUDSS_OK(cudssConfigSet(cudss_config_, CUDSS_CONFIG_IR_N_STEPS, &ir_n_steps,
@@ -751,7 +894,8 @@ void SyncedNewtonSolver::OneStepNewtonCuDSS() {
     CUDSS_OK(cudssExecute(cudss_handle_, CUDSS_PHASE_ANALYSIS, cudss_config_,
                           cudss_data_, dssA, dssX, dssB));
     analysis_done_ = true;
-    factorization_done_ = false;  // Reset factorization flag when analysis is redone
+    factorization_done_ =
+        false;  // Reset factorization flag when analysis is redone
   }
 
   // Dispatch based on element type
@@ -794,9 +938,8 @@ void SyncedNewtonSolver::OneStepNewtonCuDSS() {
           norm_g0 = norm_g;
         }
 
-        if (norm_g < h_inner_atol_ ||
-            (h_inner_rtol_ > 0.0 && norm_g0 > 0.0 &&
-             norm_g <= h_inner_rtol_ * norm_g0)) {
+        if (norm_g < h_inner_atol_ || (h_inner_rtol_ > 0.0 && norm_g0 > 0.0 &&
+                                       norm_g <= h_inner_rtol_ * norm_g0)) {
           break;
         }
 
@@ -825,14 +968,16 @@ void SyncedNewtonSolver::OneStepNewtonCuDSS() {
 
         HANDLE_ERROR(cudaDeviceSynchronize());
 
-        // Use refactorization if sparsity pattern is fixed and factorization has been done before
-        // Otherwise use full factorization
-        cudssPhase_t factor_phase = (fixed_sparsity_pattern_ && factorization_done_)
-                                        ? CUDSS_PHASE_REFACTORIZATION
-                                    : CUDSS_PHASE_FACTORIZATION;
-        CUDSS_OK(cudssExecute(cudss_handle_, factor_phase,
-                              cudss_config_, cudss_data_, dssA, dssX, dssB));
-        factorization_done_ = true;  // Mark that factorization has been performed
+        // Use refactorization if sparsity pattern is fixed and factorization
+        // has been done before Otherwise use full factorization
+        cudssPhase_t factor_phase =
+            (fixed_sparsity_pattern_ && factorization_done_)
+                ? CUDSS_PHASE_REFACTORIZATION
+                : CUDSS_PHASE_FACTORIZATION;
+        CUDSS_OK(cudssExecute(cudss_handle_, factor_phase, cudss_config_,
+                              cudss_data_, dssA, dssX, dssB));
+        factorization_done_ =
+            true;  // Mark that factorization has been performed
 
         HANDLE_ERROR(cudaMemset(d_delta_v_, 0, n_dofs * sizeof(double)));
         CUDSS_OK(cudssExecute(cudss_handle_, CUDSS_PHASE_SOLVE, cudss_config_,
@@ -908,9 +1053,8 @@ void SyncedNewtonSolver::OneStepNewtonCuDSS() {
           norm_g0 = norm_g;
         }
 
-        if (norm_g < h_inner_atol_ ||
-            (h_inner_rtol_ > 0.0 && norm_g0 > 0.0 &&
-             norm_g <= h_inner_rtol_ * norm_g0)) {
+        if (norm_g < h_inner_atol_ || (h_inner_rtol_ > 0.0 && norm_g0 > 0.0 &&
+                                       norm_g <= h_inner_rtol_ * norm_g0)) {
           break;
         }
 
@@ -939,14 +1083,16 @@ void SyncedNewtonSolver::OneStepNewtonCuDSS() {
 
         HANDLE_ERROR(cudaDeviceSynchronize());
 
-        // Use refactorization if sparsity pattern is fixed and factorization has been done before
-        // Otherwise use full factorization
-        cudssPhase_t factor_phase = (fixed_sparsity_pattern_ && factorization_done_)
-                                        ? CUDSS_PHASE_REFACTORIZATION
-                                    : CUDSS_PHASE_FACTORIZATION;
-        CUDSS_OK(cudssExecute(cudss_handle_, factor_phase,
-                              cudss_config_, cudss_data_, dssA, dssX, dssB));
-        factorization_done_ = true;  // Mark that factorization has been performed
+        // Use refactorization if sparsity pattern is fixed and factorization
+        // has been done before Otherwise use full factorization
+        cudssPhase_t factor_phase =
+            (fixed_sparsity_pattern_ && factorization_done_)
+                ? CUDSS_PHASE_REFACTORIZATION
+                : CUDSS_PHASE_FACTORIZATION;
+        CUDSS_OK(cudssExecute(cudss_handle_, factor_phase, cudss_config_,
+                              cudss_data_, dssA, dssX, dssB));
+        factorization_done_ =
+            true;  // Mark that factorization has been performed
 
         HANDLE_ERROR(cudaMemset(d_delta_v_, 0, n_dofs * sizeof(double)));
         CUDSS_OK(cudssExecute(cudss_handle_, CUDSS_PHASE_SOLVE, cudss_config_,
@@ -1024,9 +1170,8 @@ void SyncedNewtonSolver::OneStepNewtonCuDSS() {
           norm_g0 = norm_g;
         }
 
-        if (norm_g < h_inner_atol_ ||
-            (h_inner_rtol_ > 0.0 && norm_g0 > 0.0 &&
-             norm_g <= h_inner_rtol_ * norm_g0)) {
+        if (norm_g < h_inner_atol_ || (h_inner_rtol_ > 0.0 && norm_g0 > 0.0 &&
+                                       norm_g <= h_inner_rtol_ * norm_g0)) {
           break;
         }
 
@@ -1055,14 +1200,16 @@ void SyncedNewtonSolver::OneStepNewtonCuDSS() {
 
         HANDLE_ERROR(cudaDeviceSynchronize());
 
-        // Use refactorization if sparsity pattern is fixed and factorization has been done before
-        // Otherwise use full factorization
-        cudssPhase_t factor_phase = (fixed_sparsity_pattern_ && factorization_done_)
-                                        ? CUDSS_PHASE_REFACTORIZATION
-                                    : CUDSS_PHASE_FACTORIZATION;
-        CUDSS_OK(cudssExecute(cudss_handle_, factor_phase,
-                              cudss_config_, cudss_data_, dssA, dssX, dssB));
-        factorization_done_ = true;  // Mark that factorization has been performed
+        // Use refactorization if sparsity pattern is fixed and factorization
+        // has been done before Otherwise use full factorization
+        cudssPhase_t factor_phase =
+            (fixed_sparsity_pattern_ && factorization_done_)
+                ? CUDSS_PHASE_REFACTORIZATION
+                : CUDSS_PHASE_FACTORIZATION;
+        CUDSS_OK(cudssExecute(cudss_handle_, factor_phase, cudss_config_,
+                              cudss_data_, dssA, dssX, dssB));
+        factorization_done_ =
+            true;  // Mark that factorization has been performed
 
         HANDLE_ERROR(cudaMemset(d_delta_v_, 0, n_dofs * sizeof(double)));
         CUDSS_OK(cudssExecute(cudss_handle_, CUDSS_PHASE_SOLVE, cudss_config_,

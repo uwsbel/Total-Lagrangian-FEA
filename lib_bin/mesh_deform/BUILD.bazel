@@ -40,3 +40,22 @@ cc_binary(
     ],
 )
 
+cc_binary(
+    name = "test_ancf3243_net_newton",
+    srcs = ["test_ancf3243_net_newton.cc"],
+    copts = ["--std=c++17"],
+    linkopts = [
+        "-L/usr/local/cuda/lib64",
+        "-lcublas",
+        "-lcusparse",
+        "-lcudart",
+        "-lcudss",
+    ],
+    deps = [
+        "//lib_src/elements:ANCF3243Data",
+        "//lib_src/solvers:solvers_syncednewton",
+        "//lib_utils:mesh_utils",
+        "//lib_utils:visualization_utils",
+        "@eigen//:eigen",
+    ],
+)

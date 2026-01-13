@@ -1,13 +1,12 @@
 #include <cooperative_groups.h>
-
-#include <iomanip>
-#include <vector>
-
 #include <thrust/device_ptr.h>
 #include <thrust/execution_policy.h>
 #include <thrust/scan.h>
 #include <thrust/sort.h>
 #include <thrust/unique.h>
+
+#include <iomanip>
+#include <vector>
 
 /*==============================================================
  *==============================================================
@@ -28,12 +27,13 @@ namespace cg = cooperative_groups;
 
 __device__ __forceinline__ int binary_search_column_csr_mass_3243(
     const int *cols, int n_cols, int target) {
-  int left = 0;
+  int left  = 0;
   int right = n_cols - 1;
   while (left <= right) {
     int mid = left + ((right - left) >> 1);
-    int v = cols[mid];
-    if (v == target) return mid;
+    int v   = cols[mid];
+    if (v == target)
+      return mid;
     if (v < target)
       left = mid + 1;
     else
@@ -43,7 +43,7 @@ __device__ __forceinline__ int binary_search_column_csr_mass_3243(
 }
 
 __global__ void build_mass_keys_3243_kernel(GPU_ANCF3243_Data *d_data,
-                                           unsigned long long *d_keys) {
+                                            unsigned long long *d_keys) {
   const int total = d_data->gpu_n_beam() * Quadrature::N_SHAPE_3243 *
                     Quadrature::N_SHAPE_3243;
   int tid = blockIdx.x * blockDim.x + threadIdx.x;
@@ -76,17 +76,17 @@ __global__ void build_mass_keys_3243_kernel(GPU_ANCF3243_Data *d_data,
 }
 
 __global__ void decode_mass_keys_3243_kernel(const unsigned long long *d_keys,
-                                            int nnz, int *d_csr_columns,
-                                            int *d_row_counts) {
+                                             int nnz, int *d_csr_columns,
+                                             int *d_row_counts) {
   int tid = blockIdx.x * blockDim.x + threadIdx.x;
   if (tid >= nnz) {
     return;
   }
 
   const unsigned long long key = d_keys[tid];
-  const int row = static_cast<int>(key >> 32);
-  const int col = static_cast<int>(key & 0xffffffffULL);
-  d_csr_columns[tid] = col;
+  const int row                = static_cast<int>(key >> 32);
+  const int col                = static_cast<int>(key & 0xffffffffULL);
+  d_csr_columns[tid]           = col;
   atomicAdd(d_row_counts + row, 1);
 }
 
@@ -100,8 +100,8 @@ __global__ void set_last_offset_3243_kernel(int *d_offsets, int n_rows,
 // Precompute reference Jacobian determinant and physical shape gradients
 // (per element, per quadrature point).
 __global__ void precompute_reference_kernel(GPU_ANCF3243_Data *d_data) {
-  const int tid = blockIdx.x * blockDim.x + threadIdx.x;
-  const int n_qp = Quadrature::N_TOTAL_QP_3_2_2;
+  const int tid   = blockIdx.x * blockDim.x + threadIdx.x;
+  const int n_qp  = Quadrature::N_TOTAL_QP_3_2_2;
   const int total = d_data->gpu_n_beam() * n_qp;
   if (tid >= total) {
     return;
@@ -123,7 +123,7 @@ __global__ void precompute_reference_kernel(GPU_ANCF3243_Data *d_data) {
   const double H = d_data->H(elem_idx);
 
   // Build ∂b/∂xi, ∂b/∂eta, ∂b/∂zeta directly in normalized coordinates.
-  const double db_dxi[Quadrature::N_SHAPE_3243]  = {
+  const double db_dxi[Quadrature::N_SHAPE_3243] = {
       0.0,
       L / 2,
       0.0,
@@ -276,10 +276,10 @@ __global__ void mass_matrix_qp_kernel(GPU_ANCF3243_Data *d_data) {
 
     // Accumulate contribution into CSR
     const double mass_contrib = rho * s[i_local] * s[j_local] * weight * detJ;
-    const int row_start = d_data->csr_offsets()[i_global];
-    const int row_end   = d_data->csr_offsets()[i_global + 1];
-    const int n_cols    = row_end - row_start;
-    const int local_idx = binary_search_column_csr_mass_3243(
+    const int row_start       = d_data->csr_offsets()[i_global];
+    const int row_end         = d_data->csr_offsets()[i_global + 1];
+    const int n_cols          = row_end - row_start;
+    const int local_idx       = binary_search_column_csr_mass_3243(
         d_data->csr_columns() + row_start, n_cols, j_global);
     if (local_idx >= 0) {
       atomicAdd(d_data->csr_values() + row_start + local_idx, mass_contrib);
@@ -324,7 +324,7 @@ void GPU_ANCF3243_Data::CalcDsDuPre() {
 }
 
 void GPU_ANCF3243_Data::PrintDsDuPre() {
-  const int n_qp = Quadrature::N_TOTAL_QP_3_2_2;
+  const int n_qp       = Quadrature::N_TOTAL_QP_3_2_2;
   const int mat_stride = Quadrature::N_SHAPE_3243 * 3;
   const int total_size = n_beam * n_qp * mat_stride;
 
@@ -341,11 +341,9 @@ void GPU_ANCF3243_Data::PrintDsDuPre() {
   for (int e = 0; e < n_beam; ++e) {
     for (int qp = 0; qp < n_qp; ++qp) {
       std::cout << "\n=== Elem " << e << " Quadrature Point " << qp
-                << " detJ_ref=" << h_detJ[e * n_qp + qp] << " ==="
-                << std::endl;
+                << " detJ_ref=" << h_detJ[e * n_qp + qp] << " ===" << std::endl;
 
-      double *qp_data =
-          h_grad.data() + (e * n_qp + qp) * mat_stride;
+      double *qp_data = h_grad.data() + (e * n_qp + qp) * mat_stride;
       Eigen::Map<Eigen::MatrixXd> grad_matrix(qp_data, Quadrature::N_SHAPE_3243,
                                               3);
       std::cout << "        dN/dx       dN/dy       dN/dz" << std::endl;
@@ -408,12 +406,12 @@ void GPU_ANCF3243_Data::BuildMassCSRPattern() {
   const int total_keys =
       n_beam * Quadrature::N_SHAPE_3243 * Quadrature::N_SHAPE_3243;
   unsigned long long *d_keys = nullptr;
-  HANDLE_ERROR(cudaMalloc(&d_keys,
-                          static_cast<size_t>(total_keys) * sizeof(unsigned long long)));
+  HANDLE_ERROR(cudaMalloc(
+      &d_keys, static_cast<size_t>(total_keys) * sizeof(unsigned long long)));
 
   {
     constexpr int threads = 256;
-    const int blocks = (total_keys + threads - 1) / threads;
+    const int blocks      = (total_keys + threads - 1) / threads;
     build_mass_keys_3243_kernel<<<blocks, threads>>>(d_data, d_keys);
     HANDLE_ERROR(cudaDeviceSynchronize());
   }
@@ -435,14 +433,16 @@ void GPU_ANCF3243_Data::BuildMassCSRPattern() {
   HANDLE_ERROR(cudaMalloc((void **)&d_nnz, sizeof(int)));
 
   int *d_row_counts = nullptr;
-  HANDLE_ERROR(cudaMalloc(&d_row_counts, static_cast<size_t>(n_coef) * sizeof(int)));
-  HANDLE_ERROR(cudaMemset(d_row_counts, 0, static_cast<size_t>(n_coef) * sizeof(int)));
+  HANDLE_ERROR(
+      cudaMalloc(&d_row_counts, static_cast<size_t>(n_coef) * sizeof(int)));
+  HANDLE_ERROR(
+      cudaMemset(d_row_counts, 0, static_cast<size_t>(n_coef) * sizeof(int)));
 
   {
     constexpr int threads = 256;
-    const int blocks = (nnz + threads - 1) / threads;
-    decode_mass_keys_3243_kernel<<<blocks, threads>>>(d_keys, nnz, d_csr_columns,
-                                                      d_row_counts);
+    const int blocks      = (nnz + threads - 1) / threads;
+    decode_mass_keys_3243_kernel<<<blocks, threads>>>(
+        d_keys, nnz, d_csr_columns, d_row_counts);
     HANDLE_ERROR(cudaDeviceSynchronize());
   }
 
@@ -457,7 +457,8 @@ void GPU_ANCF3243_Data::BuildMassCSRPattern() {
   }
 
   HANDLE_ERROR(cudaMemcpy(d_nnz, &nnz, sizeof(int), cudaMemcpyHostToDevice));
-  HANDLE_ERROR(cudaMemset(d_csr_values, 0, static_cast<size_t>(nnz) * sizeof(double)));
+  HANDLE_ERROR(
+      cudaMemset(d_csr_values, 0, static_cast<size_t>(nnz) * sizeof(double)));
 
   HANDLE_ERROR(cudaFree(d_row_counts));
   HANDLE_ERROR(cudaFree(d_keys));
@@ -469,10 +470,10 @@ void GPU_ANCF3243_Data::BuildMassCSRPattern() {
 
 namespace {
 __global__ void build_constraint_j_csr_3243_kernel(int n_constraint,
-                                                   const int* fixed_nodes,
-                                                   int* j_offsets,
-                                                   int* j_columns,
-                                                   double* j_values) {
+                                                   const int *fixed_nodes,
+                                                   int *j_offsets,
+                                                   int *j_columns,
+                                                   double *j_values) {
   int tid = blockIdx.x * blockDim.x + threadIdx.x;
   if (tid >= n_constraint) {
     return;
@@ -480,16 +481,15 @@ __global__ void build_constraint_j_csr_3243_kernel(int n_constraint,
 
   j_offsets[tid] = tid;
 
-  int fixed_idx = tid / 3;
-  int dof       = tid % 3;
-  int node      = fixed_nodes[fixed_idx];
+  int fixed_idx  = tid / 3;
+  int dof        = tid % 3;
+  int node       = fixed_nodes[fixed_idx];
   j_columns[tid] = node * 3 + dof;
   j_values[tid]  = 1.0;
 }
 
-__global__ void build_constraint_jt_row_counts_3243_kernel(int n_constraint,
-                                                           const int* fixed_nodes,
-                                                           int* row_counts) {
+__global__ void build_constraint_jt_row_counts_3243_kernel(
+    int n_constraint, const int *fixed_nodes, int *row_counts) {
   int tid = blockIdx.x * blockDim.x + threadIdx.x;
   if (tid >= n_constraint) {
     return;
@@ -502,12 +502,9 @@ __global__ void build_constraint_jt_row_counts_3243_kernel(int n_constraint,
   atomicAdd(&row_counts[row], 1);
 }
 
-__global__ void build_constraint_jt_fill_3243_kernel(int n_constraint,
-                                                     const int* fixed_nodes,
-                                                     const int* offsets,
-                                                     int* row_positions,
-                                                     int* columns,
-                                                     double* values) {
+__global__ void build_constraint_jt_fill_3243_kernel(
+    int n_constraint, const int *fixed_nodes, const int *offsets,
+    int *row_positions, int *columns, double *values) {
   int tid = blockIdx.x * blockDim.x + threadIdx.x;
   if (tid >= n_constraint) {
     return;
@@ -539,19 +536,22 @@ void GPU_ANCF3243_Data::ConvertToCSR_ConstraintJacT() {
   const int num_rows = n_coef * 3;
   const int nnz      = n_constraint;
 
-  HANDLE_ERROR(cudaMalloc((void**)&d_cj_csr_offsets,
+  HANDLE_ERROR(cudaMalloc((void **)&d_cj_csr_offsets,
                           static_cast<size_t>(num_rows + 1) * sizeof(int)));
-  HANDLE_ERROR(cudaMalloc((void**)&d_cj_csr_columns,
+  HANDLE_ERROR(cudaMalloc((void **)&d_cj_csr_columns,
                           static_cast<size_t>(nnz) * sizeof(int)));
-  HANDLE_ERROR(cudaMalloc((void**)&d_cj_csr_values,
+  HANDLE_ERROR(cudaMalloc((void **)&d_cj_csr_values,
                           static_cast<size_t>(nnz) * sizeof(double)));
-  HANDLE_ERROR(cudaMalloc((void**)&d_cj_nnz, sizeof(int)));
+  HANDLE_ERROR(cudaMalloc((void **)&d_cj_nnz, sizeof(int)));
 
-  int* d_row_counts    = nullptr;
-  int* d_row_positions = nullptr;
-  HANDLE_ERROR(cudaMalloc(&d_row_counts, static_cast<size_t>(num_rows) * sizeof(int)));
-  HANDLE_ERROR(cudaMalloc(&d_row_positions, static_cast<size_t>(num_rows) * sizeof(int)));
-  HANDLE_ERROR(cudaMemset(d_row_counts, 0, static_cast<size_t>(num_rows) * sizeof(int)));
+  int *d_row_counts    = nullptr;
+  int *d_row_positions = nullptr;
+  HANDLE_ERROR(
+      cudaMalloc(&d_row_counts, static_cast<size_t>(num_rows) * sizeof(int)));
+  HANDLE_ERROR(cudaMalloc(&d_row_positions,
+                          static_cast<size_t>(num_rows) * sizeof(int)));
+  HANDLE_ERROR(
+      cudaMemset(d_row_counts, 0, static_cast<size_t>(num_rows) * sizeof(int)));
 
   {
     constexpr int threads = 256;
@@ -563,8 +563,8 @@ void GPU_ANCF3243_Data::ConvertToCSR_ConstraintJacT() {
 
   thrust::device_ptr<int> counts_begin(d_row_counts);
   thrust::device_ptr<int> offsets_begin(d_cj_csr_offsets);
-  thrust::exclusive_scan(thrust::device, counts_begin,
-                         counts_begin + num_rows, offsets_begin);
+  thrust::exclusive_scan(thrust::device, counts_begin, counts_begin + num_rows,
+                         offsets_begin);
 
   set_last_offset_3243_kernel<<<1, 1>>>(d_cj_csr_offsets, num_rows, nnz);
   HANDLE_ERROR(cudaDeviceSynchronize());
@@ -602,13 +602,13 @@ void GPU_ANCF3243_Data::ConvertToCSR_ConstraintJac() {
 
   const int nnz = n_constraint;
 
-  HANDLE_ERROR(cudaMalloc((void**)&d_j_csr_offsets,
+  HANDLE_ERROR(cudaMalloc((void **)&d_j_csr_offsets,
                           static_cast<size_t>(n_constraint + 1) * sizeof(int)));
-  HANDLE_ERROR(cudaMalloc((void**)&d_j_csr_columns,
+  HANDLE_ERROR(cudaMalloc((void **)&d_j_csr_columns,
                           static_cast<size_t>(nnz) * sizeof(int)));
-  HANDLE_ERROR(cudaMalloc((void**)&d_j_csr_values,
+  HANDLE_ERROR(cudaMalloc((void **)&d_j_csr_values,
                           static_cast<size_t>(nnz) * sizeof(double)));
-  HANDLE_ERROR(cudaMalloc((void**)&d_j_nnz, sizeof(int)));
+  HANDLE_ERROR(cudaMalloc((void **)&d_j_nnz, sizeof(int)));
 
   {
     constexpr int threads = 256;
@@ -642,8 +642,8 @@ void GPU_ANCF3243_Data::RetrieveConnectivityToCPU(
 }
 
 void GPU_ANCF3243_Data::RetrieveMassCSRToCPU(std::vector<int> &offsets,
-                                            std::vector<int> &columns,
-                                            std::vector<double> &values) {
+                                             std::vector<int> &columns,
+                                             std::vector<double> &values) {
   offsets.assign(static_cast<size_t>(n_coef) + 1, 0);
   columns.clear();
   values.clear();
@@ -677,6 +677,43 @@ void GPU_ANCF3243_Data::RetrieveInternalForceToCPU(
   HANDLE_ERROR(cudaMemcpy(internal_force.data(), d_f_int,
                           expected_size * sizeof(double),
                           cudaMemcpyDeviceToHost));
+}
+
+void GPU_ANCF3243_Data::RetrieveConstraintJacobianCSRToCPU(
+    std::vector<int> &offsets, std::vector<int> &columns,
+    std::vector<double> &values) {
+  offsets.assign(static_cast<size_t>(n_constraint) + 1, 0);
+  columns.clear();
+  values.clear();
+
+  if (!is_constraints_setup || n_constraint == 0) {
+    return;
+  }
+  if (!is_j_csr_setup) {
+    return;
+  }
+
+  int h_nnz = 0;
+  HANDLE_ERROR(
+      cudaMemcpy(&h_nnz, d_j_nnz, sizeof(int), cudaMemcpyDeviceToHost));
+  if (h_nnz < 0) {
+    return;
+  }
+
+  columns.resize(static_cast<size_t>(h_nnz));
+  values.resize(static_cast<size_t>(h_nnz));
+
+  HANDLE_ERROR(cudaMemcpy(offsets.data(), d_j_csr_offsets,
+                          (static_cast<size_t>(n_constraint) + 1) * sizeof(int),
+                          cudaMemcpyDeviceToHost));
+  if (h_nnz > 0) {
+    HANDLE_ERROR(cudaMemcpy(columns.data(), d_j_csr_columns,
+                            static_cast<size_t>(h_nnz) * sizeof(int),
+                            cudaMemcpyDeviceToHost));
+    HANDLE_ERROR(cudaMemcpy(values.data(), d_j_csr_values,
+                            static_cast<size_t>(h_nnz) * sizeof(double),
+                            cudaMemcpyDeviceToHost));
+  }
 }
 
 void GPU_ANCF3243_Data::RetrieveDeformationGradientToCPU(
@@ -733,7 +770,7 @@ void GPU_ANCF3243_Data::RetrieveConstraintJacobianToCPU(
                           cudaMemcpyDeviceToHost));
 
   for (int i = 0; i < n_constraint / 3; ++i) {
-    int node = h_fixed[static_cast<size_t>(i)];
+    int node                                = h_fixed[static_cast<size_t>(i)];
     constraint_jac(i * 3 + 0, node * 3 + 0) = 1.0;
     constraint_jac(i * 3 + 1, node * 3 + 1) = 1.0;
     constraint_jac(i * 3 + 2, node * 3 + 2) = 1.0;
@@ -784,7 +821,18 @@ void GPU_ANCF3243_Data::CalcConstraintData() {
   }
 
   int threads = 128;
-  int blocks  = (n_beam * Quadrature::N_SHAPE_3243 + threads - 1) / threads;
+  int n_work  = 0;
+  if (constraint_mode == kConstraintFixedCoefficients) {
+    n_work = n_constraint / 3;
+  } else if (constraint_mode == kConstraintLinearCSR) {
+    n_work = n_constraint;
+  } else {
+    n_work = 0;
+  }
+  if (n_work <= 0) {
+    return;
+  }
+  int blocks = (n_work + threads - 1) / threads;
   compute_constraint_data_kernel<<<blocks, threads>>>(d_data);
   cudaDeviceSynchronize();
 }
