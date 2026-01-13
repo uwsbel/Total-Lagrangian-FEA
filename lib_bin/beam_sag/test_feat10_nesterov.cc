@@ -16,10 +16,10 @@
 #include <iomanip>
 #include <iostream>
 
-#include "../../lib_utils/quadrature_utils.h"
 #include "../../lib_src/elements/FEAT10Data.cuh"
 #include "../../lib_src/solvers/SyncedNesterov.cuh"
 #include "../../lib_utils/cpu_utils.h"
+#include "../../lib_utils/quadrature_utils.h"
 
 const double E    = 7e8;   // Young's modulus
 const double nu   = 0.33;  // Poisson's ratio

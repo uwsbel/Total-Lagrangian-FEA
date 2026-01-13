@@ -477,11 +477,11 @@ __global__ void computeContactPatchesKernel(Narrowphase* np,
   if (idx >= numPairs)
     return;
 
-  // Always initialize the minimal patch state first so any early return leaves it
-  // invalid. We intentionally defer writing derived fields (e.g., centroid/normal)
-  // until the patch is confirmed valid to avoid extra global-memory stores for
-  // collision pairs that quickly early-out.
-  ContactPatch& patch      = patches[idx];
+  // Always initialize the minimal patch state first so any early return leaves
+  // it invalid. We intentionally defer writing derived fields (e.g.,
+  // centroid/normal) until the patch is confirmed valid to avoid extra
+  // global-memory stores for collision pairs that quickly early-out.
+  ContactPatch& patch    = patches[idx];
   patch.isValid          = false;
   patch.validOrientation = false;
   patch.numVertices      = 0;
@@ -687,7 +687,8 @@ __device__ void computeBarycentricCoordinates(double3 x, double3 v0, double3 v1,
  * @param patches       Device array of contact patches (already computed)
  * @param numPatches    Number of patches
  * @param d_nodes       Device node coordinates (n_nodes * 3, column-major)
- * @param d_vel         Device nodal velocities (3 * n_nodes, [vx0, vy0, vz0, ...])
+ * @param d_vel         Device nodal velocities (3 * n_nodes, [vx0, vy0, vz0,
+ * ...])
  * @param d_elements    Device element connectivity (n_elems * nodesPerElement,
  *                      column-major)
  * @param n_nodes       Number of nodes
@@ -697,14 +698,10 @@ __device__ void computeBarycentricCoordinates(double3 x, double3 v0, double3 v1,
  * @param d_f_ext       Output: external forces (3 * n_nodes), zeroed before
  *                      kernel launch
  */
-__global__ void computeExternalForcesKernel(const ContactPatch* patches,
-                                            int numPatches,
-                                            const double* d_nodes,
-                                            const double* d_vel,
-                                            const int* d_elements,
-                                            int n_nodes, int n_elems,
-                                            double damping, double friction,
-                                            double* d_f_ext) {
+__global__ void computeExternalForcesKernel(
+    const ContactPatch* patches, int numPatches, const double* d_nodes,
+    const double* d_vel, const int* d_elements, int n_nodes, int n_elems,
+    double damping, double friction, double* d_f_ext) {
   int idx = blockIdx.x * blockDim.x + threadIdx.x;
   if (idx >= numPatches)
     return;
@@ -772,8 +769,8 @@ __global__ void computeExternalForcesKernel(const ContactPatch* patches,
   double3 vA_centroid = make_double3(0.0, 0.0, 0.0);
   double3 vB_centroid = make_double3(0.0, 0.0, 0.0);
   double3 v_rel       = make_double3(0.0, 0.0, 0.0);
-  double  v_rel_n     = 0.0;
-  bool    have_rel_vel = false;
+  double v_rel_n      = 0.0;
+  bool have_rel_vel   = false;
 
   if (d_vel != nullptr && (damping > 0.0 || friction > 0.0)) {
     for (int i = 0; i < 4; i++) {
@@ -781,22 +778,20 @@ __global__ void computeExternalForcesKernel(const ContactPatch* patches,
       int nodeB = elemB[i];
 
       if (nodeA >= 0 && nodeA < n_nodes) {
-        double3 vA_i = make_double3(d_vel[3 * nodeA + 0],
-                                    d_vel[3 * nodeA + 1],
+        double3 vA_i = make_double3(d_vel[3 * nodeA + 0], d_vel[3 * nodeA + 1],
                                     d_vel[3 * nodeA + 2]);
-        vA_centroid = vA_centroid + N_A[i] * vA_i;
+        vA_centroid  = vA_centroid + N_A[i] * vA_i;
       }
 
       if (nodeB >= 0 && nodeB < n_nodes) {
-        double3 vB_i = make_double3(d_vel[3 * nodeB + 0],
-                                    d_vel[3 * nodeB + 1],
+        double3 vB_i = make_double3(d_vel[3 * nodeB + 0], d_vel[3 * nodeB + 1],
                                     d_vel[3 * nodeB + 2]);
-        vB_centroid = vB_centroid + N_B[i] * vB_i;
+        vB_centroid  = vB_centroid + N_B[i] * vB_i;
       }
     }
 
-    v_rel       = vB_centroid - vA_centroid;
-    v_rel_n     = dot(v_rel, normal);
+    v_rel        = vB_centroid - vA_centroid;
+    v_rel_n      = dot(v_rel, normal);
     have_rel_vel = true;
   }
 
@@ -814,15 +809,15 @@ __global__ void computeExternalForcesKernel(const ContactPatch* patches,
 
   if (have_rel_vel && friction > 0.0) {
     // Relative tangential velocity
-    double3 v_rel_t = v_rel - v_rel_n * normal;
-    double  v_rel_t_norm = length(v_rel_t);
+    double3 v_rel_t     = v_rel - v_rel_n * normal;
+    double v_rel_t_norm = length(v_rel_t);
 
     if (v_rel_t_norm > 0.0) {
       // Simple regularization: friction magnitude smoothly approaches mu * N
       const double v_reg = 1e-3;  // regularization velocity scale
-      double       slip_factor = v_rel_t_norm / (v_rel_t_norm + v_reg);
-      double       N           = fabs(p_damped * A);
-      double       Ft_mag      = friction * N * slip_factor;
+      double slip_factor = v_rel_t_norm / (v_rel_t_norm + v_reg);
+      double N           = fabs(p_damped * A);
+      double Ft_mag      = friction * N * slip_factor;
 
       double3 t_hat = (1.0 / v_rel_t_norm) * v_rel_t;
       double3 F_t   = (-Ft_mag) * t_hat;  // Opposes slip of B relative to A

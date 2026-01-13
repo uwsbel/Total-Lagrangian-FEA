@@ -313,6 +313,57 @@ void AppendANCF3243FixedCoefficient(LinearConstraintBuilder& builder,
 }
 
 // ============================================================
+// ANCF3443 constraints helpers
+// ============================================================
+
+namespace {
+
+int ANCF3443DofCol(int node_id, int coef_slot, int component) {
+  const int coef_index = node_id * 4 + coef_slot;
+  return coef_index * 3 + component;
+}
+
+}  // namespace
+
+void AppendANCF3443VectorEqualityConstraint(LinearConstraintBuilder& builder,
+                                            int node_a, int node_b,
+                                            int coef_slot) {
+  if (coef_slot < 0 || coef_slot > 3) {
+    throw std::out_of_range(
+        "AppendANCF3443VectorEqualityConstraint: coef_slot out of range");
+  }
+  for (int c = 0; c < 3; ++c) {
+    const int col_b = ANCF3443DofCol(node_b, coef_slot, c);
+    const int col_a = ANCF3443DofCol(node_a, coef_slot, c);
+    builder.AddRow({{col_b, 1.0}, {col_a, -1.0}}, 0.0);
+  }
+}
+
+void AppendANCF3443VectorWeldedConstraint(LinearConstraintBuilder& builder,
+                                          int node_a, int node_b, int coef_slot,
+                                          const Eigen::Matrix3d& Q) {
+  if (coef_slot < 0 || coef_slot > 3) {
+    throw std::out_of_range(
+        "AppendANCF3443VectorWeldedConstraint: coef_slot out of range");
+  }
+
+  for (int row = 0; row < 3; ++row) {
+    std::vector<std::pair<int, double>> entries;
+    entries.reserve(4);
+    const int col_b = ANCF3443DofCol(node_b, coef_slot, row);
+    entries.push_back({col_b, 1.0});
+    for (int k = 0; k < 3; ++k) {
+      const double w = -Q(row, k);
+      if (w == 0.0)
+        continue;
+      const int col_a = ANCF3443DofCol(node_a, coef_slot, k);
+      entries.push_back({col_a, w});
+    }
+    builder.AddRow(entries, 0.0);
+  }
+}
+
+// ============================================================
 // ANCF3243 mesh reader (.ancf3243mesh)
 // ============================================================
 
@@ -671,6 +722,299 @@ bool ReadANCF3243MeshFromFile(const std::string& path, ANCF3243Mesh& out,
       AppendANCF3243VectorWeldedConstraint(builder, a, b, /*coef_slot=*/3, Q);
     } else {
       SetError(error, "ReadANCF3243MeshFromFile: unknown constraint type '" +
+                          t[0] + "'");
+      return false;
+    }
+  }
+
+  out.constraints = builder.ToCSR();
+  return true;
+}
+
+// ============================================================
+// ANCF3443 mesh reader (.ancf3443mesh)
+// ============================================================
+
+bool ReadANCF3443MeshFromFile(const std::string& path, ANCF3443Mesh& out,
+                              std::string* error) {
+  out = ANCF3443Mesh();
+
+  std::ifstream file(path);
+  if (!file.is_open()) {
+    SetError(error, "ReadANCF3443MeshFromFile: failed to open " + path);
+    return false;
+  }
+
+  std::string line;
+  if (!ReadNextRecord(file, line)) {
+    SetError(error, "ReadANCF3443MeshFromFile: empty file");
+    return false;
+  }
+  {
+    const auto t = Tokenize(line);
+    if (t.size() != 2 || t[0] != "ancf3443_mesh") {
+      SetError(error,
+               "ReadANCF3443MeshFromFile: expected header 'ancf3443_mesh "
+               "<version>'");
+      return false;
+    }
+    int version = 0;
+    if (!ParseIntStrict(t[1], version) || version <= 0) {
+      SetError(error, "ReadANCF3443MeshFromFile: invalid mesh version");
+      return false;
+    }
+    out.version = version;
+  }
+
+  // Optional metadata line(s). For now, accept and ignore lines starting with
+  // 'tire' or 'meta' (reserved for future use).
+  std::streampos pos_after_header = file.tellg();
+  if (ReadNextRecord(file, line)) {
+    const auto t = Tokenize(line);
+    if (!t.empty() && (t[0] == "tire" || t[0] == "meta")) {
+      // ignored
+    } else {
+      file.clear();
+      file.seekg(pos_after_header);
+    }
+  }
+
+  // nodes N
+  if (!ReadNextRecord(file, line)) {
+    SetError(error, "ReadANCF3443MeshFromFile: missing nodes section");
+    return false;
+  }
+  int n_nodes = 0;
+  {
+    const auto t = Tokenize(line);
+    if (t.size() != 2 || t[0] != "nodes" || !ParseIntStrict(t[1], n_nodes) ||
+        n_nodes <= 0) {
+      SetError(error, "ReadANCF3443MeshFromFile: invalid nodes header");
+      return false;
+    }
+  }
+
+  out.n_nodes = n_nodes;
+  out.node_family.assign(static_cast<size_t>(n_nodes), "");
+  out.x12 = Eigen::VectorXd::Zero(4 * n_nodes);
+  out.y12 = Eigen::VectorXd::Zero(4 * n_nodes);
+  out.z12 = Eigen::VectorXd::Zero(4 * n_nodes);
+
+  std::vector<bool> seen_node(static_cast<size_t>(n_nodes), false);
+
+  for (int i = 0; i < n_nodes; ++i) {
+    if (!ReadNextRecord(file, line)) {
+      SetError(error, "ReadANCF3443MeshFromFile: unexpected EOF in nodes");
+      return false;
+    }
+    const auto t = Tokenize(line);
+    if (t.size() != 14) {
+      SetError(
+          error,
+          "ReadANCF3443MeshFromFile: invalid node line (expected 14 tokens)");
+      return false;
+    }
+    int node_id = -1;
+    if (!ParseIntStrict(t[0], node_id) || node_id < 0 || node_id >= n_nodes) {
+      SetError(error, "ReadANCF3443MeshFromFile: node id out of range");
+      return false;
+    }
+    if (seen_node[static_cast<size_t>(node_id)]) {
+      SetError(error, "ReadANCF3443MeshFromFile: duplicate node id");
+      return false;
+    }
+    seen_node[static_cast<size_t>(node_id)] = true;
+
+    out.node_family[static_cast<size_t>(node_id)] = t[1];
+
+    double vals[12];
+    for (int k = 0; k < 12; ++k) {
+      if (!ParseDoubleStrict(t[2 + k], vals[k])) {
+        SetError(error, "ReadANCF3443MeshFromFile: failed to parse node dofs");
+        return false;
+      }
+    }
+    const int base    = 4 * node_id;
+    out.x12(base + 0) = vals[0];
+    out.x12(base + 1) = vals[1];
+    out.x12(base + 2) = vals[2];
+    out.x12(base + 3) = vals[3];
+
+    out.y12(base + 0) = vals[4];
+    out.y12(base + 1) = vals[5];
+    out.y12(base + 2) = vals[6];
+    out.y12(base + 3) = vals[7];
+
+    out.z12(base + 0) = vals[8];
+    out.z12(base + 1) = vals[9];
+    out.z12(base + 2) = vals[10];
+    out.z12(base + 3) = vals[11];
+  }
+
+  for (bool ok : seen_node) {
+    if (!ok) {
+      SetError(error, "ReadANCF3443MeshFromFile: missing node id(s)");
+      return false;
+    }
+  }
+
+  // elements M
+  if (!ReadNextRecord(file, line)) {
+    SetError(error, "ReadANCF3443MeshFromFile: missing elements section");
+    return false;
+  }
+  int n_elements = 0;
+  {
+    const auto t = Tokenize(line);
+    if (t.size() != 2 || t[0] != "elements" ||
+        !ParseIntStrict(t[1], n_elements) || n_elements <= 0) {
+      SetError(error, "ReadANCF3443MeshFromFile: invalid elements header");
+      return false;
+    }
+  }
+
+  out.n_elements = n_elements;
+  out.element_family.assign(static_cast<size_t>(n_elements), "");
+  out.element_L = Eigen::VectorXd::Zero(n_elements);
+  out.element_W = Eigen::VectorXd::Zero(n_elements);
+  out.element_H = Eigen::VectorXd::Zero(n_elements);
+  out.element_connectivity.resize(n_elements, 4);
+  std::vector<bool> seen_elem(static_cast<size_t>(n_elements), false);
+
+  for (int i = 0; i < n_elements; ++i) {
+    if (!ReadNextRecord(file, line)) {
+      SetError(error, "ReadANCF3443MeshFromFile: unexpected EOF in elements");
+      return false;
+    }
+    const auto t = Tokenize(line);
+    if (t.size() != 9) {
+      SetError(
+          error,
+          "ReadANCF3443MeshFromFile: invalid element line (expected 9 tokens)");
+      return false;
+    }
+    int elem_id = -1;
+    if (!ParseIntStrict(t[0], elem_id) || elem_id < 0 ||
+        elem_id >= n_elements) {
+      SetError(error, "ReadANCF3443MeshFromFile: element id out of range");
+      return false;
+    }
+    if (seen_elem[static_cast<size_t>(elem_id)]) {
+      SetError(error, "ReadANCF3443MeshFromFile: duplicate element id");
+      return false;
+    }
+    seen_elem[static_cast<size_t>(elem_id)] = true;
+
+    out.element_family[static_cast<size_t>(elem_id)] = t[1];
+
+    double L = 0.0, W = 0.0, H = 0.0;
+    if (!ParseDoubleStrict(t[2], L) || !ParseDoubleStrict(t[3], W) ||
+        !ParseDoubleStrict(t[4], H) || !(L > 0.0) || !(W > 0.0) || !(H > 0.0)) {
+      SetError(error,
+               "ReadANCF3443MeshFromFile: invalid element dimensions (L/W/H)");
+      return false;
+    }
+    out.element_L(elem_id) = L;
+    out.element_W(elem_id) = W;
+    out.element_H(elem_id) = H;
+
+    int n0 = -1, n1 = -1, n2 = -1, n3 = -1;
+    if (!ParseIntStrict(t[5], n0) || !ParseIntStrict(t[6], n1) ||
+        !ParseIntStrict(t[7], n2) || !ParseIntStrict(t[8], n3) || n0 < 0 ||
+        n1 < 0 || n2 < 0 || n3 < 0 || n0 >= n_nodes || n1 >= n_nodes ||
+        n2 >= n_nodes || n3 >= n_nodes) {
+      SetError(error, "ReadANCF3443MeshFromFile: element node id out of range");
+      return false;
+    }
+    out.element_connectivity(elem_id, 0) = n0;
+    out.element_connectivity(elem_id, 1) = n1;
+    out.element_connectivity(elem_id, 2) = n2;
+    out.element_connectivity(elem_id, 3) = n3;
+  }
+
+  for (bool ok : seen_elem) {
+    if (!ok) {
+      SetError(error, "ReadANCF3443MeshFromFile: missing element id(s)");
+      return false;
+    }
+  }
+
+  // constraints K (optional)
+  if (!ReadNextRecord(file, line)) {
+    out.constraints = LinearConstraintCSR{};
+    return true;
+  }
+
+  int n_constraints_header = 0;
+  {
+    const auto t = Tokenize(line);
+    if (t.size() != 2 || t[0] != "constraints" ||
+        !ParseIntStrict(t[1], n_constraints_header) ||
+        n_constraints_header < 0) {
+      SetError(error, "ReadANCF3443MeshFromFile: invalid constraints header");
+      return false;
+    }
+  }
+
+  const int n_coef = 4 * n_nodes;
+  const int n_dofs = n_coef * 3;
+  LinearConstraintBuilder builder(n_dofs);
+
+  for (int i = 0; i < n_constraints_header; ++i) {
+    if (!ReadNextRecord(file, line)) {
+      SetError(error,
+               "ReadANCF3443MeshFromFile: unexpected EOF in constraints");
+      return false;
+    }
+    const auto t = Tokenize(line);
+    if (t.empty()) {
+      SetError(error, "ReadANCF3443MeshFromFile: empty constraint line");
+      return false;
+    }
+    if (t[0] == "pinned") {
+      if (t.size() != 3) {
+        SetError(error,
+                 "ReadANCF3443MeshFromFile: pinned expects 'pinned a b'");
+        return false;
+      }
+      int a = -1, b = -1;
+      if (!ParseIntStrict(t[1], a) || !ParseIntStrict(t[2], b) || a < 0 ||
+          b < 0 || a >= n_nodes || b >= n_nodes) {
+        SetError(error,
+                 "ReadANCF3443MeshFromFile: pinned node id out of range");
+        return false;
+      }
+      AppendANCF3443VectorEqualityConstraint(builder, a, b, /*coef_slot=*/0);
+    } else if (t[0] == "welded") {
+      if (t.size() != 12) {
+        SetError(
+            error,
+            "ReadANCF3443MeshFromFile: welded expects 'welded a b q00..q22'");
+        return false;
+      }
+      int a = -1, b = -1;
+      if (!ParseIntStrict(t[1], a) || !ParseIntStrict(t[2], b) || a < 0 ||
+          b < 0 || a >= n_nodes || b >= n_nodes) {
+        SetError(error,
+                 "ReadANCF3443MeshFromFile: welded node id out of range");
+        return false;
+      }
+      double q[9];
+      for (int k = 0; k < 9; ++k) {
+        if (!ParseDoubleStrict(t[3 + k], q[k])) {
+          SetError(error, "ReadANCF3443MeshFromFile: welded failed to parse Q");
+          return false;
+        }
+      }
+      Eigen::Matrix3d Q;
+      Q << q[0], q[1], q[2], q[3], q[4], q[5], q[6], q[7], q[8];
+
+      AppendANCF3443VectorEqualityConstraint(builder, a, b, /*coef_slot=*/0);
+      AppendANCF3443VectorWeldedConstraint(builder, a, b, /*coef_slot=*/1, Q);
+      AppendANCF3443VectorWeldedConstraint(builder, a, b, /*coef_slot=*/2, Q);
+      AppendANCF3443VectorWeldedConstraint(builder, a, b, /*coef_slot=*/3, Q);
+    } else {
+      SetError(error, "ReadANCF3443MeshFromFile: unknown constraint type '" +
                           t[0] + "'");
       return false;
     }

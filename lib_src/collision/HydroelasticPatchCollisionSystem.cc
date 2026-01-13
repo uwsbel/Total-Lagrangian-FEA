@@ -16,10 +16,8 @@
 
 HydroelasticPatchCollisionSystem::HydroelasticPatchCollisionSystem(
     const ANCFCPUUtils::MeshManager& mesh_manager,
-    const Eigen::MatrixXd& initial_nodes,
-    const Eigen::MatrixXi& elements,
-    const Eigen::VectorXd& pressure,
-    const Eigen::VectorXi& elementMeshIds,
+    const Eigen::MatrixXd& initial_nodes, const Eigen::MatrixXi& elements,
+    const Eigen::VectorXd& pressure, const Eigen::VectorXi& elementMeshIds,
     bool enable_self_collision) {
   broadphase_.Initialize(mesh_manager);
   broadphase_.EnableSelfCollision(enable_self_collision);
@@ -30,7 +28,7 @@ HydroelasticPatchCollisionSystem::HydroelasticPatchCollisionSystem(
 }
 
 void HydroelasticPatchCollisionSystem::BindNodesDevicePtr(double* d_nodes_xyz,
-                                                         int n_nodes) {
+                                                          int n_nodes) {
   if (d_nodes_xyz == nullptr) {
     throw std::invalid_argument("BindNodesDevicePtr: d_nodes_xyz is null");
   }
@@ -42,10 +40,11 @@ void HydroelasticPatchCollisionSystem::BindNodesDevicePtr(double* d_nodes_xyz,
   broadphase_.SortAABBs(0);
 }
 
-void HydroelasticPatchCollisionSystem::Step(const CollisionSystemInput& in,
-                                           const CollisionSystemParams& params) {
+void HydroelasticPatchCollisionSystem::Step(
+    const CollisionSystemInput& in, const CollisionSystemParams& params) {
   if (in.d_vel_xyz == nullptr) {
-    throw std::invalid_argument("HydroelasticPatchCollisionSystem::Step: d_vel_xyz is null");
+    throw std::invalid_argument(
+        "HydroelasticPatchCollisionSystem::Step: d_vel_xyz is null");
   }
 
   broadphase_.CreateAABB();
@@ -75,6 +74,7 @@ void HydroelasticPatchCollisionSystem::RetrieveResults() {
   narrowphase_.RetrieveResults();
 }
 
-std::vector<ContactPatch> HydroelasticPatchCollisionSystem::GetValidPatches() const {
+std::vector<ContactPatch> HydroelasticPatchCollisionSystem::GetValidPatches()
+    const {
   return narrowphase_.GetValidPatches();
 }

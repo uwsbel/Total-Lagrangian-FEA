@@ -18,7 +18,7 @@ struct CollisionSystemInput {
   // Column-major node buffer on device:
   //   [x(0..n-1), y(0..n-1), z(0..n-1)]
   double* d_nodes_xyz = nullptr;
-  int n_nodes = 0;
+  int n_nodes         = 0;
 
   // Optional velocity buffer (3*n) on device:
   //   [vx0, vy0, vz0, vx1, ...]
@@ -29,7 +29,7 @@ struct CollisionSystemInput {
 };
 
 struct CollisionSystemParams {
-  double damping = 0.0;
+  double damping  = 0.0;
   double friction = 0.0;
 };
 
@@ -43,5 +43,5 @@ class CollisionSystem {
                     const CollisionSystemParams& params) = 0;
 
   virtual const double* GetExternalForcesDevicePtr() const = 0;
-  virtual int GetNumContacts() const = 0;
+  virtual int GetNumContacts() const                       = 0;
 };

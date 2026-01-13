@@ -1,16 +1,15 @@
 #include <cooperative_groups.h>
-
-#include <fstream>
-#include <iomanip>
-#include <iostream>
-#include <cstdlib>
-#include <vector>
-
 #include <thrust/device_ptr.h>
 #include <thrust/execution_policy.h>
 #include <thrust/scan.h>
 #include <thrust/sort.h>
 #include <thrust/unique.h>
+
+#include <cstdlib>
+#include <fstream>
+#include <iomanip>
+#include <iostream>
+#include <vector>
 
 /*==============================================================
  *==============================================================
@@ -31,7 +30,7 @@
 namespace cg = cooperative_groups;
 
 __global__ void build_mass_keys_feat10_kernel(GPU_FEAT10_Data *d_data,
-                                             unsigned long long *d_keys) {
+                                              unsigned long long *d_keys) {
   const int total = d_data->gpu_n_elem() * Quadrature::N_NODE_T10_10 *
                     Quadrature::N_NODE_T10_10;
   int tid = blockIdx.x * blockDim.x + threadIdx.x;
@@ -39,7 +38,8 @@ __global__ void build_mass_keys_feat10_kernel(GPU_FEAT10_Data *d_data,
     return;
   }
 
-  const int elem = tid / (Quadrature::N_NODE_T10_10 * Quadrature::N_NODE_T10_10);
+  const int elem =
+      tid / (Quadrature::N_NODE_T10_10 * Quadrature::N_NODE_T10_10);
   const int item_local =
       tid % (Quadrature::N_NODE_T10_10 * Quadrature::N_NODE_T10_10);
   const int i_local = item_local / Quadrature::N_NODE_T10_10;
@@ -56,17 +56,17 @@ __global__ void build_mass_keys_feat10_kernel(GPU_FEAT10_Data *d_data,
 }
 
 __global__ void decode_mass_keys_kernel(const unsigned long long *d_keys,
-                                       int nnz, int *d_csr_columns,
-                                       int *d_row_counts) {
+                                        int nnz, int *d_csr_columns,
+                                        int *d_row_counts) {
   int tid = blockIdx.x * blockDim.x + threadIdx.x;
   if (tid >= nnz) {
     return;
   }
 
   const unsigned long long key = d_keys[tid];
-  const int row = static_cast<int>(key >> 32);
-  const int col = static_cast<int>(key & 0xffffffffULL);
-  d_csr_columns[tid] = col;
+  const int row                = static_cast<int>(key >> 32);
+  const int col                = static_cast<int>(key & 0xffffffffULL);
+  d_csr_columns[tid]           = col;
   atomicAdd(d_row_counts + row, 1);
 }
 
@@ -76,14 +76,16 @@ __global__ void set_last_offset_kernel(int *d_offsets, int n_rows, int nnz) {
   }
 }
 
-__device__ __forceinline__ int binary_search_column_csr_mass(
-    const int *cols, int n_cols, int target) {
-  int left = 0;
+__device__ __forceinline__ int binary_search_column_csr_mass(const int *cols,
+                                                             int n_cols,
+                                                             int target) {
+  int left  = 0;
   int right = n_cols - 1;
   while (left <= right) {
     int mid = left + ((right - left) >> 1);
-    int v = cols[mid];
-    if (v == target) return mid;
+    int v   = cols[mid];
+    if (v == target)
+      return mid;
     if (v < target)
       left = mid + 1;
     else
@@ -354,7 +356,8 @@ void GPU_FEAT10_Data::CalcMassMatrix() {
   int h_nnz = 0;
   HANDLE_ERROR(cudaMemcpy(&h_nnz, d_nnz, sizeof(int), cudaMemcpyDeviceToHost));
   if (h_nnz > 0) {
-    HANDLE_ERROR(cudaMemset(d_csr_values, 0, static_cast<size_t>(h_nnz) * sizeof(double)));
+    HANDLE_ERROR(cudaMemset(d_csr_values, 0,
+                            static_cast<size_t>(h_nnz) * sizeof(double)));
   }
 
   // Launch: n_elem × 10 × 10 threads
@@ -374,12 +377,12 @@ void GPU_FEAT10_Data::BuildMassCSRPattern() {
   const int total_keys =
       n_elem * Quadrature::N_NODE_T10_10 * Quadrature::N_NODE_T10_10;
   unsigned long long *d_keys = nullptr;
-  HANDLE_ERROR(cudaMalloc(&d_keys,
-                          static_cast<size_t>(total_keys) * sizeof(unsigned long long)));
+  HANDLE_ERROR(cudaMalloc(
+      &d_keys, static_cast<size_t>(total_keys) * sizeof(unsigned long long)));
 
   {
     constexpr int threads = 256;
-    const int blocks = (total_keys + threads - 1) / threads;
+    const int blocks      = (total_keys + threads - 1) / threads;
     build_mass_keys_feat10_kernel<<<blocks, threads>>>(d_data, d_keys);
     HANDLE_ERROR(cudaDeviceSynchronize());
   }
@@ -401,14 +404,16 @@ void GPU_FEAT10_Data::BuildMassCSRPattern() {
   HANDLE_ERROR(cudaMalloc((void **)&d_nnz, sizeof(int)));
 
   int *d_row_counts = nullptr;
-  HANDLE_ERROR(cudaMalloc(&d_row_counts, static_cast<size_t>(n_coef) * sizeof(int)));
-  HANDLE_ERROR(cudaMemset(d_row_counts, 0, static_cast<size_t>(n_coef) * sizeof(int)));
+  HANDLE_ERROR(
+      cudaMalloc(&d_row_counts, static_cast<size_t>(n_coef) * sizeof(int)));
+  HANDLE_ERROR(
+      cudaMemset(d_row_counts, 0, static_cast<size_t>(n_coef) * sizeof(int)));
 
   {
     constexpr int threads = 256;
-    const int blocks = (nnz + threads - 1) / threads;
+    const int blocks      = (nnz + threads - 1) / threads;
     decode_mass_keys_kernel<<<blocks, threads>>>(d_keys, nnz, d_csr_columns,
-                                                d_row_counts);
+                                                 d_row_counts);
     HANDLE_ERROR(cudaDeviceSynchronize());
   }
 
@@ -423,7 +428,8 @@ void GPU_FEAT10_Data::BuildMassCSRPattern() {
   }
 
   HANDLE_ERROR(cudaMemcpy(d_nnz, &nnz, sizeof(int), cudaMemcpyHostToDevice));
-  HANDLE_ERROR(cudaMemset(d_csr_values, 0, static_cast<size_t>(nnz) * sizeof(double)));
+  HANDLE_ERROR(
+      cudaMemset(d_csr_values, 0, static_cast<size_t>(nnz) * sizeof(double)));
 
   HANDLE_ERROR(cudaFree(d_row_counts));
   HANDLE_ERROR(cudaFree(d_keys));
@@ -435,9 +441,9 @@ void GPU_FEAT10_Data::BuildMassCSRPattern() {
 
 namespace {
 __global__ void build_constraint_j_csr_kernel(int n_constraint,
-                                             const int* fixed_nodes,
-                                             int* j_offsets, int* j_columns,
-                                             double* j_values) {
+                                              const int *fixed_nodes,
+                                              int *j_offsets, int *j_columns,
+                                              double *j_values) {
   int tid = blockIdx.x * blockDim.x + threadIdx.x;
   if (tid >= n_constraint) {
     return;
@@ -445,16 +451,16 @@ __global__ void build_constraint_j_csr_kernel(int n_constraint,
 
   j_offsets[tid] = tid;
 
-  int fixed_idx = tid / 3;
-  int dof       = tid % 3;
-  int node      = fixed_nodes[fixed_idx];
+  int fixed_idx  = tid / 3;
+  int dof        = tid % 3;
+  int node       = fixed_nodes[fixed_idx];
   j_columns[tid] = node * 3 + dof;
   j_values[tid]  = 1.0;
 }
 
 __global__ void build_constraint_jt_row_counts_kernel(int n_constraint,
-                                                      const int* fixed_nodes,
-                                                      int* row_counts) {
+                                                      const int *fixed_nodes,
+                                                      int *row_counts) {
   int tid = blockIdx.x * blockDim.x + threadIdx.x;
   if (tid >= n_constraint) {
     return;
@@ -468,10 +474,10 @@ __global__ void build_constraint_jt_row_counts_kernel(int n_constraint,
 }
 
 __global__ void build_constraint_jt_fill_kernel(int n_constraint,
-                                                const int* fixed_nodes,
-                                                const int* offsets,
-                                                int* row_positions, int* columns,
-                                                double* values) {
+                                                const int *fixed_nodes,
+                                                const int *offsets,
+                                                int *row_positions,
+                                                int *columns, double *values) {
   int tid = blockIdx.x * blockDim.x + threadIdx.x;
   if (tid >= n_constraint) {
     return;
@@ -502,13 +508,13 @@ void GPU_FEAT10_Data::ConvertToCSR_ConstraintJac() {
 
   const int nnz = n_constraint;
 
-  HANDLE_ERROR(cudaMalloc((void**)&d_j_csr_offsets,
+  HANDLE_ERROR(cudaMalloc((void **)&d_j_csr_offsets,
                           static_cast<size_t>(n_constraint + 1) * sizeof(int)));
-  HANDLE_ERROR(cudaMalloc((void**)&d_j_csr_columns,
+  HANDLE_ERROR(cudaMalloc((void **)&d_j_csr_columns,
                           static_cast<size_t>(nnz) * sizeof(int)));
-  HANDLE_ERROR(cudaMalloc((void**)&d_j_csr_values,
+  HANDLE_ERROR(cudaMalloc((void **)&d_j_csr_values,
                           static_cast<size_t>(nnz) * sizeof(double)));
-  HANDLE_ERROR(cudaMalloc((void**)&d_j_nnz, sizeof(int)));
+  HANDLE_ERROR(cudaMalloc((void **)&d_j_nnz, sizeof(int)));
 
   {
     constexpr int threads = 256;
@@ -540,19 +546,22 @@ void GPU_FEAT10_Data::ConvertToCSR_ConstraintJacT() {
   const int num_rows = n_coef * 3;
   const int nnz      = n_constraint;
 
-  HANDLE_ERROR(cudaMalloc((void**)&d_cj_csr_offsets,
+  HANDLE_ERROR(cudaMalloc((void **)&d_cj_csr_offsets,
                           static_cast<size_t>(num_rows + 1) * sizeof(int)));
-  HANDLE_ERROR(cudaMalloc((void**)&d_cj_csr_columns,
+  HANDLE_ERROR(cudaMalloc((void **)&d_cj_csr_columns,
                           static_cast<size_t>(nnz) * sizeof(int)));
-  HANDLE_ERROR(cudaMalloc((void**)&d_cj_csr_values,
+  HANDLE_ERROR(cudaMalloc((void **)&d_cj_csr_values,
                           static_cast<size_t>(nnz) * sizeof(double)));
-  HANDLE_ERROR(cudaMalloc((void**)&d_cj_nnz, sizeof(int)));
+  HANDLE_ERROR(cudaMalloc((void **)&d_cj_nnz, sizeof(int)));
 
-  int* d_row_counts    = nullptr;
-  int* d_row_positions = nullptr;
-  HANDLE_ERROR(cudaMalloc(&d_row_counts, static_cast<size_t>(num_rows) * sizeof(int)));
-  HANDLE_ERROR(cudaMalloc(&d_row_positions, static_cast<size_t>(num_rows) * sizeof(int)));
-  HANDLE_ERROR(cudaMemset(d_row_counts, 0, static_cast<size_t>(num_rows) * sizeof(int)));
+  int *d_row_counts    = nullptr;
+  int *d_row_positions = nullptr;
+  HANDLE_ERROR(
+      cudaMalloc(&d_row_counts, static_cast<size_t>(num_rows) * sizeof(int)));
+  HANDLE_ERROR(cudaMalloc(&d_row_positions,
+                          static_cast<size_t>(num_rows) * sizeof(int)));
+  HANDLE_ERROR(
+      cudaMemset(d_row_counts, 0, static_cast<size_t>(num_rows) * sizeof(int)));
 
   {
     constexpr int threads = 256;
@@ -564,8 +573,8 @@ void GPU_FEAT10_Data::ConvertToCSR_ConstraintJacT() {
 
   thrust::device_ptr<int> counts_begin(d_row_counts);
   thrust::device_ptr<int> offsets_begin(d_cj_csr_offsets);
-  thrust::exclusive_scan(thrust::device, counts_begin,
-                         counts_begin + num_rows, offsets_begin);
+  thrust::exclusive_scan(thrust::device, counts_begin, counts_begin + num_rows,
+                         offsets_begin);
 
   set_last_offset_kernel<<<1, 1>>>(d_cj_csr_offsets, num_rows, nnz);
   HANDLE_ERROR(cudaDeviceSynchronize());
@@ -626,8 +635,8 @@ void GPU_FEAT10_Data::RetrieveDnDuPreToCPU(
 }
 
 void GPU_FEAT10_Data::RetrieveMassCSRToCPU(std::vector<int> &offsets,
-                                          std::vector<int> &columns,
-                                          std::vector<double> &values) {
+                                           std::vector<int> &columns,
+                                           std::vector<double> &values) {
   offsets.assign(static_cast<size_t>(n_coef) + 1, 0);
   columns.clear();
   values.clear();
@@ -764,7 +773,7 @@ void GPU_FEAT10_Data::UpdateNodalFixed(const Eigen::VectorXi &fixed_nodes) {
       d_cj_csr_columns = nullptr;
       d_cj_csr_values  = nullptr;
       d_cj_nnz         = nullptr;
-      is_cj_csr_setup = false;
+      is_cj_csr_setup  = false;
     }
 
     if (is_j_csr_setup) {
@@ -776,7 +785,7 @@ void GPU_FEAT10_Data::UpdateNodalFixed(const Eigen::VectorXi &fixed_nodes) {
       d_j_csr_columns = nullptr;
       d_j_csr_values  = nullptr;
       d_j_nnz         = nullptr;
-      is_j_csr_setup = false;
+      is_j_csr_setup  = false;
     }
 
     n_constraint = new_n_constraint;

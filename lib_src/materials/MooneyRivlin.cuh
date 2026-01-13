@@ -21,7 +21,7 @@ __device__ __forceinline__ double mr_det3x3(const double A[3][3]) {
 }
 
 __device__ __forceinline__ void mr_invT3x3(const double A[3][3], double detA,
-                                          double invT_out[3][3]) {
+                                           double invT_out[3][3]) {
   const double eps = 1e-12;
   double safe_det  = detA;
   if (fabs(safe_det) < eps) {
@@ -43,8 +43,8 @@ __device__ __forceinline__ void mr_invT3x3(const double A[3][3], double detA,
 }
 
 __device__ __forceinline__ void mr_compute_P(const double F[3][3], double mu10,
-                                            double mu01, double kappa,
-                                            double P_out[3][3]) {
+                                             double mu01, double kappa,
+                                             double P_out[3][3]) {
   double C[3][3] = {{0.0}};
 #pragma unroll
   for (int i = 0; i < 3; i++) {
@@ -206,14 +206,15 @@ __device__ __forceinline__ void mr_compute_tangent_tensor(
           double dt2 = (-4.0 / 3.0) * t2 * FinvT[k][l];
           double dt3 = (kappa * (2.0 * J - 1.0) * J) * FinvT[k][l];
 
-          double dT1 = delta_ik * delta_jl - (2.0 / 3.0) * F[k][l] * FinvT[i][j] +
+          double dT1 = delta_ik * delta_jl -
+                       (2.0 / 3.0) * F[k][l] * FinvT[i][j] +
                        (I1 / 3.0) * FinvT[i][l] * FinvT[k][j];
 
-          double dT2 = 2.0 * F[k][l] * F[i][j] + I1 * delta_ik * delta_jl -
-                       (delta_ik * C[l][j] + F[i][l] * F[k][j] +
-                        delta_jl * FFT[i][k]) -
-                       (4.0 / 3.0) * (I1 * F[k][l] - FC[k][l]) * FinvT[i][j] +
-                       (2.0 * I2 / 3.0) * FinvT[i][l] * FinvT[k][j];
+          double dT2 =
+              2.0 * F[k][l] * F[i][j] + I1 * delta_ik * delta_jl -
+              (delta_ik * C[l][j] + F[i][l] * F[k][j] + delta_jl * FFT[i][k]) -
+              (4.0 / 3.0) * (I1 * F[k][l] - FC[k][l]) * FinvT[i][j] +
+              (2.0 * I2 / 3.0) * FinvT[i][l] * FinvT[k][j];
 
           A[i][j][k][l] = dt1 * term1[i][j] + t1 * dT1 + dt2 * term2[i][j] +
                           t2 * dT2 + dt3 * FinvT[i][j] + t3 * dFinvT;

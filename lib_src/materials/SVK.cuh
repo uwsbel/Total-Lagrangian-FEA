@@ -55,8 +55,8 @@ __device__ __forceinline__ void svk_compute_tangent_block(
 }
 
 __device__ __forceinline__ void svk_compute_P(const double F[3][3],
-                                             double lambda, double mu,
-                                             double P_out[3][3]) {
+                                              double lambda, double mu,
+                                              double P_out[3][3]) {
 #pragma unroll
   for (int i = 0; i < 3; i++) {
 #pragma unroll

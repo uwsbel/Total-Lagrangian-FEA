@@ -14,20 +14,18 @@
 #include <Eigen/Dense>
 #include <vector>
 
+#include "HydroelasticBroadphase.cuh"
+#include "HydroelasticNarrowphase.cuh"
 #include "lib_src/collision/CollisionSystemBase.h"
 #include "lib_utils/mesh_manager.h"
 
-#include "HydroelasticBroadphase.cuh"
-#include "HydroelasticNarrowphase.cuh"
-
 class HydroelasticPatchCollisionSystem final : public CollisionSystem {
  public:
-  HydroelasticPatchCollisionSystem(const ANCFCPUUtils::MeshManager& mesh_manager,
-                                   const Eigen::MatrixXd& initial_nodes,
-                                   const Eigen::MatrixXi& elements,
-                                   const Eigen::VectorXd& pressure,
-                                   const Eigen::VectorXi& elementMeshIds,
-                                   bool enable_self_collision);
+  HydroelasticPatchCollisionSystem(
+      const ANCFCPUUtils::MeshManager& mesh_manager,
+      const Eigen::MatrixXd& initial_nodes, const Eigen::MatrixXi& elements,
+      const Eigen::VectorXd& pressure, const Eigen::VectorXi& elementMeshIds,
+      bool enable_self_collision);
 
   void BindNodesDevicePtr(double* d_nodes_xyz, int n_nodes) override;
 

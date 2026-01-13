@@ -1,16 +1,17 @@
 #pragma once
 
 #include <Eigen/Dense>
+#include <set>
 #include <string>
 #include <vector>
-#include <set>
 
 namespace ANCFCPUUtils {
 
 /**
  * Build vertex adjacency graph from element connectivity
  * Two nodes are adjacent if they belong to the same element
- * @param element_connectivity Element connectivity matrix (n_elem × nodes_per_elem)
+ * @param element_connectivity Element connectivity matrix (n_elem ×
+ * nodes_per_elem)
  * @param n_nodes Total number of nodes
  * @return Adjacency list for each node
  */
@@ -38,7 +39,8 @@ bool ValidateColoring(const Eigen::MatrixXi &element_connectivity,
 
 /**
  * Build incidence list mapping each node to (element_idx, local_node_idx) pairs
- * @param element_connectivity Element connectivity matrix (n_elem × nodes_per_elem)
+ * @param element_connectivity Element connectivity matrix (n_elem ×
+ * nodes_per_elem)
  * @param n_nodes Total number of nodes
  * @return For each node, a vector of (element_idx, local_node_idx) pairs
  */
@@ -52,7 +54,7 @@ std::vector<std::vector<std::pair<int, int>>> BuildNodeIncidence(
  * @return For each color, a vector of node indices
  */
 std::vector<std::vector<int>> BuildColorToNodes(const Eigen::VectorXi &colors,
-                                                 int n_colors);
+                                                int n_colors);
 
 /**
  * Construct the B matrix for ANCF3243 elements and compute its inverse
@@ -67,10 +69,10 @@ void ANCF3243_B12_matrix(double L, double W, double H,
                          Eigen::MatrixXd &B_inv_out, int n_shape);
 
 /**
- * Construct per-element B_inv blocks for ANCF3243 and pack them as a flat array.
- * Layout: for element e, its block occupies
- *   B_inv_flat_out.segment(e * n_shape * n_shape, n_shape * n_shape)
- * using Eigen's default column-major ordering of the n_shape×n_shape matrix.
+ * Construct per-element B_inv blocks for ANCF3243 and pack them as a flat
+ * array. Layout: for element e, its block occupies B_inv_flat_out.segment(e *
+ * n_shape * n_shape, n_shape * n_shape) using Eigen's default column-major
+ * ordering of the n_shape×n_shape matrix.
  */
 void ANCF3243_B12_matrix_flat_per_element(const Eigen::VectorXd &L,
                                           const Eigen::VectorXd &W,
@@ -111,8 +113,8 @@ void ANCF3443_B12_matrix(double L, double W, double H,
                          Eigen::MatrixXd &B_inv_out, int n_shape);
 
 /**
- * Construct per-element B_inv blocks for ANCF3443 and pack them as a flat array.
- * Layout matches ANCF3243_B12_matrix_flat_per_element.
+ * Construct per-element B_inv blocks for ANCF3443 and pack them as a flat
+ * array. Layout matches ANCF3243_B12_matrix_flat_per_element.
  */
 void ANCF3443_B12_matrix_flat_per_element(const Eigen::VectorXd &L,
                                           const Eigen::VectorXd &W,

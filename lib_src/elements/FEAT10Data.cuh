@@ -8,8 +8,8 @@
 
 #include "../../lib_utils/cuda_utils.h"
 #include "../../lib_utils/quadrature_utils.h"
-#include "ElementBase.h"
 #include "../materials/MaterialModel.cuh"
+#include "ElementBase.h"
 
 // Definition of GPU_ANCF3443 and data access device functions
 #pragma once
@@ -330,7 +330,7 @@ struct GPU_FEAT10_Data : public ElementBase {
   }
 
   void ConvertToCSR_ConstraintJac();
-  
+
   void BuildConstraintJacobianCSR() {
     ConvertToCSR_ConstraintJac();
   }
@@ -491,19 +491,19 @@ struct GPU_FEAT10_Data : public ElementBase {
     cudaMemset(d_P_vis, 0,
                n_elem * Quadrature::N_QP_T10_5 * 3 * 3 * sizeof(double));
 
-    double rho0         = 0.0;
-    double nu           = 0.0;
-    double E            = 0.0;
+    double rho0 = 0.0;
+    double nu   = 0.0;
+    double E    = 0.0;
     // Compute material constants
     double mu = E / (2 * (1 + nu));  // Shear modulus μ
     double lambda =
         (E * nu) / ((1 + nu) * (1 - 2 * nu));  // Lamé's first parameter λ
-    double eta_damp     = 0.0;
-    double lambda_damp  = 0.0;
-    int material_model  = MATERIAL_MODEL_SVK;
-    double mu10         = 0.0;
-    double mu01         = 0.0;
-    double kappa        = 0.0;
+    double eta_damp    = 0.0;
+    double lambda_damp = 0.0;
+    int material_model = MATERIAL_MODEL_SVK;
+    double mu10        = 0.0;
+    double mu01        = 0.0;
+    double kappa       = 0.0;
 
     HANDLE_ERROR(
         cudaMemcpy(d_rho0, &rho0, sizeof(double), cudaMemcpyHostToDevice));
@@ -601,7 +601,7 @@ struct GPU_FEAT10_Data : public ElementBase {
     HANDLE_ERROR(cudaMemcpy(d_nu, &nu, sizeof(double), cudaMemcpyHostToDevice));
     HANDLE_ERROR(cudaMemcpy(d_E, &E, sizeof(double), cudaMemcpyHostToDevice));
 
-    double mu = E / (2 * (1 + nu));
+    double mu     = E / (2 * (1 + nu));
     double lambda = (E * nu) / ((1 + nu) * (1 - 2 * nu));
     HANDLE_ERROR(cudaMemcpy(d_mu, &mu, sizeof(double), cudaMemcpyHostToDevice));
     HANDLE_ERROR(
@@ -668,9 +668,11 @@ struct GPU_FEAT10_Data : public ElementBase {
   /**
    * Update node positions on GPU (for prescribed motion of fixed nodes).
    */
-  void UpdatePositions(const Eigen::VectorXd &h_x12, const Eigen::VectorXd &h_y12,
+  void UpdatePositions(const Eigen::VectorXd &h_x12,
+                       const Eigen::VectorXd &h_y12,
                        const Eigen::VectorXd &h_z12) {
-    if (h_x12.size() != n_coef || h_y12.size() != n_coef || h_z12.size() != n_coef) {
+    if (h_x12.size() != n_coef || h_y12.size() != n_coef ||
+        h_z12.size() != n_coef) {
       std::cerr << "Position vector size mismatch." << std::endl;
       return;
     }
@@ -685,7 +687,8 @@ struct GPU_FEAT10_Data : public ElementBase {
   void UpdateConstraintTargets(const Eigen::VectorXd &h_x12,
                                const Eigen::VectorXd &h_y12,
                                const Eigen::VectorXd &h_z12) {
-    if (h_x12.size() != n_coef || h_y12.size() != n_coef || h_z12.size() != n_coef) {
+    if (h_x12.size() != n_coef || h_y12.size() != n_coef ||
+        h_z12.size() != n_coef) {
       std::cerr << "Position vector size mismatch." << std::endl;
       return;
     }
@@ -701,9 +704,9 @@ struct GPU_FEAT10_Data : public ElementBase {
 
   /**
    * Update fixed nodes for dynamic constraint changes (e.g., moving grippers).
-   * This reuses existing constraint buffers if the number of fixed nodes matches,
-   * otherwise reallocates. After calling this, you must call CalcConstraintData()
-   * and rebuild constraint Jacobians (CSR) if needed.
+   * This reuses existing constraint buffers if the number of fixed nodes
+   * matches, otherwise reallocates. After calling this, you must call
+   * CalcConstraintData() and rebuild constraint Jacobians (CSR) if needed.
    */
   void UpdateNodalFixed(const Eigen::VectorXi &fixed_nodes);
 

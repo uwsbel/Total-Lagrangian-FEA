@@ -183,6 +183,47 @@ struct ANCF3243Mesh {
 bool ReadANCF3243MeshFromFile(const std::string& path, ANCF3243Mesh& out,
                               std::string* error = nullptr);
 
+// ============================================================
+// ANCF3443 shell mesh IO + constraints (general utilities)
+// ============================================================
+
+struct ANCF3443Mesh {
+  // Parsed header metadata (when present).
+  int version = 0;  // file format version
+
+  // Geometry + connectivity.
+  int n_nodes    = 0;
+  int n_elements = 0;
+  std::vector<std::string> node_family;  // size = n_nodes ("R"/"S"/...)
+  Eigen::VectorXd x12, y12, z12;         // size = 4 * n_nodes each
+
+  std::vector<std::string> element_family;  // size = n_elements
+  Eigen::VectorXd element_L;                // size = n_elements
+  Eigen::VectorXd element_W;                // size = n_elements
+  Eigen::VectorXd element_H;                // size = n_elements
+  Eigen::MatrixXi element_connectivity;     // n_elements x 4 (node IDs)
+
+  // Linear constraints encoded in scalar-DOF space (see LinearConstraintCSR).
+  LinearConstraintCSR constraints;
+};
+
+// Reads an `.ancf3443mesh` file containing ANCF3443 geometry/connectivity and
+// optional linear constraints. Returns false on parse/validation errors.
+bool ReadANCF3443MeshFromFile(const std::string& path, ANCF3443Mesh& out,
+                              std::string* error = nullptr);
+
+// Appends a 3D vector equality constraint: r(b,coef_slot) - r(a,coef_slot) = 0,
+// where coef_slot is 0 for position, 1/2/3 for (r_u, r_v, r_w).
+void AppendANCF3443VectorEqualityConstraint(LinearConstraintBuilder& builder,
+                                            int node_a, int node_b,
+                                            int coef_slot);
+
+// Appends a 3D vector welded constraint: r(b,coef_slot) - Q * r(a,coef_slot) =
+// 0. Q is row-major 3x3.
+void AppendANCF3443VectorWeldedConstraint(LinearConstraintBuilder& builder,
+                                          int node_a, int node_b, int coef_slot,
+                                          const Eigen::Matrix3d& Q);
+
 // Appends a 3D vector equality constraint: r(b,coef_slot) - r(a,coef_slot) = 0,
 // where coef_slot is 0 for position, 1/2/3 for (r_u, r_v, r_w).
 void AppendANCF3243VectorEqualityConstraint(LinearConstraintBuilder& builder,

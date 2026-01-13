@@ -16,9 +16,9 @@
 
 #include <cmath>
 
-#include "FEAT10Data.cuh"
-#include "../materials/SVK.cuh"
 #include "../materials/MooneyRivlin.cuh"
+#include "../materials/SVK.cuh"
+#include "FEAT10Data.cuh"
 
 // Forward declaration for device helper templates.
 struct SyncedNewtonSolver;
@@ -348,9 +348,9 @@ __device__ __forceinline__ void vbd_accumulate_residual_and_hessian_diag(
   const double Fh1 = F10 * ha0 + F11 * ha1 + F12 * ha2;
   const double Fh2 = F20 * ha0 + F21 * ha1 + F22 * ha2;
 
-  const double hij        = ha0 * ha0 + ha1 * ha1 + ha2 * ha2;
-  const double Fh_dot_Fh  = Fh0 * Fh0 + Fh1 * Fh1 + Fh2 * Fh2;
-  const double weight_k   = dt * dV;
+  const double hij       = ha0 * ha0 + ha1 * ha1 + ha2 * ha2;
+  const double Fh_dot_Fh = Fh0 * Fh0 + Fh1 * Fh1 + Fh2 * Fh2;
+  const double weight_k  = dt * dV;
 
   double Kblock[3][3];
   if (d_data->material_model() == MATERIAL_MODEL_MOONEY_RIVLIN) {
@@ -377,11 +377,10 @@ __device__ __forceinline__ void vbd_accumulate_residual_and_hessian_diag(
     }
   } else {
     const double Fh_vec[3] = {Fh0, Fh1, Fh2};
-    const double FFT[3][3] = {{FFT00, FFT01, FFT02},
-                              {FFT10, FFT11, FFT12},
-                              {FFT20, FFT21, FFT22}};
+    const double FFT[3][3] = {
+        {FFT00, FFT01, FFT02}, {FFT10, FFT11, FFT12}, {FFT20, FFT21, FFT22}};
     svk_compute_tangent_block(Fh_vec, Fh_vec, hij, trE, Fh_dot_Fh, FFT,
-                             d_data->lambda(), d_data->mu(), weight_k, Kblock);
+                              d_data->lambda(), d_data->mu(), weight_k, Kblock);
   }
 
   h00 += Kblock[0][0];
@@ -601,11 +600,12 @@ __device__ __forceinline__ void compute_hessian_assemble_csr<GPU_FEAT10_Data>(
   double wq     = d_data->tet5pt_weights(qp_idx);
   double dV     = detJ * wq;
 
-  const bool use_mr = (d_data->material_model() == MATERIAL_MODEL_MOONEY_RIVLIN);
+  const bool use_mr =
+      (d_data->material_model() == MATERIAL_MODEL_MOONEY_RIVLIN);
   double A_mr[3][3][3][3];
   if (use_mr) {
-    mr_compute_tangent_tensor(F, d_data->mu10(), d_data->mu01(), d_data->kappa(),
-                              A_mr);
+    mr_compute_tangent_tensor(F, d_data->mu10(), d_data->mu01(),
+                              d_data->kappa(), A_mr);
   }
 
   // Local K_elem 30x30
@@ -643,7 +643,7 @@ __device__ __forceinline__ void compute_hessian_assemble_csr<GPU_FEAT10_Data>(
         }
       } else {
         svk_compute_tangent_block(Fh[i], Fh[j], hij, trE, Fhj_dot_Fhi, FFT,
-                                 lambda, mu, dV, Kblock);
+                                  lambda, mu, dV, Kblock);
       }
 
 #pragma unroll

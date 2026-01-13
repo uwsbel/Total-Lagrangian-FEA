@@ -13,6 +13,7 @@
 #pragma once
 
 #include <cublas_v2.h>
+
 #include <iostream>
 
 #include "lib_src/solvers/SyncedAdamW.cuh"
@@ -26,36 +27,36 @@ class SyncedAdamWNocoopSolver : public SolverBase {
         n_beam_(data->get_n_beam()),
         n_constraints_(n_constraints) {
     if (data->type == TYPE_3243) {
-      type_            = TYPE_3243;
-      auto *typed_data = static_cast<GPU_ANCF3243_Data *>(data);
-      d_data_          = typed_data->d_data;
-      d_constraint_ptr_ =
-          typed_data->Get_Is_Constraint_Setup() ? typed_data->Get_Constraint_Ptr()
-                                                : nullptr;
-      n_total_qp_      = Quadrature::N_TOTAL_QP_3_2_2;
-      n_shape_         = Quadrature::N_SHAPE_3243;
+      type_             = TYPE_3243;
+      auto *typed_data  = static_cast<GPU_ANCF3243_Data *>(data);
+      d_data_           = typed_data->d_data;
+      d_constraint_ptr_ = typed_data->Get_Is_Constraint_Setup()
+                              ? typed_data->Get_Constraint_Ptr()
+                              : nullptr;
+      n_total_qp_       = Quadrature::N_TOTAL_QP_3_2_2;
+      n_shape_          = Quadrature::N_SHAPE_3243;
       typed_data->CalcDsDuPre();
     } else if (data->type == TYPE_3443) {
-      type_            = TYPE_3443;
-      auto *typed_data = static_cast<GPU_ANCF3443_Data *>(data);
-      d_data_          = typed_data->d_data;
-      d_constraint_ptr_ =
-          typed_data->Get_Is_Constraint_Setup() ? typed_data->Get_Constraint_Ptr()
-                                                : nullptr;
-      n_total_qp_      = Quadrature::N_TOTAL_QP_4_4_3;
-      n_shape_         = Quadrature::N_SHAPE_3443;
+      type_             = TYPE_3443;
+      auto *typed_data  = static_cast<GPU_ANCF3443_Data *>(data);
+      d_data_           = typed_data->d_data;
+      d_constraint_ptr_ = typed_data->Get_Is_Constraint_Setup()
+                              ? typed_data->Get_Constraint_Ptr()
+                              : nullptr;
+      n_total_qp_       = Quadrature::N_TOTAL_QP_4_4_3;
+      n_shape_          = Quadrature::N_SHAPE_3443;
       typed_data->CalcDsDuPre();
     } else if (data->type == TYPE_T10) {
-      type_            = TYPE_T10;
-      auto *typed_data = static_cast<GPU_FEAT10_Data *>(data);
-      d_data_          = typed_data->d_data;
-      d_constraint_ptr_ =
-          typed_data->Get_Is_Constraint_Setup() ? typed_data->Get_Constraint_Ptr()
-                                                : nullptr;
-      n_total_qp_      = Quadrature::N_QP_T10_5;
-      n_shape_         = Quadrature::N_NODE_T10_10;
+      type_             = TYPE_T10;
+      auto *typed_data  = static_cast<GPU_FEAT10_Data *>(data);
+      d_data_           = typed_data->d_data;
+      d_constraint_ptr_ = typed_data->Get_Is_Constraint_Setup()
+                              ? typed_data->Get_Constraint_Ptr()
+                              : nullptr;
+      n_total_qp_       = Quadrature::N_QP_T10_5;
+      n_shape_          = Quadrature::N_NODE_T10_10;
     } else {
-      d_data_ = nullptr;
+      d_data_           = nullptr;
       d_constraint_ptr_ = nullptr;
       std::cerr << "Unknown element type!" << std::endl;
     }
@@ -191,7 +192,8 @@ class SyncedAdamWNocoopSolver : public SolverBase {
     cudaMemset(d_m_, 0, n_coef_ * 3 * sizeof(double));
     cudaMemset(d_v_adam_, 0, n_coef_ * 3 * sizeof(double));
 
-    HANDLE_ERROR(cudaMemcpy(d_adamw_solver_, this, sizeof(SyncedAdamWNocoopSolver),
+    HANDLE_ERROR(cudaMemcpy(d_adamw_solver_, this,
+                            sizeof(SyncedAdamWNocoopSolver),
                             cudaMemcpyHostToDevice));
   }
 

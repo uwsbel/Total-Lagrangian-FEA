@@ -22,7 +22,6 @@
 
 #include "../../lib_utils/cuda_utils.h"
 #include "../../lib_utils/quadrature_utils.h"
-
 #include "HydroelasticCollisionTypes.cuh"
 
 namespace ANCFCPUUtils {
@@ -121,10 +120,12 @@ struct Broadphase {
   long long* d_neighborPairHashes;  // Sorted array of hashed pairs
   int numNeighborPairs;
 
-  // Reused temporary buffers for collision pair generation (avoid per-step malloc/free)
+  // Reused temporary buffers for collision pair generation (avoid per-step
+  // malloc/free)
   int* d_collisionCounts;
   int* d_collisionOffsets;
-  int collisionCountCapacity;  // capacity in elements (not including the +1 slot)
+  int collisionCountCapacity;  // capacity in elements (not including the +1
+                               // slot)
   void* d_scanTempStorage;
   size_t scanTempStorageBytes;
   int collisionPairsCapacity;
@@ -138,8 +139,7 @@ struct Broadphase {
   ~Broadphase();
 
   // Initialize GPU resources with mesh data
-  void Initialize(const Eigen::MatrixXd& nodes,
-                  const Eigen::MatrixXi& elements,
+  void Initialize(const Eigen::MatrixXd& nodes, const Eigen::MatrixXi& elements,
                   const Eigen::VectorXi& elementMeshIds = Eigen::VectorXi());
 
   // Convenience overload: build element-to-mesh mapping from MeshManager.
@@ -168,8 +168,9 @@ struct Broadphase {
   // Create/update AABBs from mesh data
   void CreateAABB(bool copyToHost = false);
 
-  // Bind an externally-managed device node buffer (column-major, length 3*n_nodes)
-  // to avoid per-step host->device copies. Caller owns the buffer lifetime.
+  // Bind an externally-managed device node buffer (column-major, length
+  // 3*n_nodes) to avoid per-step host->device copies. Caller owns the buffer
+  // lifetime.
   void BindNodesDevicePtr(double* d_nodes_external);
 
   void SetVerbose(bool enable) {

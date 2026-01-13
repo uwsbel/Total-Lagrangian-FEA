@@ -9,8 +9,8 @@
 
 #include <cuda_runtime.h>
 
-#include <chrono>
 #include <Eigen/Dense>
+#include <chrono>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -49,11 +49,11 @@ int main(int argc, char** argv) {
   std::cout << "Sphere Drop Collision Simulation" << std::endl;
   std::cout << "========================================" << std::endl;
 
-  double contact_damping  = contact_damping_default;
-  double contact_friction = contact_friction_default;
+  double contact_damping     = contact_damping_default;
+  double contact_friction    = contact_friction_default;
   bool enable_self_collision = false;
-  int max_steps = num_steps;
-  int export_interval = 5;
+  int max_steps              = num_steps;
+  int export_interval        = 5;
   if (argc > 1) {
     contact_damping = std::atof(argv[1]);
   }
@@ -267,7 +267,7 @@ int main(int argc, char** argv) {
   Eigen::VectorXd displacement(n_nodes * 3);
   displacement.setZero();
 
-  using Clock = std::chrono::high_resolution_clock;
+  using Clock                   = std::chrono::high_resolution_clock;
   double collision_ms_sum       = 0.0;
   double broadphase_ms_sum      = 0.0;
   double pair_marshaling_ms_sum = 0.0;
@@ -307,10 +307,10 @@ int main(int argc, char** argv) {
     int num_collision_pairs = broadphase.numCollisions;
 
     // Count same-mesh pairs on device (avoid copying all pairs to CPU)
-    auto t_pair0 = Clock::now();
-    int same_mesh_pairs = broadphase.CountSameMeshPairsDevice();
+    auto t_pair0         = Clock::now();
+    int same_mesh_pairs  = broadphase.CountSameMeshPairsDevice();
     int cross_mesh_pairs = num_collision_pairs - same_mesh_pairs;
-    auto t_pair1 = Clock::now();
+    auto t_pair1         = Clock::now();
 
     // Run narrowphase with updated positions and current collision pairs
     auto t_narrow0 = Clock::now();
@@ -324,12 +324,18 @@ int main(int argc, char** argv) {
     narrowphase.RetrieveResults();
     int num_patches = narrowphase.numPatches;
 
-    auto t_narrow1     = Clock::now();
-    auto t_collision1  = t_narrow1;
-    double broad_ms    = std::chrono::duration<double, std::milli>(t_broad1 - t_broad0).count();
-    double pair_ms     = std::chrono::duration<double, std::milli>(t_pair1 - t_pair0).count();
-    double narrow_ms   = std::chrono::duration<double, std::milli>(t_narrow1 - t_narrow0).count();
-    double collision_ms = std::chrono::duration<double, std::milli>(t_collision1 - t_collision0).count();
+    auto t_narrow1    = Clock::now();
+    auto t_collision1 = t_narrow1;
+    double broad_ms =
+        std::chrono::duration<double, std::milli>(t_broad1 - t_broad0).count();
+    double pair_ms =
+        std::chrono::duration<double, std::milli>(t_pair1 - t_pair0).count();
+    double narrow_ms =
+        std::chrono::duration<double, std::milli>(t_narrow1 - t_narrow0)
+            .count();
+    double collision_ms =
+        std::chrono::duration<double, std::milli>(t_collision1 - t_collision0)
+            .count();
     broadphase_ms_sum += broad_ms;
     pair_marshaling_ms_sum += pair_ms;
     narrowphase_ms_sum += narrow_ms;
@@ -463,8 +469,7 @@ int main(int argc, char** argv) {
               << narrowphase_ms_sum / (double)timing_steps << std::endl;
     std::cout << "Avg collision total ms/step: "
               << collision_ms_sum / (double)timing_steps << std::endl;
-    std::cout << "============================================="
-              << "\n"
+    std::cout << "=============================================" << "\n"
               << std::endl;
   }
 

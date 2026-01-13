@@ -20,9 +20,12 @@ struct Array3Hash {
 
 static std::array<int, 3> SortedCorners(int a, int b, int c) {
   std::array<int, 3> k{a, b, c};
-  if (k[0] > k[1]) std::swap(k[0], k[1]);
-  if (k[1] > k[2]) std::swap(k[1], k[2]);
-  if (k[0] > k[1]) std::swap(k[0], k[1]);
+  if (k[0] > k[1])
+    std::swap(k[0], k[1]);
+  if (k[1] > k[2])
+    std::swap(k[1], k[2]);
+  if (k[0] > k[1])
+    std::swap(k[0], k[1]);
   return k;
 }
 
@@ -39,35 +42,36 @@ static Eigen::Vector3d NodePos(const Eigen::MatrixXd& nodes, int global_id) {
   return nodes.row(global_id).transpose();
 }
 
-static void EnsureVertex(int global_id,
-                         const Eigen::MatrixXd& nodes,
+static void EnsureVertex(int global_id, const Eigen::MatrixXd& nodes,
                          std::unordered_map<int, int>& global_to_local,
                          SurfaceTriMesh& out) {
   const auto it = global_to_local.find(global_id);
-  if (it != global_to_local.end()) return;
+  if (it != global_to_local.end())
+    return;
   const int local_id = static_cast<int>(out.vertices.size());
   global_to_local.emplace(global_id, local_id);
   out.global_node_ids.push_back(global_id);
   out.vertices.push_back(NodePos(nodes, global_id));
 }
 
-static int LocalIndexForGlobal(int global_id,
-                               const std::unordered_map<int, int>& global_to_local) {
+static int LocalIndexForGlobal(
+    int global_id, const std::unordered_map<int, int>& global_to_local) {
   const auto it = global_to_local.find(global_id);
   return (it == global_to_local.end()) ? -1 : it->second;
 }
 
-static SurfaceTriMesh ExtractSurfaceTriMeshFromT10(const Eigen::MatrixXd& nodes,
-                                                   const Eigen::MatrixXi& elements,
-                                                   const MeshInstance& inst) {
+static SurfaceTriMesh ExtractSurfaceTriMeshFromT10(
+    const Eigen::MatrixXd& nodes, const Eigen::MatrixXi& elements,
+    const MeshInstance& inst) {
   SurfaceTriMesh out;
   std::unordered_map<int, int> global_to_local;
 
-  std::unordered_map<std::array<int, 3>, std::vector<FaceRecord>, Array3Hash> faces;
+  std::unordered_map<std::array<int, 3>, std::vector<FaceRecord>, Array3Hash>
+      faces;
 
   for (int e = 0; e < inst.num_elements; ++e) {
     const int elem_idx = inst.element_offset + e;
-    const auto tet = elements.row(elem_idx);
+    const auto tet     = elements.row(elem_idx);
 
     const int n0 = tet(0);
     const int n1 = tet(1);
@@ -86,8 +90,8 @@ static SurfaceTriMesh ExtractSurfaceTriMeshFromT10(const Eigen::MatrixXd& nodes,
     auto add_face = [&](int a, int b, int c, int ab, int bc, int ca, int opp) {
       FaceRecord r;
       r.corners = {a, b, c};
-      r.mids = {ab, bc, ca};
-      r.opp = opp;
+      r.mids    = {ab, bc, ca};
+      r.opp     = opp;
       faces[SortedCorners(a, b, c)].push_back(r);
     };
 
@@ -98,7 +102,8 @@ static SurfaceTriMesh ExtractSurfaceTriMeshFromT10(const Eigen::MatrixXd& nodes,
   }
 
   for (const auto& kv : faces) {
-    if (kv.second.size() != 1) continue;  // interior face
+    if (kv.second.size() != 1)
+      continue;  // interior face
     FaceRecord f = kv.second.front();
 
     const Eigen::Vector3d pa = NodePos(nodes, f.corners[0]);
@@ -114,9 +119,9 @@ static SurfaceTriMesh ExtractSurfaceTriMeshFromT10(const Eigen::MatrixXd& nodes,
       f.mids = {f.mids[2], f.mids[1], f.mids[0]};
     }
 
-    const int a = f.corners[0];
-    const int b = f.corners[1];
-    const int c = f.corners[2];
+    const int a  = f.corners[0];
+    const int b  = f.corners[1];
+    const int c  = f.corners[2];
     const int ab = f.mids[0];
     const int bc = f.mids[1];
     const int ca = f.mids[2];
@@ -125,9 +130,9 @@ static SurfaceTriMesh ExtractSurfaceTriMeshFromT10(const Eigen::MatrixXd& nodes,
       EnsureVertex(v, nodes, global_to_local, out);
     }
 
-    const int ia = LocalIndexForGlobal(a, global_to_local);
-    const int ib = LocalIndexForGlobal(b, global_to_local);
-    const int ic = LocalIndexForGlobal(c, global_to_local);
+    const int ia  = LocalIndexForGlobal(a, global_to_local);
+    const int ib  = LocalIndexForGlobal(b, global_to_local);
+    const int ic  = LocalIndexForGlobal(c, global_to_local);
     const int iab = LocalIndexForGlobal(ab, global_to_local);
     const int ibc = LocalIndexForGlobal(bc, global_to_local);
     const int ica = LocalIndexForGlobal(ca, global_to_local);
@@ -155,14 +160,17 @@ SurfaceTriMesh ExtractSurfaceTriMesh(const Eigen::MatrixXd& nodes,
 
   switch (hint) {
     case SurfaceTriMeshExtractionHint::kANCF3243:
-      throw std::runtime_error("ExtractSurfaceTriMesh: ANCF3243 extractor not implemented yet");
+      throw std::runtime_error(
+          "ExtractSurfaceTriMesh: ANCF3243 extractor not implemented yet");
     case SurfaceTriMeshExtractionHint::kANCF3443:
-      throw std::runtime_error("ExtractSurfaceTriMesh: ANCF3443 extractor not implemented yet");
+      throw std::runtime_error(
+          "ExtractSurfaceTriMesh: ANCF3443 extractor not implemented yet");
     case SurfaceTriMeshExtractionHint::kAuto:
       break;
   }
   throw std::invalid_argument(
-      "ExtractSurfaceTriMesh: unable to infer discretization (pass an explicit SurfaceTriMeshExtractionHint)");
+      "ExtractSurfaceTriMesh: unable to infer discretization (pass an explicit "
+      "SurfaceTriMeshExtractionHint)");
 }
 
 }  // namespace ANCFCPUUtils

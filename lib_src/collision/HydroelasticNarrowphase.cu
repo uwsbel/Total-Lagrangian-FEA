@@ -18,7 +18,6 @@
 
 #include "HydroelasticNarrowphase.cuh"
 #include "HydroelasticNarrowphaseFunc.cuh"
-
 #include "lib_utils/cuda_utils.h"
 
 // ============================================================================
@@ -67,7 +66,8 @@ void Narrowphase::Initialize(const Eigen::MatrixXd& nodes,
                           cudaMemcpyHostToDevice));
 
   // Allocate and copy elements (column-major)
-  HANDLE_ERROR(cudaMalloc(&d_elements, n_elems * nodesPerElement * sizeof(int)));
+  HANDLE_ERROR(
+      cudaMalloc(&d_elements, n_elems * nodesPerElement * sizeof(int)));
   HANDLE_ERROR(cudaMemcpy(d_elements, elements.data(),
                           n_elems * nodesPerElement * sizeof(int),
                           cudaMemcpyHostToDevice));
@@ -92,8 +92,8 @@ void Narrowphase::Initialize(const Eigen::MatrixXd& nodes,
 
   // Allocate device copy of this struct
   HANDLE_ERROR(cudaMalloc(&d_np, sizeof(Narrowphase)));
-  HANDLE_ERROR(cudaMemcpy(d_np, this, sizeof(Narrowphase),
-                          cudaMemcpyHostToDevice));
+  HANDLE_ERROR(
+      cudaMemcpy(d_np, this, sizeof(Narrowphase), cudaMemcpyHostToDevice));
 
   std::cout << "Narrowphase initialized with " << n_nodes << " nodes, "
             << n_elems << " elements" << std::endl;
@@ -103,19 +103,21 @@ void Narrowphase::EnableSelfCollision(bool enable) {
   enableSelfCollision = enable;
 
   if (d_np) {
-    HANDLE_ERROR(cudaMemcpy(d_np, this, sizeof(Narrowphase),
-                            cudaMemcpyHostToDevice));
+    HANDLE_ERROR(
+        cudaMemcpy(d_np, this, sizeof(Narrowphase), cudaMemcpyHostToDevice));
   }
 }
 
 void Narrowphase::UpdateNodes(const Eigen::MatrixXd& nodes) {
   if (n_nodes == 0 || d_nodes == nullptr) {
-    std::cerr << "Narrowphase::UpdateNodes called before Initialize" << std::endl;
+    std::cerr << "Narrowphase::UpdateNodes called before Initialize"
+              << std::endl;
     return;
   }
 
   if (nodes.rows() != n_nodes || nodes.cols() != 3) {
-    std::cerr << "Narrowphase::UpdateNodes: node matrix size mismatch" << std::endl;
+    std::cerr << "Narrowphase::UpdateNodes: node matrix size mismatch"
+              << std::endl;
     return;
   }
 
@@ -141,8 +143,8 @@ void Narrowphase::BindNodesDevicePtr(double* d_nodes_external) {
   d_nodes   = d_nodes_external;
   ownsNodes = false;
 
-  HANDLE_ERROR(cudaMemcpy(d_np, this, sizeof(Narrowphase),
-                          cudaMemcpyHostToDevice));
+  HANDLE_ERROR(
+      cudaMemcpy(d_np, this, sizeof(Narrowphase), cudaMemcpyHostToDevice));
 }
 
 void Narrowphase::SetCollisionPairs(
@@ -170,8 +172,8 @@ void Narrowphase::SetCollisionPairs(
   }
 
   // Allocate and copy collision pairs (owned)
-  HANDLE_ERROR(cudaMalloc(&d_collisionPairs,
-                          numCollisionPairs * sizeof(CollisionPair)));
+  HANDLE_ERROR(
+      cudaMalloc(&d_collisionPairs, numCollisionPairs * sizeof(CollisionPair)));
   HANDLE_ERROR(cudaMemcpy(d_collisionPairs, devicePairs.data(),
                           numCollisionPairs * sizeof(CollisionPair),
                           cudaMemcpyHostToDevice));
@@ -181,13 +183,14 @@ void Narrowphase::SetCollisionPairs(
     if (d_contactPatches) {
       HANDLE_ERROR(cudaFree(d_contactPatches));
     }
-    HANDLE_ERROR(
-        cudaMalloc(&d_contactPatches, numCollisionPairs * sizeof(ContactPatch)));
+    HANDLE_ERROR(cudaMalloc(&d_contactPatches,
+                            numCollisionPairs * sizeof(ContactPatch)));
     contactPatchCapacity = numCollisionPairs;
   }
 
   if (verbose) {
-    std::cout << "Narrowphase: Set " << numCollisionPairs << " collision pairs\n";
+    std::cout << "Narrowphase: Set " << numCollisionPairs
+              << " collision pairs\n";
   }
 }
 
@@ -215,8 +218,8 @@ void Narrowphase::SetCollisionPairsDevice(const CollisionPair* d_pairs,
     if (d_contactPatches) {
       HANDLE_ERROR(cudaFree(d_contactPatches));
     }
-    HANDLE_ERROR(
-        cudaMalloc(&d_contactPatches, numCollisionPairs * sizeof(ContactPatch)));
+    HANDLE_ERROR(cudaMalloc(&d_contactPatches,
+                            numCollisionPairs * sizeof(ContactPatch)));
     contactPatchCapacity = numCollisionPairs;
   }
 
@@ -242,8 +245,8 @@ void Narrowphase::ComputeContactPatches() {
   }
 
   // Update device struct pointer
-  HANDLE_ERROR(cudaMemcpy(d_np, this, sizeof(Narrowphase),
-                          cudaMemcpyHostToDevice));
+  HANDLE_ERROR(
+      cudaMemcpy(d_np, this, sizeof(Narrowphase), cudaMemcpyHostToDevice));
 
   int blockSize = 256;
   int gridSize  = (numCollisionPairs + blockSize - 1) / blockSize;
@@ -365,9 +368,9 @@ void Narrowphase::Destroy() {
   if (d_collisionPairs && ownsCollisionPairs) {
     HANDLE_ERROR(cudaFree(d_collisionPairs));
   }
-  d_collisionPairs     = nullptr;
-  ownsCollisionPairs   = false;
-  numCollisionPairs    = 0;
+  d_collisionPairs   = nullptr;
+  ownsCollisionPairs = false;
+  numCollisionPairs  = 0;
 
   if (d_np) {
     HANDLE_ERROR(cudaFree(d_np));

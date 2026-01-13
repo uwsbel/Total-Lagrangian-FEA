@@ -18,10 +18,10 @@
 #include <iostream>
 #include <vector>
 
-#include "../../lib_utils/quadrature_utils.h"
 #include "../../lib_src/elements/FEAT10Data.cuh"
 #include "../../lib_src/solvers/SyncedNewton.cuh"
 #include "../../lib_utils/cpu_utils.h"
+#include "../../lib_utils/quadrature_utils.h"
 
 const double E    = 3.0e8;  // Pa  (~0.3 GPa, between 0.7 GPa and 0.13 GPa)
 const double nu   = 0.40;   // polymers tend to be higher than metals
@@ -168,7 +168,6 @@ int main() {
 
   std::cout << "done BuildConstraintJacobianCSR" << std::endl;
 
-
   // calculate p
   gpu_t10_data.CalcP();
 
@@ -205,7 +204,8 @@ int main() {
   solver.SetParameters(&params);
 
   solver.AnalyzeHessianSparsity();
-  solver.SetFixedSparsityPattern(true);  // Enable analysis reuse for fixed structure
+  solver.SetFixedSparsityPattern(
+      true);  // Enable analysis reuse for fixed structure
 
   int output_interval = 10;  // 10 vtk per seconds
   int output_frame    = 0;

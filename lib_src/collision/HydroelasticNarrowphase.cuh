@@ -13,10 +13,10 @@
 
 #include <cuda_runtime.h>
 
-#include "HydroelasticCollisionTypes.cuh"
-
 #include <Eigen/Dense>
 #include <vector>
+
+#include "HydroelasticCollisionTypes.cuh"
 
 // Maximum vertices in a contact polygon (triangle to hexagon possible)
 #define MAX_POLYGON_VERTS 8
@@ -169,8 +169,9 @@ struct Narrowphase {
   // columns as passed to Initialize.
   void UpdateNodes(const Eigen::MatrixXd& nodes);
 
-  // Bind an externally-managed device node buffer (column-major, length 3*n_nodes)
-  // to avoid per-step host->device copies. Caller owns the buffer lifetime.
+  // Bind an externally-managed device node buffer (column-major, length
+  // 3*n_nodes) to avoid per-step host->device copies. Caller owns the buffer
+  // lifetime.
   void BindNodesDevicePtr(double* d_nodes_external);
   void SetVerbose(bool enable) {
     verbose = enable;
@@ -214,8 +215,8 @@ struct Narrowphase {
   /**
    * Compute external forces from contact patches on GPU.
    * Uses already-on-device patch data (d_contactPatches) without CPU transfer.
-   * Forces are computed on the device (atomicAdd into `d_f_ext`) and then copied
-   * back to the host as an Eigen vector.
+   * Forces are computed on the device (atomicAdd into `d_f_ext`) and then
+   * copied back to the host as an Eigen vector.
    *
    * @param d_vel   Optional device pointer to nodal velocities laid out as
    *                [vx0, vy0, vz0, vx1, ...]. If nullptr, no velocity-dependent
@@ -227,8 +228,8 @@ struct Narrowphase {
    * ...]
    */
   Eigen::VectorXd ComputeExternalForcesGPU(const double* d_vel = nullptr,
-                                           double damping       = 0.0,
-                                           double friction      = 0.0);
+                                           double damping      = 0.0,
+                                           double friction     = 0.0);
 
   /**
    * Compute external forces on the device without copying back to the host.
@@ -236,11 +237,12 @@ struct Narrowphase {
    * via GetExternalForcesDevicePtr().
    *
    * Use this when you want to accumulate contact forces directly into another
-   * device buffer (e.g., a solver's external force vector) without a host round-trip.
+   * device buffer (e.g., a solver's external force vector) without a host
+   * round-trip.
    */
   void ComputeExternalForcesGPUDevice(const double* d_vel = nullptr,
-                                      double damping       = 0.0,
-                                      double friction      = 0.0);
+                                      double damping      = 0.0,
+                                      double friction     = 0.0);
 
   /**
    * Get device pointer to external forces buffer.

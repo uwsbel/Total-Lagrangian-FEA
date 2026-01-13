@@ -17,10 +17,10 @@
 #include <iomanip>
 #include <iostream>
 
-#include "../../lib_utils/quadrature_utils.h"
 #include "../../lib_src/elements/FEAT10Data.cuh"
 #include "../../lib_src/solvers/SyncedAdamW.cuh"
 #include "../../lib_utils/cpu_utils.h"
+#include "../../lib_utils/quadrature_utils.h"
 
 const double E    = 7e8;   // Young's modulus
 const double nu   = 0.33;  // Poisson's ratio
@@ -180,7 +180,7 @@ int main() {
   std::cout << "done retrieving internal force vector" << std::endl;
 
   SyncedAdamWParams params = {2e-4, 0.9,  0.999, 1e-8, 1e-4, 0.995, 1e-1,
-                              1e-6, 1e14, 5,     500,  1e-3, 10, 0.0};
+                              1e-6, 1e14, 5,     500,  1e-3, 10,    0.0};
   SyncedAdamWSolver solver(&gpu_t10_data, gpu_t10_data.get_n_constraint());
   solver.Setup();
   solver.SetParameters(&params);

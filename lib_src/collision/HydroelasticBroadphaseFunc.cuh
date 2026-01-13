@@ -135,8 +135,7 @@ __device__ bool isNeighborPair(int idA, int idB,
 __global__ void countCollisionsKernel(const AABB* sortedAABBs,
                                       int* collisionCounts, int n,
                                       const long long* neighborHashes,
-                                      int numHashes,
-                                      const int* elementMeshIds,
+                                      int numHashes, const int* elementMeshIds,
                                       int enableSelfCollision) {
   int i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i >= n)
@@ -175,14 +174,10 @@ __global__ void countCollisionsKernel(const AABB* sortedAABBs,
 }
 
 // Kernel to generate collision pairs (with neighbor filtering)
-__global__ void generateCollisionPairsKernel(const AABB* sortedAABBs,
-                                             const int* collisionOffsets,
-                                             CollisionPair* collisionPairs,
-                                             int n,
-                                             const long long* neighborHashes,
-                                             int numHashes,
-                                             const int* elementMeshIds,
-                                             int enableSelfCollision) {
+__global__ void generateCollisionPairsKernel(
+    const AABB* sortedAABBs, const int* collisionOffsets,
+    CollisionPair* collisionPairs, int n, const long long* neighborHashes,
+    int numHashes, const int* elementMeshIds, int enableSelfCollision) {
   int i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i >= n)
     return;
