@@ -39,32 +39,6 @@
 #include <cooperative_groups.h>
 #include "tlfea_problem_parameters.cuh" // stores parameters associated with the TL_FEA model for this particular problem
 
-// The arrays below are used to coordinate the four threads in a tile.
-
-// The NU information is stored as AoS, xyz-xyz-xyz-xyz-etc.
-// The arrays below are used to coordinate the four threads in a tile.
-__device__ __constant__ int nodeOffsets_T10tet[8][4] = {
-    {0, 0, 0, 3}, // first pass: node 0 (x,y,z), node 3 (x)
-    {1, 1, 1, 3}, // second pass: node 1 (x,y,z), node 3 (y)
-    {2, 2, 2, 3}, // third pass: node 2 (x,y,z), node 3 (z)
-    {4, 4, 4, 7}, // fourth pass: node 4 (x,y,z), node 7 (x); jump from 2 to 4 since 3 has been read 
-    {5, 5, 5, 7}, // fifth pass: node 5 (x,y,z), node 7 (y)
-    {6, 6, 6, 7}, // sixth pass: node 6 (x,y,z), node 7 (z)
-    {8, 8, 8, 8}, // seventh pass: node 8 (x,y,z), node 8 (**bogus**); the 8 is bogus, not used
-    {9, 9, 9, 9}  // eighth pass: node 9 (x,y,z), node 9 (**bogus**); the 9 is bogus, not used
-};
-
-__device__ __constant__ int xyzFieldOffsets_T10tet[8][4] = {
-    {0, 1, 2, 0}, // first pass: node 0 (x,y,z), node 3 (x)
-    {0, 1, 2, 1}, // second pass: node 1 (x,y,z), node 3 (y)
-    {0, 1, 2, 2}, // third pass: node 2 (x,y,z), node 3 (z)
-    {0, 1, 2, 0}, // fourth pass: node 4 (x,y,z), node 7 (x); jump from 2 to 4 since 3 has been read 
-    {0, 1, 2, 1}, // fifth pass: node 5 (x,y,z), node 7 (y)
-    {0, 1, 2, 2}, // sixth pass: node 6 (x,y,z), node 7 (z)
-    {0, 1, 2, 2}, // seventh pass: node 8 (x,y,z), node 8 (**bogus**); the 8 is bogus, not used
-    {0, 1, 2, 2}  // eighth pass: node 9 (x,y,z), node 9 (**bogus**); the 9 is bogus, not used
-};
-
 
 template <typename TileType>
 __device__ __inline__ void applyNodalForce(
@@ -228,17 +202,17 @@ __global__ void computeInternalForceContributionPerElement_MR_4QP(
 
   {  
   
-    // Used to store "serendipitous" (i.e., bonus) nodal unknowns.
-    float NUx_bonus, NUy_bonus, NUz_bonus;
-
-    // Node 0 (with node 3 bonus x)
+    // Node 0 (of 0-9)
     {
-      const int whichGlobalNode = pElementNodes[nodeOffsets_T10tet[0][lane_in_tile]];
-      const float value = (float)pPosNodes[3 * whichGlobalNode + xyzFieldOffsets_T10tet[0][lane_in_tile]];
+      const int whichGlobalNode = pElementNodes[0];
+      float value;
+      // read from global memory; this is expensive since we read from all over the memory
+      if(lane_in_tile<3) 
+        value = (float)pPosNodes[3 * whichGlobalNode + lane_in_tile];
+
       const float NUx = tile.shfl(value, 0); // x of node 0
       const float NUy = tile.shfl(value, 1); // y of node 0
       const float NUz = tile.shfl(value, 2); // z of node 0
-      NUx_bonus = tile.shfl(value, 3); // x of node 3
   
       const float h0 = 4.f * eta + 4.f * xi + 4.f * zeta - 3.f;
       // h1 = h0;
@@ -258,14 +232,17 @@ __global__ void computeInternalForceContributionPerElement_MR_4QP(
       F22 = NUz * dummy2;
     }
   
-    // Node 1 (with node 3 bonus y)
+    // Node 1 (of 0-9)
     {
-      const int whichGlobalNode = pElementNodes[nodeOffsets_T10tet[1][lane_in_tile]];
-      const float value = (float)pPosNodes[3 * whichGlobalNode + xyzFieldOffsets_T10tet[1][lane_in_tile]];
+      const int whichGlobalNode = pElementNodes[1];
+      float value;
+      // read from global memory; this is expensive since we read from all over the memory
+      if(lane_in_tile<3) 
+        value = (float)pPosNodes[3 * whichGlobalNode + lane_in_tile];
+
       const float NUx = tile.shfl(value, 0); // x of node 1
       const float NUy = tile.shfl(value, 1); // y of node 1
       const float NUz = tile.shfl(value, 2); // z of node 1
-      NUy_bonus = tile.shfl(value, 3); // y of node 3
   
       const float h0 = 4.f * xi - 1.f;
       // h1 = 0.f;
@@ -285,14 +262,16 @@ __global__ void computeInternalForceContributionPerElement_MR_4QP(
       F22 += NUz * dummy2;
     }
   
-    // Node 2 (with node 3 bonus z)
+    // Node 2 (of 0-9)
     {
-      const int whichGlobalNode = pElementNodes[nodeOffsets_T10tet[2][lane_in_tile]];
-      const float value = (float)pPosNodes[3 * whichGlobalNode + xyzFieldOffsets_T10tet[2][lane_in_tile]];
+      const int whichGlobalNode = pElementNodes[2];
+      float value;
+      if(lane_in_tile<3) 
+        value = (float)pPosNodes[3 * whichGlobalNode + lane_in_tile];
+
       const float NUx = tile.shfl(value, 0); // x of node 2
       const float NUy = tile.shfl(value, 1); // y of node 2
       const float NUz = tile.shfl(value, 2); // z of node 2
-      NUz_bonus = tile.shfl(value, 3); // z of node 3
   
       // h0 = 0.f;
       const float h1 = 4.f * eta - 1.f;
@@ -312,8 +291,17 @@ __global__ void computeInternalForceContributionPerElement_MR_4QP(
       F22 += NUz * dummy2;
     }
   
-    // Node 3 (bonus, use shuffled bonuses)
+    // Node 3 (of 0-9)
     {
+      const int whichGlobalNode = pElementNodes[3];
+      float value;
+      if(lane_in_tile<3) 
+        value = (float)pPosNodes[3 * whichGlobalNode + lane_in_tile];
+
+      const float NUx = tile.shfl(value, 0); // x of node 3
+      const float NUy = tile.shfl(value, 1); // y of node 3
+      const float NUz = tile.shfl(value, 2); // z of node 3
+
       // h0 = 0.f;
       // h1 = 0.f;
       const float h2 = 4.f * zeta - 1.f;
@@ -321,25 +309,27 @@ __global__ void computeInternalForceContributionPerElement_MR_4QP(
       const float dummy1 = h2*isoJacInv12;
       const float dummy2 = h2*isoJacInv22;
   
-      F00 += NUx_bonus * dummy0;
-      F01 += NUx_bonus * dummy1;
-      F02 += NUx_bonus * dummy2;
-      F10 += NUy_bonus * dummy0;
-      F11 += NUy_bonus * dummy1;
-      F12 += NUy_bonus * dummy2;
-      F20 += NUz_bonus * dummy0;
-      F21 += NUz_bonus * dummy1;
-      F22 += NUz_bonus * dummy2;
+      F00 += NUx * dummy0;
+      F01 += NUx * dummy1;
+      F02 += NUx * dummy2;
+      F10 += NUy * dummy0;
+      F11 += NUy * dummy1;
+      F12 += NUy * dummy2;
+      F20 += NUz * dummy0;
+      F21 += NUz * dummy1;
+      F22 += NUz * dummy2;
     }
   
-    // Node 4 (with node 7 bonus x)
+    // Node 4
     {
-      const int whichGlobalNode = pElementNodes[nodeOffsets_T10tet[3][lane_in_tile]];
-      const float value = (float)pPosNodes[3 * whichGlobalNode + xyzFieldOffsets_T10tet[3][lane_in_tile]];
+      const int whichGlobalNode = pElementNodes[4];
+      float value;
+      if(lane_in_tile<3) 
+        value = (float)pPosNodes[3 * whichGlobalNode + lane_in_tile];
+
       const float NUx = tile.shfl(value, 0); // x of node 4
       const float NUy = tile.shfl(value, 1); // y of node 4
       const float NUz = tile.shfl(value, 2); // z of node 4
-      NUx_bonus = tile.shfl(value, 3); // x of node 7
   
       const float h0 = -4.f * eta - 8.f * xi - 4.f * zeta + 4.f;
       const float h1 = -4.f * xi;
@@ -359,14 +349,16 @@ __global__ void computeInternalForceContributionPerElement_MR_4QP(
       F22 += NUz * dummy2;
     }
   
-    // Node 5 (with node 7 bonus y)
+    // Node 5 (of 0-9)
     {
-      const int whichGlobalNode = pElementNodes[nodeOffsets_T10tet[4][lane_in_tile]];
-      const float value = (float)pPosNodes[3 * whichGlobalNode + xyzFieldOffsets_T10tet[4][lane_in_tile]];
+      const int whichGlobalNode = pElementNodes[5];
+      float value;
+      if(lane_in_tile<3) 
+        value = (float)pPosNodes[3 * whichGlobalNode + lane_in_tile];
+
       const float NUx = tile.shfl(value, 0); // x of node 5
       const float NUy = tile.shfl(value, 1); // y of node 5
       const float NUz = tile.shfl(value, 2); // z of node 5
-      NUy_bonus = tile.shfl(value, 3); // y of node 7
   
       const float h0 = 4.f * eta;
       const float h1 = 4.f * xi;
@@ -386,14 +378,16 @@ __global__ void computeInternalForceContributionPerElement_MR_4QP(
       F22 += NUz * dummy2;
     }
   
-    // Node 6 (with node 7 bonus z)
+    // Node 6 (of 0-9)
     {
-      const int whichGlobalNode = pElementNodes[nodeOffsets_T10tet[5][lane_in_tile]];
-      const float value = (float)pPosNodes[3 * whichGlobalNode + xyzFieldOffsets_T10tet[5][lane_in_tile]];
+      const int whichGlobalNode = pElementNodes[6];
+      float value;
+      if(lane_in_tile<3) 
+        value = (float)pPosNodes[3 * whichGlobalNode + lane_in_tile];
+
       const float NUx = tile.shfl(value, 0); // x of node 6
       const float NUy = tile.shfl(value, 1); // y of node 6
       const float NUz = tile.shfl(value, 2); // z of node 6
-      NUz_bonus = tile.shfl(value, 3); // z of node 7
   
       const float h0 = -4.f * eta;
       const float h1 = -8.f * eta - 4.f * xi - 4.f * zeta + 4.f;
@@ -413,8 +407,17 @@ __global__ void computeInternalForceContributionPerElement_MR_4QP(
       F22 += NUz * dummy2;
     }
   
-    // Node 7 (bonus, use all shuffled bonuses)
+    // Node 7 (of 0-9)
     {
+      const int whichGlobalNode = pElementNodes[7];
+      float value;
+      if(lane_in_tile<3) 
+        value = (float)pPosNodes[3 * whichGlobalNode + lane_in_tile];
+
+      const float NUx = tile.shfl(value, 0); // x of node 7
+      const float NUy = tile.shfl(value, 1); // y of node 7
+      const float NUz = tile.shfl(value, 2); // z of node 7
+
       const float h0 = -4.f * zeta;
       // h1 = h0;
       const float h2 = -4.f * eta - 4.f * xi - 8.f * zeta + 4.f;
@@ -422,26 +425,28 @@ __global__ void computeInternalForceContributionPerElement_MR_4QP(
       const float dummy1 = h0*(isoJacInv10 + isoJacInv11) + h2*isoJacInv12;
       const float dummy2 = h0*(isoJacInv20 + isoJacInv21) + h2*isoJacInv22;
   
-      F00 += NUx_bonus * dummy0;
-      F01 += NUx_bonus * dummy1;
-      F02 += NUx_bonus * dummy2;
-      F10 += NUy_bonus * dummy0;
-      F11 += NUy_bonus * dummy1;
-      F12 += NUy_bonus * dummy2;
-      F20 += NUz_bonus * dummy0;
-      F21 += NUz_bonus * dummy1;
-      F22 += NUz_bonus * dummy2;
+      F00 += NUx * dummy0;
+      F01 += NUx * dummy1;
+      F02 += NUx * dummy2;
+      F10 += NUy * dummy0;
+      F11 += NUy * dummy1;
+      F12 += NUy * dummy2;
+      F20 += NUz * dummy0;
+      F21 += NUz * dummy1;
+      F22 += NUz * dummy2;
     }
   
-    // Node 8 (no valid bonus, dummy)
+    // Node 8 (of 0-9)
     {
-      const int whichGlobalNode = pElementNodes[nodeOffsets_T10tet[6][lane_in_tile]];
-      const float value = (float)pPosNodes[3 * whichGlobalNode + xyzFieldOffsets_T10tet[6][lane_in_tile]];
+      const int whichGlobalNode = pElementNodes[8];
+      float value;
+      if(lane_in_tile<3) 
+        value = (float)pPosNodes[3 * whichGlobalNode + lane_in_tile];
+
       const float NUx = tile.shfl(value, 0); // x of node 8
       const float NUy = tile.shfl(value, 1); // y of node 8
       const float NUz = tile.shfl(value, 2); // z of node 8
-      NUz_bonus = tile.shfl(value, 3); // z of node 8; dummy
-  
+
       const float h0 = 4.f * zeta;
       // h1 = 0.f;
       const float h2 = 4.f * xi;
@@ -460,15 +465,17 @@ __global__ void computeInternalForceContributionPerElement_MR_4QP(
       F22 += NUz * dummy2;
     }
   
-    // Node 9 (no valid bonus, dummy)
+    // Node 9 (of 0-9)
     {
-      const int whichGlobalNode = pElementNodes[nodeOffsets_T10tet[7][lane_in_tile]];
-      const float value = (float)pPosNodes[3 * whichGlobalNode + xyzFieldOffsets_T10tet[7][lane_in_tile]];
+      const int whichGlobalNode = pElementNodes[9];
+      float value;
+      if(lane_in_tile<3) 
+        value = (float)pPosNodes[3 * whichGlobalNode + lane_in_tile];
+
       const float NUx = tile.shfl(value, 0); // x of node 9
       const float NUy = tile.shfl(value, 1); // y of node 9
       const float NUz = tile.shfl(value, 2); // z of node 9
-      NUz_bonus = tile.shfl(value, 3); // z of node 9; dummy
-  
+
       // h0 = 0.f;
       const float h1 = 4.f * zeta;
       const float h2 = 4.f * eta;
