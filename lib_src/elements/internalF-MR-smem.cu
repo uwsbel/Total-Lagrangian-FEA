@@ -54,7 +54,7 @@ __device__ __forceinline__ void applyNodalForce(
     float beta,        
     float mu01_hatJ)
 {
-    constexpr int offset = 64; //hardcoded :-). Strong assumption that we have 64 threads per block.
+    const int offset = blockDim.x; 
     const int baseIdxS = threadIdx.x;
     #define F00 s_F[baseIdxS + 0 * offset]
     #define F01 s_F[baseIdxS + 1 * offset]
@@ -184,6 +184,7 @@ __device__ __forceinline__ void applyNodalForce(
    const int element_idx = blockIdx.x * elements_per_block + tile.meta_group_rank();
 
    __shared__ float s_F[4 * elements_per_block * 9]; // 4 QPs, 16 elements, 9 entries in the deformation gradient F matrix.  
+   __shared__ float s_invJacobian[4 * elements_per_block * 9]; // 4 QPs, 16 elements, 9 entries in the inverse Jacobian matrix.
  
    if (element_idx >= totalN_Elements) {
      return;
@@ -192,7 +193,7 @@ __device__ __forceinline__ void applyNodalForce(
  
    // Define the total number of quadrature points in this block
    const int baseIdx = blockIdx.x * 4 * elements_per_block * 9 + threadIdx.x; // this is where this thread starts in the global QP index space
-   constexpr int offset = elements_per_block * 4;
+   constexpr int offset_QPtied = elements_per_block * 4;
 
    // QP coordinates for the 4-point rule on the T10 tet element canonical tetrahedron.
    // Lane mapping:
@@ -206,22 +207,8 @@ __device__ __forceinline__ void applyNodalForce(
    const float xi   = (lane_in_tile == 0) ? a : b;
    const float eta  = (lane_in_tile <  2) ? a : b;
    const float zeta = (lane_in_tile <  3) ? a : b;    
-
  
-   // Load the inverse of the isoparametric-element parent-reference Jacobian for this QP.
-   // baseQPIdx is consecutive within the block, so these loads are coalesced within a block.
-   // Consequently, the memory accesses are coalesced within a tile as well.
-   // Stores all Jac00 for 64 matrices, then Jac01 for 64 matrices, etc. It's a SoA (Structure of Arrays) layout.
-   const float isoJacInv00 = __ldg(&pIsoMapInverse[baseIdx + 0 * offset]);
-   const float isoJacInv01 = __ldg(&pIsoMapInverse[baseIdx + 1 * offset]);
-   const float isoJacInv02 = __ldg(&pIsoMapInverse[baseIdx + 2 * offset]);
-   const float isoJacInv10 = __ldg(&pIsoMapInverse[baseIdx + 3 * offset]);
-   const float isoJacInv11 = __ldg(&pIsoMapInverse[baseIdx + 4 * offset]);
-   const float isoJacInv12 = __ldg(&pIsoMapInverse[baseIdx + 5 * offset]);
-   const float isoJacInv20 = __ldg(&pIsoMapInverse[baseIdx + 6 * offset]);
-   const float isoJacInv21 = __ldg(&pIsoMapInverse[baseIdx + 7 * offset]);
-   const float isoJacInv22 = __ldg(&pIsoMapInverse[baseIdx + 8 * offset]);
- 
+   
    // some index arithmetic, to pick up the nodes to read their positions from global memory.
    // We store all first nodes for all elements; then all second nodes for all elements; etc. 
    // This SoA (Structure of Arrays) layout leads to a coalesced memory access pattern. 
@@ -234,16 +221,40 @@ __device__ __forceinline__ void applyNodalForce(
  
    // here we go, start computing the deformation gradient F of the iso-parametric element.
    {
-    const int baseIdxS = threadIdx.x;
-    #define F00 s_F[baseIdxS + 0 * offset]
-    #define F01 s_F[baseIdxS + 1 * offset]
-    #define F02 s_F[baseIdxS + 2 * offset]
-    #define F10 s_F[baseIdxS + 3 * offset]
-    #define F11 s_F[baseIdxS + 4 * offset]
-    #define F12 s_F[baseIdxS + 5 * offset]
-    #define F20 s_F[baseIdxS + 6 * offset]
-    #define F21 s_F[baseIdxS + 7 * offset]
-    #define F22 s_F[baseIdxS + 8 * offset]
+    // some nomenclature first, for convenience:
+    #define F00 s_F[threadIdx.x + 0 * offset_QPtied]
+    #define F01 s_F[threadIdx.x + 1 * offset_QPtied]
+    #define F02 s_F[threadIdx.x + 2 * offset_QPtied]
+    #define F10 s_F[threadIdx.x + 3 * offset_QPtied]
+    #define F11 s_F[threadIdx.x + 4 * offset_QPtied]
+    #define F12 s_F[threadIdx.x + 5 * offset_QPtied]
+    #define F20 s_F[threadIdx.x + 6 * offset_QPtied]
+    #define F21 s_F[threadIdx.x + 7 * offset_QPtied]
+    #define F22 s_F[threadIdx.x + 8 * offset_QPtied]
+
+   // Load the inverse of the isoparametric-element parent-reference Jacobian for this QP, into shared memory.
+   // baseQPIdx is consecutive within the block, so these loads are coalesced within a block.
+   // Consequently, the memory accesses are coalesced within a tile as well.
+   // Stores all Jac00 for 64 matrices, then Jac01 for 64 matrices, etc. It's a SoA (Structure of Arrays) layout.
+   s_invJacobian[threadIdx.x + 0 * offset_QPtied] = __ldg(&pIsoMapInverse[baseIdx + 0 * offset_QPtied]);
+   s_invJacobian[threadIdx.x + 1 * offset_QPtied] = __ldg(&pIsoMapInverse[baseIdx + 1 * offset_QPtied]);
+   s_invJacobian[threadIdx.x + 2 * offset_QPtied] = __ldg(&pIsoMapInverse[baseIdx + 2 * offset_QPtied]);
+   s_invJacobian[threadIdx.x + 3 * offset_QPtied] = __ldg(&pIsoMapInverse[baseIdx + 3 * offset_QPtied]);
+   s_invJacobian[threadIdx.x + 4 * offset_QPtied] = __ldg(&pIsoMapInverse[baseIdx + 4 * offset_QPtied]);
+   s_invJacobian[threadIdx.x + 5 * offset_QPtied] = __ldg(&pIsoMapInverse[baseIdx + 5 * offset_QPtied]);
+   s_invJacobian[threadIdx.x + 6 * offset_QPtied] = __ldg(&pIsoMapInverse[baseIdx + 6 * offset_QPtied]);
+   s_invJacobian[threadIdx.x + 7 * offset_QPtied] = __ldg(&pIsoMapInverse[baseIdx + 7 * offset_QPtied]);
+   s_invJacobian[threadIdx.x + 8 * offset_QPtied] = __ldg(&pIsoMapInverse[baseIdx + 8 * offset_QPtied]);
+
+   #define isoJacInv00 s_invJacobian[threadIdx.x + 0 * offset_QPtied]
+   #define isoJacInv01 s_invJacobian[threadIdx.x + 1 * offset_QPtied]
+   #define isoJacInv02 s_invJacobian[threadIdx.x + 2 * offset_QPtied]
+   #define isoJacInv10 s_invJacobian[threadIdx.x + 3 * offset_QPtied]
+   #define isoJacInv11 s_invJacobian[threadIdx.x + 4 * offset_QPtied]
+   #define isoJacInv12 s_invJacobian[threadIdx.x + 5 * offset_QPtied]
+   #define isoJacInv20 s_invJacobian[threadIdx.x + 6 * offset_QPtied]
+   #define isoJacInv21 s_invJacobian[threadIdx.x + 7 * offset_QPtied]
+   #define isoJacInv22 s_invJacobian[threadIdx.x + 8 * offset_QPtied]
  
  
      // Node 0 (of 0-9)
@@ -541,27 +552,18 @@ __device__ __forceinline__ void applyNodalForce(
      // Write back to global memory, for later used by other kernels, e.g., Kelvin-Voigt.
      // Loading in a different kernel is less painful since reads will be nicely coalesced.
      if (writeOutDefGradientF) {
-         pDeformationGradientF[baseIdx + 0 * offset] = F00;
-         pDeformationGradientF[baseIdx + 1 * offset] = F01;
-         pDeformationGradientF[baseIdx + 2 * offset] = F02;
-         pDeformationGradientF[baseIdx + 3 * offset] = F10;
-         pDeformationGradientF[baseIdx + 4 * offset] = F11;
-         pDeformationGradientF[baseIdx + 5 * offset] = F12;
-         pDeformationGradientF[baseIdx + 6 * offset] = F20;
-         pDeformationGradientF[baseIdx + 7 * offset] = F21;
-         pDeformationGradientF[baseIdx + 8 * offset] = F22;
+         pDeformationGradientF[baseIdx + 0 * offset_QPtied] = F00;
+         pDeformationGradientF[baseIdx + 1 * offset_QPtied] = F01;
+         pDeformationGradientF[baseIdx + 2 * offset_QPtied] = F02;
+         pDeformationGradientF[baseIdx + 3 * offset_QPtied] = F10;
+         pDeformationGradientF[baseIdx + 4 * offset_QPtied] = F11;
+         pDeformationGradientF[baseIdx + 5 * offset_QPtied] = F12;
+         pDeformationGradientF[baseIdx + 6 * offset_QPtied] = F20;
+         pDeformationGradientF[baseIdx + 7 * offset_QPtied] = F21;
+         pDeformationGradientF[baseIdx + 8 * offset_QPtied] = F22;
      }
 
 
-    #undef F00
-    #undef F01
-    #undef F02
-    #undef F10
-    #undef F11
-    #undef F12
-    #undef F20
-    #undef F21
-    #undef F22    
    }
    // End of computation of deformation gradient F, for the iso-parametric T10 tet element - 10 nodes, 4 QPs.
  
@@ -569,17 +571,6 @@ __device__ __forceinline__ void applyNodalForce(
 
   // Start of computation of the internal acceleration for the element.
   {
-    const int baseIdxS = threadIdx.x;
-    #define F00 s_F[baseIdxS + 0 * offset]
-    #define F01 s_F[baseIdxS + 1 * offset]
-    #define F02 s_F[baseIdxS + 2 * offset]
-    #define F10 s_F[baseIdxS + 3 * offset]
-    #define F11 s_F[baseIdxS + 4 * offset]
-    #define F12 s_F[baseIdxS + 5 * offset]
-    #define F20 s_F[baseIdxS + 6 * offset]
-    #define F21 s_F[baseIdxS + 7 * offset]
-    #define F22 s_F[baseIdxS + 8 * offset]
-
 
     // compute the determinant of the deformation gradient F; pad with minJthreshold to avoid division by zero.
     float dummy = F00 * (F11 * F22 - F12 * F21) - F01 * (F10 * F22 - F12 * F20) + F02 * (F10 * F21 - F11 * F20);
