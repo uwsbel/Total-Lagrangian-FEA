@@ -40,89 +40,107 @@
  #include "tlfea_problem_parameters.cuh" // stores parameters associated with the TL_FEA model for this particular problem
  
  
- template <typename TileType>
- __device__ __inline__ void applyNodalForce(
- //  __device__ __forceinline__ void applyNodalForce(
-     const TileType& tile,
-     int lane_in_tile,
-     float* __restrict__ pInternalForceNodes,
-     int whichGlobalNode,
-     float hx, float hy, float hz,
-     float F00, float F01, float F02,
-     float F10, float F11, float F12,
-     float F20, float F21, float F22,
-     float invJ,
-     float iso_scale,   
-     float alpha,
-     float beta,        
-     float mu01_hatJ)
- {
-     // u = F*h (row-major)
-     const float ux = fmaf(F00, hx, fmaf(F01, hy, F02 * hz));
-     const float uy = fmaf(F10, hx, fmaf(F11, hy, F12 * hz));
-     const float uz = fmaf(F20, hx, fmaf(F21, hy, F22 * hz));
- 
-     // v = F^T * u
-     const float vx = fmaf(F00, ux, fmaf(F10, uy, F20 * uz));
-     const float vy = fmaf(F01, ux, fmaf(F11, uy, F21 * uz));
-     const float vz = fmaf(F02, ux, fmaf(F12, uy, F22 * uz));
- 
-     // w = F * v
-     const float wx = fmaf(F00, vx, fmaf(F01, vy, F02 * vz));
-     const float wy = fmaf(F10, vx, fmaf(F11, vy, F12 * vz));
-     const float wz = fmaf(F20, vx, fmaf(F21, vy, F22 * vz));
- 
-     // X
-     {
-         const float cof_x = fmaf(F11, F22, -(F12 * F21));
-         const float cof_y = fmaf(F12, F20, -(F10 * F22));
-         const float cof_z = fmaf(F10, F21, -(F11 * F20));
-         const float gtx   = fmaf(cof_x, hx, fmaf(cof_y, hy, cof_z * hz)) * invJ;
- 
-         float fX = fmaf(iso_scale, fmaf(alpha, ux, -mu01_hatJ * wx), beta * gtx);
-         fX += tile.shfl_down(fX, 2);
-         fX += tile.shfl_down(fX, 1);
-         if (lane_in_tile == 0){
-           constexpr float weightQP = 1.0f/24.0f; //NOTE: all weights are the same for the T10 tet element.
-           fX *= weightQP;          
-             atomicAdd(&pInternalForceNodes[3 * whichGlobalNode + 0], fX);
-         }
-     }
- 
-     // Y
-     {
-         const float cof_x = fmaf(F02, F21, -(F01 * F22));
-         const float cof_y = fmaf(F00, F22, -(F02 * F20));
-         const float cof_z = fmaf(F01, F20, -(F00 * F21));
-         const float gty   = fmaf(cof_x, hx, fmaf(cof_y, hy, cof_z * hz)) * invJ;
- 
-         float fY = fmaf(iso_scale, fmaf(alpha, uy, -mu01_hatJ * wy), beta * gty);
-         fY += tile.shfl_down(fY, 2);
-         fY += tile.shfl_down(fY, 1);
-         if (lane_in_tile == 0){
-           constexpr float weightQP = 1.0f/24.0f; //NOTE: all weights are the same for the T10 tet element.
-           fY *= weightQP;          
-           atomicAdd(&pInternalForceNodes[3 * whichGlobalNode + 1], fY);
-         } 
-     }
- 
-     // Z
-     {
-         const float cof_x = fmaf(F01, F12, -(F02 * F11));
-         const float cof_y = fmaf(F02, F10, -(F00 * F12));
-         const float cof_z = fmaf(F00, F11, -(F01 * F10));
-         const float gtz   = fmaf(cof_x, hx, fmaf(cof_y, hy, cof_z * hz)) * invJ;
- 
-         float fZ = fmaf(iso_scale, fmaf(alpha, uz, -mu01_hatJ * wz), beta * gtz);
-         fZ += tile.shfl_down(fZ, 2);
-         fZ += tile.shfl_down(fZ, 1);
-         if (lane_in_tile == 0){
-           constexpr float weightQP = 1.0f/24.0f; //NOTE: all weights are the same for the T10 tet element.
-           fZ *= weightQP;          
-           atomicAdd(&pInternalForceNodes[3 * whichGlobalNode + 2], fZ);
-         }            
-     }
- }
+template <typename TileType>
+__device__ __forceinline__ void applyNodalForce(
+    const TileType& tile,
+    int lane_in_tile,
+    float* __restrict__ pInternalForceNodes,
+    int whichGlobalNode,
+    float hx, float hy, float hz,
+    const float* __restrict__ s_F,
+    float invJ,
+    float iso_scale,   
+    float alpha,
+    float beta,        
+    float mu01_hatJ)
+{
+    constexpr int offset = 64; //hardcoded :-). Strong assumption that we have 64 threads per block.
+    const int baseIdxS = threadIdx.x;
+    #define F00 s_F[baseIdxS + 0 * offset]
+    #define F01 s_F[baseIdxS + 1 * offset]
+    #define F02 s_F[baseIdxS + 2 * offset]
+    #define F10 s_F[baseIdxS + 3 * offset]
+    #define F11 s_F[baseIdxS + 4 * offset]
+    #define F12 s_F[baseIdxS + 5 * offset]
+    #define F20 s_F[baseIdxS + 6 * offset]
+    #define F21 s_F[baseIdxS + 7 * offset]
+    #define F22 s_F[baseIdxS + 8 * offset]  
+
+    // u = F*h (row-major)
+    const float ux = fmaf(F00, hx, fmaf(F01, hy, F02 * hz));
+    const float uy = fmaf(F10, hx, fmaf(F11, hy, F12 * hz));
+    const float uz = fmaf(F20, hx, fmaf(F21, hy, F22 * hz));
+
+    // v = F^T * u
+    const float vx = fmaf(F00, ux, fmaf(F10, uy, F20 * uz));
+    const float vy = fmaf(F01, ux, fmaf(F11, uy, F21 * uz));
+    const float vz = fmaf(F02, ux, fmaf(F12, uy, F22 * uz));
+
+    // w = F * v
+    const float wx = fmaf(F00, vx, fmaf(F01, vy, F02 * vz));
+    const float wy = fmaf(F10, vx, fmaf(F11, vy, F12 * vz));
+    const float wz = fmaf(F20, vx, fmaf(F21, vy, F22 * vz));
+
+    // X
+    {
+        const float cof_x = fmaf(F11, F22, -(F12 * F21));
+        const float cof_y = fmaf(F12, F20, -(F10 * F22));
+        const float cof_z = fmaf(F10, F21, -(F11 * F20));
+        const float gtx   = fmaf(cof_x, hx, fmaf(cof_y, hy, cof_z * hz)) * invJ;
+
+        float fX = fmaf(iso_scale, fmaf(alpha, ux, -mu01_hatJ * wx), beta * gtx);
+        fX += tile.shfl_down(fX, 2);
+        fX += tile.shfl_down(fX, 1);
+        if (lane_in_tile == 0) {
+            constexpr float weightQP = 1.0f/24.0f; //NOTE: all weights are the same for the T10 tet element.
+            fX *= weightQP;          
+            atomicAdd(&pInternalForceNodes[3 * whichGlobalNode + 0], fX);
+        }
+    }
+
+    // Y
+    {
+        const float cof_x = fmaf(F02, F21, -(F01 * F22));
+        const float cof_y = fmaf(F00, F22, -(F02 * F20));
+        const float cof_z = fmaf(F01, F20, -(F00 * F21));
+        const float gty   = fmaf(cof_x, hx, fmaf(cof_y, hy, cof_z * hz)) * invJ;
+
+        float fY = fmaf(iso_scale, fmaf(alpha, uy, -mu01_hatJ * wy), beta * gty);
+        fY += tile.shfl_down(fY, 2);
+        fY += tile.shfl_down(fY, 1);
+        if (lane_in_tile == 0) {
+            constexpr float weightQP = 1.0f/24.0f; //NOTE: all weights are the same for the T10 tet element.
+            fY *= weightQP;          
+            atomicAdd(&pInternalForceNodes[3 * whichGlobalNode + 1], fY);
+        } 
+    }
+
+    // Z
+    {
+        const float cof_x = fmaf(F01, F12, -(F02 * F11));
+        const float cof_y = fmaf(F02, F10, -(F00 * F12));
+        const float cof_z = fmaf(F00, F11, -(F01 * F10));
+        const float gtz   = fmaf(cof_x, hx, fmaf(cof_y, hy, cof_z * hz)) * invJ;
+
+        float fZ = fmaf(iso_scale, fmaf(alpha, uz, -mu01_hatJ * wz), beta * gtz);
+        fZ += tile.shfl_down(fZ, 2);
+        fZ += tile.shfl_down(fZ, 1);
+        if (lane_in_tile == 0) {
+            constexpr float weightQP = 1.0f/24.0f; //NOTE: all weights are the same for the T10 tet element.
+            fZ *= weightQP;          
+            atomicAdd(&pInternalForceNodes[3 * whichGlobalNode + 2], fZ);
+        }            
+    }
+    #undef F00
+    #undef F01
+    #undef F02
+    #undef F10
+    #undef F11
+    #undef F12
+    #undef F20
+    #undef F21
+    #undef F22
+}
  
  
  /**
@@ -139,17 +157,18 @@
   * @warning This kernel should be run with blocks of 64 threads because of the memory layout, to get coalesced memory accesses.
   *
   * @param pPosNodes                The positions of the nodes. [I]
-  * @param pVelNodes                The velocities of the nodes. [I]
   * @param pElement_NodeIndexes     The indices of the nodes that make up each element, listed element by element. [I]
   * @param pIsoMapInverse           Pointer to the inverse of the isoparametric-element Jacobian. [I]
+  * @param writeOutDefGradientF     Whether to write out the deformation gradient F to global memory. [I]
   * @param pDeformationGradientF    The deformation gradient F of the element. [O]
   * @param pInternalForceNodes      The internal force of the nodes. [O]
   */
  
  __global__ void internalF_KelvinVoigt_4QP(
-     const double* __restrict__ pPosNodes, const double* __restrict__ pVelNodes,
+     const double* __restrict__ pPosNodes,
      const int* __restrict__ pElement_NodeIndexes,
      const float* __restrict__ pIsoMapInverse,
+     bool writeOutDefGradientF,
      float* __restrict__ pDeformationGradientF,
      float* __restrict__ pInternalForceNodes) {
    // In this block, we deal with 64 QPs: 16 elements, each with 4 QPs.
@@ -172,8 +191,22 @@
  
  
    // Define the total number of quadrature points in this block
-   const int baseIdx  = blockIdx.x * 4 * elements_per_block * 9 + threadIdx.x; // this is where this thread starts in the global QP index space
+   const int baseIdx = blockIdx.x * 4 * elements_per_block * 9 + threadIdx.x; // this is where this thread starts in the global QP index space
    constexpr int offset = elements_per_block * 4;
+
+   // QP coordinates for the 4-point rule on the T10 tet element canonical tetrahedron.
+   // Lane mapping:
+   //  lane 0: (a,a,a)
+   //  lane 1: (b,a,a)
+   //  lane 2: (b,b,a)
+   //  lane 3: (b,b,b)  
+   constexpr float a = 0.1381966011250105f;
+   constexpr float b = 0.5854101966249685f;
+
+   const float xi   = (lane_in_tile == 0) ? a : b;
+   const float eta  = (lane_in_tile <  2) ? a : b;
+   const float zeta = (lane_in_tile <  3) ? a : b;    
+
  
    // Load the inverse of the isoparametric-element parent-reference Jacobian for this QP.
    // baseQPIdx is consecutive within the block, so these loads are coalesced within a block.
@@ -212,18 +245,6 @@
     #define F21 s_F[baseIdxS + 7 * offset]
     #define F22 s_F[baseIdxS + 8 * offset]
  
-     // QP coordinates for the 4-point rule on the T10 tet element canonical tetrahedron.
-     // Lane mapping:
-     //  lane 0: (a,a,a)
-     //  lane 1: (b,a,a)
-     //  lane 2: (b,b,a)
-     //  lane 3: (b,b,b)  
-     constexpr float a = 0.1381966011250105f;
-     constexpr float b = 0.5854101966249685f;
- 
-     const float xi   = (lane_in_tile == 0) ? a : b;
-     const float eta  = (lane_in_tile <  2) ? a : b;
-     const float zeta = (lane_in_tile <  3) ? a : b;    
  
      // Node 0 (of 0-9)
      {
@@ -516,22 +537,312 @@
        F21 += NUz * dummy1;
        F22 += NUz * dummy2;
      }
- 
-    
+
+     // Write back to global memory, for later used by other kernels, e.g., Kelvin-Voigt.
+     // Loading in a different kernel is less painful since reads will be nicely coalesced.
+     if (writeOutDefGradientF) {
+         pDeformationGradientF[baseIdx + 0 * offset] = F00;
+         pDeformationGradientF[baseIdx + 1 * offset] = F01;
+         pDeformationGradientF[baseIdx + 2 * offset] = F02;
+         pDeformationGradientF[baseIdx + 3 * offset] = F10;
+         pDeformationGradientF[baseIdx + 4 * offset] = F11;
+         pDeformationGradientF[baseIdx + 5 * offset] = F12;
+         pDeformationGradientF[baseIdx + 6 * offset] = F20;
+         pDeformationGradientF[baseIdx + 7 * offset] = F21;
+         pDeformationGradientF[baseIdx + 8 * offset] = F22;
+     }
+
+
+    #undef F00
+    #undef F01
+    #undef F02
+    #undef F10
+    #undef F11
+    #undef F12
+    #undef F20
+    #undef F21
+    #undef F22    
    }
    // End of computation of deformation gradient F, for the iso-parametric T10 tet element - 10 nodes, 4 QPs.
  
 
-   #undef F00
-   #undef F01
-   #undef F02
-   #undef F10
-   #undef F11
-   #undef F12
-   #undef F20
-   #undef F21
-   #undef F22
-   
-   return;
- }
+
+  // Start of computation of the internal acceleration for the element.
+  {
+    const int baseIdxS = threadIdx.x;
+    #define F00 s_F[baseIdxS + 0 * offset]
+    #define F01 s_F[baseIdxS + 1 * offset]
+    #define F02 s_F[baseIdxS + 2 * offset]
+    #define F10 s_F[baseIdxS + 3 * offset]
+    #define F11 s_F[baseIdxS + 4 * offset]
+    #define F12 s_F[baseIdxS + 5 * offset]
+    #define F20 s_F[baseIdxS + 6 * offset]
+    #define F21 s_F[baseIdxS + 7 * offset]
+    #define F22 s_F[baseIdxS + 8 * offset]
+
+
+    // compute the determinant of the deformation gradient F; pad with minJthreshold to avoid division by zero.
+    float dummy = F00 * (F11 * F22 - F12 * F21) - F01 * (F10 * F22 - F12 * F20) + F02 * (F10 * F21 - F11 * F20);
+    const float J = (dummy<minJthreshold ? minJthreshold : dummy);
+
+    dummy = cbrtf(J);
+    dummy = 1.0f / dummy;
+    const float hatJ = dummy * dummy;  // J^{-2/3}
+    const float invJ = 1.0f / J;  
+    const float iso_scale = 2.0f * hatJ;
+    const float mu01_hatJ = mu01 * hatJ;
+
+    float bibi;
+    {
+      // B = F * F^T (symmetric), then I1 = tr(B)
+      const float B00 = F00*F00 + F01*F01 + F02*F02;
+      const float B11 = F10*F10 + F11*F11 + F12*F12;
+      const float B22 = F20*F20 + F21*F21 + F22*F22;
+      const float B01 = F00*F10 + F01*F11 + F02*F12;
+      const float B02 = F00*F20 + F01*F21 + F02*F22;
+      const float B12 = F10*F20 + F11*F21 + F12*F22;
+      dummy = B00 + B11 + B22;
+      bibi = B00*B00 + B11*B11 + B22*B22 + 2.0f*(B01*B01 + B02*B02 + B12*B12); // tr(B*B)
+      bibi = 0.5f * (dummy*dummy - bibi); // I2 = 1/2 (I1^2 - tr(B*B))
+    }
+    const float I1 = dummy; // first invariant of the deformation gradient
+    const float I2 = bibi; // second invariant of the deformation gradient
+    const float alpha = mu10 + mu01 * I1 * hatJ; // helper variable, see ME751 lecture notes
+    const float beta = bulkK * (J - 1.0f) * J - (2.0f/3.0f) * hatJ * (mu10*I1 + 2.0f*mu01*I2*hatJ); // helper variable, see ME751 lecture notes
+    #undef F00
+    #undef F01
+    #undef F02
+    #undef F10
+    #undef F11
+    #undef F12
+    #undef F20
+    #undef F21
+    #undef F22
+
+
+    // P*h = 2*hatJ*(alpha*u - mu01*hatJ*w) + beta*(F^{-T}*h)
+    // start visiting the nodes and compute the internal force for each one. Use atomic adds to accumulate
+    { //--------------------------------- Node 0 (of 0-9) ---------------------------------
+      const int whichGlobalNode = pElementNodes[0 * offsetNodes]; // why not storing in a reg? See comment at end of kernel.
+      const float h0 = 4.f * eta + 4.f * xi + 4.f * zeta - 3.f;
+      // h1 = h0;
+      // h2 = h0;
+      const float hx = h0*(isoJacInv00 + isoJacInv01 + isoJacInv02);
+      const float hy = h0*(isoJacInv10 + isoJacInv11 + isoJacInv12);
+      const float hz = h0*(isoJacInv20 + isoJacInv21 + isoJacInv22);
+
+      applyNodalForce(
+        tile, lane_in_tile, pInternalForceNodes, whichGlobalNode,
+        hx, hy, hz, 
+        s_F,
+        invJ, 
+        iso_scale,
+        alpha, 
+        beta,
+        mu01_hatJ
+      );
+    }
+
+    
+    { //--------------------------------- Node 1 (of 0-9) ---------------------------------
+      const int whichGlobalNode = pElementNodes[1 * offsetNodes]; // why not storing in a reg? See comment at end of kernel.
+      const float h0 = 4.f * xi - 1.f;
+      // h1 = h0;
+      // h2 = h0;
+      const float hx = h0*isoJacInv00;
+      const float hy = h0*isoJacInv10;
+      const float hz = h0*isoJacInv20;
+
+      applyNodalForce(
+        tile, lane_in_tile, pInternalForceNodes, whichGlobalNode,
+        hx, hy, hz, 
+        s_F,
+        invJ, 
+        iso_scale,
+        alpha, 
+        beta,
+        mu01_hatJ
+      );
+    }
+
+    
+    { //--------------------------------- Node 2 (of 0-9) ---------------------------------
+      const int whichGlobalNode = pElementNodes[2 * offsetNodes]; // why not storing in a reg? See comment at end of kernel.
+      // h0 = 0.f;
+      const float h1 = 4.f * eta - 1.f;
+      // h2 = 0.f;
+      const float hx = h1*isoJacInv01;
+      const float hy = h1*isoJacInv11;
+      const float hz = h1*isoJacInv21;
+
+      applyNodalForce(
+        tile, lane_in_tile, pInternalForceNodes, whichGlobalNode,
+        hx, hy, hz, 
+        s_F,
+        invJ, 
+        iso_scale,
+        alpha, 
+        beta,
+        mu01_hatJ
+      );
+    }
+
+    
+    { //--------------------------------- Node 3 (of 0-9) ---------------------------------
+      const int whichGlobalNode = pElementNodes[3 * offsetNodes]; // why not storing in a reg? See comment at end of kernel.
+      // h0 = 0.f;
+      // h1 = 0.f;
+      const float h2 = 4.f * zeta - 1.f;
+      const float hx = h2*isoJacInv02;
+      const float hy = h2*isoJacInv12;
+      const float hz = h2*isoJacInv22;
+
+      applyNodalForce(
+        tile, lane_in_tile, pInternalForceNodes, whichGlobalNode,
+        hx, hy, hz, 
+        s_F,
+        invJ, 
+        iso_scale,
+        alpha, 
+        beta,
+        mu01_hatJ
+      );
+    }
+
+    
+    { //--------------------------------- Node 4 (of 0-9) ---------------------------------
+      const int whichGlobalNode = pElementNodes[4 * offsetNodes]; // why not storing in a reg? See comment at end of kernel.
+      const float h0 = -4.f * eta - 8.f * xi - 4.f * zeta + 4.f;
+      const float h1 = -4.f * xi;
+      // h1 and h2 are the same
+      const float hx = h0*isoJacInv00 + h1*(isoJacInv01 + isoJacInv02);
+      const float hy = h0*isoJacInv10 + h1*(isoJacInv11 + isoJacInv12);
+      const float hz = h0*isoJacInv20 + h1*(isoJacInv21 + isoJacInv22);
+
+      applyNodalForce(
+        tile, lane_in_tile, pInternalForceNodes, whichGlobalNode,
+        hx, hy, hz, 
+        s_F,
+        invJ, 
+        iso_scale,
+        alpha, 
+        beta,
+        mu01_hatJ
+      );
+    }
+
+    
+    { //--------------------------------- Node 5 (of 0-9) ---------------------------------
+      const int whichGlobalNode = pElementNodes[5 * offsetNodes]; // why not storing in a reg? See comment at end of kernel.
+      const float h0 = 4.f * eta;
+      const float h1 = 4.f * xi;
+      // h2 = 0.f;
+      const float hx = h0*isoJacInv00 + h1*isoJacInv01;
+      const float hy = h0*isoJacInv10 + h1*isoJacInv11;
+      const float hz = h0*isoJacInv20 + h1*isoJacInv21;
+
+      applyNodalForce(
+        tile, lane_in_tile, pInternalForceNodes, whichGlobalNode,
+        hx, hy, hz, 
+        s_F,
+        invJ, 
+        iso_scale,
+        alpha, 
+        beta,
+        mu01_hatJ
+      );
+    }
+
+    
+    { //--------------------------------- Node 6 (of 0-9) ---------------------------------
+      const int whichGlobalNode = pElementNodes[6 * offsetNodes]; // why not storing in a reg? See comment at end of kernel.
+      const float h0 = -4.f * eta;
+      const float h1 = -8.f * eta - 4.f * xi - 4.f * zeta + 4.f;
+      const float h2 = -4.f * eta;
+      const float hx = h0*isoJacInv00 + h1*isoJacInv01 + h2*isoJacInv02;
+      const float hy = h0*isoJacInv10 + h1*isoJacInv11 + h2*isoJacInv12;
+      const float hz = h0*isoJacInv20 + h1*isoJacInv21 + h2*isoJacInv22;
+
+      applyNodalForce(
+        tile, lane_in_tile, pInternalForceNodes, whichGlobalNode,
+        hx, hy, hz, 
+        s_F,
+        invJ, 
+        iso_scale,
+        alpha, 
+        beta,
+        mu01_hatJ
+      );
+    }
+
+    
+    { //--------------------------------- Node 7 (of 0-9) ---------------------------------
+      const int whichGlobalNode = pElementNodes[7 * offsetNodes]; // why not storing in a reg? See comment at end of kernel.
+      const float h0 = -4.f * zeta;
+      // h1 = h0;
+      const float h2 = -4.f * eta - 4.f * xi - 8.f * zeta + 4.f;
+      const float hx = h0*(isoJacInv00 + isoJacInv01) + h2*isoJacInv02;
+      const float hy = h0*(isoJacInv10 + isoJacInv11) + h2*isoJacInv12;
+      const float hz = h0*(isoJacInv20 + isoJacInv21) + h2*isoJacInv22;
+
+      applyNodalForce(
+        tile, lane_in_tile, pInternalForceNodes, whichGlobalNode,
+        hx, hy, hz, 
+        s_F,
+        invJ, 
+        iso_scale,
+        alpha, 
+        beta,
+        mu01_hatJ
+      );
+    }
+
+    
+    { //--------------------------------- Node 8 (of 0-9) ---------------------------------
+      const int whichGlobalNode = pElementNodes[8 * offsetNodes]; // why not storing in a reg? See comment at end of kernel.
+      const float h0 = 4.f * zeta;
+      // h1 = 0.f;
+      const float h2 = 4.f * xi;
+      const float hx = h0*isoJacInv00 + h2*isoJacInv02;
+      const float hy = h0*isoJacInv10 + h2*isoJacInv12;
+      const float hz = h0*isoJacInv20 + h2*isoJacInv22;
+
+      applyNodalForce(
+        tile, lane_in_tile, pInternalForceNodes, whichGlobalNode,
+        hx, hy, hz, 
+        s_F,
+        invJ, 
+        iso_scale,
+        alpha, 
+        beta,
+        mu01_hatJ
+      );
+    }
+
+    
+    { //--------------------------------- Node 9 (of 0-9) ---------------------------------
+      const int whichGlobalNode = pElementNodes[9 * offsetNodes]; // why not storing in a reg? See comment at end of kernel.
+      // h0 = 0.f;
+      const float h1 = 4.f * zeta;
+      const float h2 = 4.f * eta;
+      const float hx = h1*isoJacInv01 + h2*isoJacInv02;
+      const float hy = h1*isoJacInv11 + h2*isoJacInv12;
+      const float hz = h1*isoJacInv21 + h2*isoJacInv22;
+
+      applyNodalForce(
+        tile, lane_in_tile, pInternalForceNodes, whichGlobalNode,
+        hx, hy, hz, 
+        s_F,
+        invJ, 
+        iso_scale,
+        alpha, 
+        beta,
+        mu01_hatJ
+      );
+    }   
+  }  
+  // end of computation of the internal acceleration for the element.
+  
+  return;
+}
  
