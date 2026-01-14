@@ -37,6 +37,10 @@ struct DemeMeshCollisionBody {
   // Patch split angle in degrees. If < 0, use the default patch angle
   // (`DEME_PATCH_ANGLE_DEG`, back-compat: `DEME_ITEM_PATCH_ANGLE_DEG`).
   float patch_angle_deg = -1.0f;
+
+  // If true, skip processing contact forces for this body (body still
+  // participates in collision detection for other bodies to collide with it).
+  bool skip_self_contact_forces = false;
 };
 
 // Collision system that couples DEM-Engine (DEME) mesh-mesh contact to this

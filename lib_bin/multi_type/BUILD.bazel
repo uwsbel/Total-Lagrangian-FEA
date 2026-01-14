@@ -1,0 +1,35 @@
+load("@rules_cuda//cuda:defs.bzl", "cuda_library")
+
+package(default_visibility = ["//visibility:public"])
+
+cc_binary(
+    name = "test_multi_element_gravity",
+    srcs = ["test_multi_element_gravity.cc"],
+    copts = ["--std=c++17"],
+    linkopts = [
+        "-L/usr/local/cuda/lib64",
+        "-lnvrtc",
+        "-lcuda",
+        "-lcusparse",
+        "-lcudart",
+        "-lcusolver",
+        "-lcublas",
+        "-lcudss",
+    ],
+    data = [
+        "//:data_meshes",
+    ],
+    deps = [
+        "//lib_src/collision:deme_mesh_collision_system",
+        "//lib_src/elements:ANCF3243Data",
+        "//lib_src/elements:FEAT10Data",
+        "//lib_src/solvers:solvers_syncednewton",
+        "//lib_utils:cpu_utils",
+        "//lib_utils:cuda_utils",
+        "//lib_utils:mesh_manager",
+        "//lib_utils:mesh_utils",
+        "//lib_utils:surface_trimesh_extract",
+        "//lib_utils:visualization_utils",
+        "@eigen//:eigen",
+    ],
+)

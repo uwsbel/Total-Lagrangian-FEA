@@ -356,7 +356,7 @@ void DemeMeshCollisionSystem::BuildSolver(double friction) {
   //   forces that are too stiff for our implicit FE solve if E is large.
   // - Default `E` here is chosen to roughly match this repo's `test_item_drop`
   //   material scale; override with env var `DEME_CONTACT_E` when needed.
-  const float contact_E   = EnvFloatOr("DEME_CONTACT_E", 2.0e6f);
+  const float contact_E   = EnvFloatOr("DEME_CONTACT_E", 1.0e7f);
   const float contact_nu  = EnvFloatOr("DEME_CONTACT_NU", 0.3f);
   const float contact_cor = EnvFloatOr("DEME_CONTACT_COR", 0.0f);
 

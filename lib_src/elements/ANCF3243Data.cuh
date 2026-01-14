@@ -1084,6 +1084,16 @@ struct GPU_ANCF3243_Data : public ElementBase {
     return constraint_mode;
   }
 
+  // Device pointer accessors for unified state buffer synchronization.
+  double* GetX12DevicePtr() { return d_x12; }
+  const double* GetX12DevicePtr() const { return d_x12; }
+  double* GetY12DevicePtr() { return d_y12; }
+  const double* GetY12DevicePtr() const { return d_y12; }
+  double* GetZ12DevicePtr() { return d_z12; }
+  const double* GetZ12DevicePtr() const { return d_z12; }
+  double* GetExternalForceDevicePtr() { return d_f_ext; }
+  const double* GetExternalForceDevicePtr() const { return d_f_ext; }
+
   void RetrieveConstraintJacobianCSRToCPU(std::vector<int> &offsets,
                                           std::vector<int> &columns,
                                           std::vector<double> &values);

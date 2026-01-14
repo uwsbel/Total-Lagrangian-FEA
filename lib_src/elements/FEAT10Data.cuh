@@ -645,25 +645,15 @@ struct GPU_FEAT10_Data : public ElementBase {
                             cudaMemcpyHostToDevice));
   }
 
-  const double *GetX12DevicePtr() const {
-    return d_h_x12;
-  }
-
-  const double *GetY12DevicePtr() const {
-    return d_h_y12;
-  }
-
-  const double *GetZ12DevicePtr() const {
-    return d_h_z12;
-  }
-
-  double *GetExternalForceDevicePtr() {
-    return d_f_ext;
-  }
-
-  const double *GetExternalForceDevicePtr() const {
-    return d_f_ext;
-  }
+  // Device pointer accessors for unified state buffer synchronization.
+  double* GetX12DevicePtr() { return d_h_x12; }
+  const double* GetX12DevicePtr() const { return d_h_x12; }
+  double* GetY12DevicePtr() { return d_h_y12; }
+  const double* GetY12DevicePtr() const { return d_h_y12; }
+  double* GetZ12DevicePtr() { return d_h_z12; }
+  const double* GetZ12DevicePtr() const { return d_h_z12; }
+  double* GetExternalForceDevicePtr() { return d_f_ext; }
+  const double* GetExternalForceDevicePtr() const { return d_f_ext; }
 
   /**
    * Update node positions on GPU (for prescribed motion of fixed nodes).
