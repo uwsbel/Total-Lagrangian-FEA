@@ -292,6 +292,219 @@ __device__ __forceinline__ void compute_p(int elem_idx, int qp_idx,
   // clang-format on
 }
 
+// Template version for compile-time material model dispatch
+template <int Mat>
+__device__ __forceinline__ void compute_p_impl(int elem_idx, int qp_idx,
+                                               GPU_FEAT10_Data* d_data,
+                                               const double* __restrict__ v_guess,
+                                               double dt) {
+  // Get current nodal positions for this element
+  double x_nodes[10][3];  // 10 nodes × 3 coordinates
+
+  // clang-format off
+
+  #pragma unroll
+  for (int node = 0; node < 10; node++) {
+    int global_node_idx = d_data->element_connectivity()(elem_idx, node);
+    x_nodes[node][0]    = d_data->x12()(global_node_idx);  // x coordinate
+    x_nodes[node][1]    = d_data->y12()(global_node_idx);  // y coordinate
+    x_nodes[node][2]    = d_data->z12()(global_node_idx);  // z coordinate
+  }
+
+  // Get precomputed shape function gradients for this element and QP
+  // grad_N[a][i] = ∂N_a/∂x_i (physical coordinates)
+  double grad_N[10][3];
+  #pragma unroll
+  for (int a = 0; a < 10; a++) {
+    grad_N[a][0] = d_data->grad_N_ref(elem_idx, qp_idx)(a, 0);  // ∂N_a/∂x
+    grad_N[a][1] = d_data->grad_N_ref(elem_idx, qp_idx)(a, 1);  // ∂N_a/∂y
+    grad_N[a][2] = d_data->grad_N_ref(elem_idx, qp_idx)(a, 2);  // ∂N_a/∂z
+  }
+
+  // Initialize deformation gradient F to zero
+  double F[3][3] = {{0.0}};
+
+  // Compute F = sum_a (x_nodes[a] ⊗ grad_N[a])
+  // F[i][j] = sum_a (x_nodes[a][i] * grad_N[a][j])
+  #pragma unroll
+  for (int a = 0; a < 10; a++) {
+    for (int i = 0; i < 3; i++) {    // Current position components
+      for (int j = 0; j < 3; j++) {  // Gradient components
+        F[i][j] += x_nodes[a][i] * grad_N[a][j];
+      }
+    }
+  }
+
+  // Store deformation gradient
+  #pragma unroll
+  for (int i = 0; i < 3; i++) {
+    #pragma unroll
+    for (int j = 0; j < 3; j++) {
+      d_data->F(elem_idx, qp_idx)(i, j) = F[i][j];
+    }
+  }
+
+  double eta = d_data->eta_damp();
+  double lambda_d = d_data->lambda_damp();
+  const bool do_damp = (v_guess != nullptr) && (eta != 0.0 || lambda_d != 0.0);
+
+  double P_vis[3][3] = {{0.0}};
+  if (do_damp) {
+    // Compute Fdot = sum_a (v_nodes[a] ⊗ grad_N[a])
+    double Fdot[3][3] = {{0.0}};
+    #pragma unroll
+    for (int a = 0; a < 10; a++) {
+      double v_a[3] = {0.0, 0.0, 0.0};
+      int global_node_idx = d_data->element_connectivity()(elem_idx, a);
+      v_a[0] = v_guess[global_node_idx * 3 + 0];
+      v_a[1] = v_guess[global_node_idx * 3 + 1];
+      v_a[2] = v_guess[global_node_idx * 3 + 2];
+      for (int i = 0; i < 3; i++) {
+        for (int j = 0; j < 3; j++) {
+          Fdot[i][j] += v_a[i] * grad_N[a][j];
+        }
+      }
+    }
+
+    // Compute viscous Piola: P_vis = F * S_vis, where
+    // S_vis = 2*eta*Edot + lambda_damp*tr(Edot)*I
+    double Edot[3][3] = {{0.0}};
+    // Edot = 0.5*(Fdot^T * F + F^T * Fdot)
+    double Ft[3][3];
+    #pragma unroll
+    for (int i = 0; i < 3; i++) {
+      for (int j = 0; j < 3; j++) {
+        Ft[i][j] = F[j][i];
+      }
+    }
+    // compute Fdot^T * F
+    double FdotT_F[3][3] = {{0.0}};
+    #pragma unroll
+    for (int i = 0; i < 3; i++) {
+      for (int j = 0; j < 3; j++) {
+        for (int k = 0; k < 3; k++) {
+          FdotT_F[i][j] += Fdot[k][i] * F[k][j];
+        }
+      }
+    }
+    // compute F^T * Fdot
+    double Ft_Fdot[3][3] = {{0.0}};
+    #pragma unroll
+    for (int i = 0; i < 3; i++) {
+      for (int j = 0; j < 3; j++) {
+        for (int k = 0; k < 3; k++) {
+          Ft_Fdot[i][j] += Ft[i][k] * Fdot[k][j];
+        }
+      }
+    }
+    #pragma unroll
+    for (int i = 0; i < 3; i++) {
+      for (int j = 0; j < 3; j++) {
+        Edot[i][j] = 0.5 * (FdotT_F[i][j] + Ft_Fdot[i][j]);
+      }
+    }
+
+    double trEdot = Edot[0][0] + Edot[1][1] + Edot[2][2];
+
+    double S_vis[3][3] = {{0.0}};
+    #pragma unroll
+    for (int i = 0; i < 3; i++) {
+      for (int j = 0; j < 3; j++) {
+        S_vis[i][j] = 2.0 * eta * Edot[i][j] +
+                      lambda_d * trEdot * (i == j ? 1.0 : 0.0);
+      }
+    }
+
+    // P_vis = F * S_vis
+    #pragma unroll
+    for (int i = 0; i < 3; i++) {
+      for (int j = 0; j < 3; j++) {
+        for (int k = 0; k < 3; k++) {
+          P_vis[i][j] += F[i][k] * S_vis[k][j];
+        }
+      }
+    }
+
+    // store Fdot and P_vis
+    #pragma unroll
+    for (int i = 0; i < 3; i++) {
+      for (int j = 0; j < 3; j++) {
+        d_data->Fdot(elem_idx, qp_idx)(i, j) = Fdot[i][j];
+        d_data->P_vis(elem_idx, qp_idx)(i, j) = P_vis[i][j];
+      }
+    }
+  } else {
+    #pragma unroll
+    for (int i = 0; i < 3; i++) {
+      for (int j = 0; j < 3; j++) {
+        d_data->Fdot(elem_idx, qp_idx)(i, j) = 0.0;
+        d_data->P_vis(elem_idx, qp_idx)(i, j) = 0.0;
+      }
+    }
+  }
+
+  // Compute F^T * F
+  double FtF[3][3] = {{0.0}};
+  #pragma unroll
+  for (int i = 0; i < 3; i++) {
+    #pragma unroll
+    for (int j = 0; j < 3; j++) {
+      #pragma unroll
+      for (int k = 0; k < 3; k++) {
+        FtF[i][j] += F[k][i] * F[k][j];  // F^T[i][k] * F[k][j]
+      }
+    }
+  }
+
+  // Compute trace(F^T * F)
+  double trFtF = FtF[0][0] + FtF[1][1] + FtF[2][2];
+
+  // Compute F * F^T
+  double FFt[3][3] = {{0.0}};
+  #pragma unroll
+  for (int i = 0; i < 3; i++) {
+    #pragma unroll
+    for (int j = 0; j < 3; j++) {
+      #pragma unroll
+      for (int k = 0; k < 3; k++) {
+        FFt[i][j] += F[i][k] * F[j][k];  // F[i][k] * F^T[k][j]
+      }
+    }
+  }
+
+  // Compute F * F^T * F
+  double FFtF[3][3] = {{0.0}};
+  #pragma unroll
+  for (int i = 0; i < 3; i++) {
+    for (int j = 0; j < 3; j++) {
+      for (int k = 0; k < 3; k++) {
+        FFtF[i][j] += FFt[i][k] * F[k][j];
+      }
+    }
+  }
+
+  // Compile-time material model dispatch
+  double P_el[3][3];
+  if constexpr (Mat == MATERIAL_MODEL_MOONEY_RIVLIN) {
+    mr_compute_P(F, d_data->mu10(), d_data->mu01(), d_data->kappa(), P_el);
+  } else {
+    // Get material parameters
+    double lambda = d_data->lambda();
+    double mu     = d_data->mu();
+    svk_compute_P_from_trFtF_and_FFtF(F, trFtF, FFtF, lambda, mu, P_el);
+  }
+
+  #pragma unroll
+  for (int i = 0; i < 3; i++) {
+    #pragma unroll
+    for (int j = 0; j < 3; j++) {
+      // total P = elastic + viscous
+      d_data->P(elem_idx, qp_idx)(i, j) = P_el[i][j] + P_vis[i][j];
+    }
+  }
+  // clang-format on
+}
+
 __device__ __forceinline__ void vbd_accumulate_residual_and_hessian_diag(
     int elem_idx, int qp_idx, int local_node, GPU_FEAT10_Data* d_data,
     double dt, double& r0, double& r1, double& r2, double& h00, double& h01,

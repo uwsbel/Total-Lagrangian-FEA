@@ -48,19 +48,23 @@ struct Options {
   int res = 8;                                              // 0/2/4/8/16/32
   bool write_csv = false;
   std::string csv_path;
+  int material = MATERIAL_MODEL_SVK;  // Material model for FEAT10
 };
 
 void PrintUsage(const char* argv0) {
   std::cout
       << "Usage: " << argv0
       << " [--solver=SOLVER] [--res=R] [--steps=N] [--dt=DT]\n"
-      << "                 [--omega=W] [--csv[=PATH]] [--help]\n\n"
+      << "                 [--omega=W] [--material=MAT] [--csv[=PATH]] "
+          "[--help]\n\n"
       << "  --solver=SOLVER   newton | vbd | adamw (default: adamw)\n"
       << "                   (adamw uses SyncedAdamWNocoopSolver)\n"
       << "  --res=R            0 | 2 | 4 | 8 | 16 | 32 (default: 8)\n"
       << "  --steps=N          number of Solve() calls (default: 50)\n"
       << "  --dt=DT            time step (default: 1e-3)\n"
       << "  --omega=W          VBD relaxation factor (default: 1.8)\n"
+      << "  --material=MAT     svk | mr (default: svk)\n"
+      << "                   Material model for FEAT10 elements\n"
       << "  --csv[=PATH]       write target-node x history CSV\n";
 }
 
@@ -103,6 +107,18 @@ bool ParseSolver(const std::string& s, SolverKind& out) {
   }
   if (s == "adamw") {
     out = SolverKind::kAdamW;
+    return true;
+  }
+  return false;
+}
+
+bool ParseMaterial(const std::string& s, int& out) {
+  if (s == "svk") {
+    out = MATERIAL_MODEL_SVK;
+    return true;
+  }
+  if (s == "mr" || s == "mooney-rivlin") {
+    out = MATERIAL_MODEL_MOONEY_RIVLIN;
     return true;
   }
   return false;
@@ -166,6 +182,14 @@ bool ParseArgs(int argc, char** argv, Options& opt) {
       const std::string v = arg.substr(std::string("--omega=").size());
       if (!ParseDouble(v, opt.omega) || !(opt.omega > 0.0)) {
         std::cerr << "Invalid --omega: " << v << "\n";
+        return false;
+      }
+      continue;
+    }
+    if (StartsWith(arg, "--material=")) {
+      const std::string v = arg.substr(std::string("--material=").size());
+      if (!ParseMaterial(v, opt.material)) {
+        std::cerr << "Invalid --material: " << v << " (use 'svk' or 'mr')\n";
         return false;
       }
       continue;
@@ -312,7 +336,25 @@ int main(int argc, char** argv) {
 
   data.SetDensity(kRho0);
   data.SetDamping(0.0, 0.0);
-  data.SetSVK(kE, kNu);
+  
+  // Set material model based on user selection
+  if (opt.material == MATERIAL_MODEL_SVK) {
+    data.SetSVK(kE, kNu);
+    std::cout << "Material: SVK (E=" << kE << ", nu=" << kNu << ")" << std::endl;
+  } else if (opt.material == MATERIAL_MODEL_MOONEY_RIVLIN) {
+    // Convert SVK parameters (E, nu) to Mooney-Rivlin parameters
+    const double mu    = kE / (2.0 * (1.0 + kNu));
+    const double K     = kE / (3.0 * (1.0 - 2.0 * kNu));
+    const double kappa = 1.5 * K;
+    const double mu10  = 0.30 * mu;
+    const double mu01  = 0.20 * mu;
+    data.SetMooneyRivlin(mu10, mu01, kappa);
+    std::cout << "Material: Mooney-Rivlin (mu10=" << mu10 << ", mu01=" << mu01 
+              << ", kappa=" << kappa << ")" << std::endl;
+  } else {
+    std::cerr << "Unknown material model: " << opt.material << std::endl;
+    return 1;
+  }
 
   // Common precomputations
   data.CalcDnDuPre();
@@ -388,19 +430,19 @@ int main(int argc, char** argv) {
       SyncedAdamWNocoopParams params;
       if (opt.res == 0) {
         params = {2e-4, 0.9, 0.999, 1e-8, 1e-4, 0.995, 1e-1, 1e-6,
-                  1e14, 5,   800,  opt.dt, 20,   1e-4};
+                  1e14, 5,   800,  opt.dt, 20,   1e-4, opt.material};
       } else if (opt.res == 2) {
         params = {2e-4, 0.9, 0.999, 1e-8, 1e-4, 0.995, 1e-1, 1e-6,
-                  1e14, 5,   800,  opt.dt, 20,   1e-4};
+                  1e14, 5,   800,  opt.dt, 20,   1e-4, opt.material};
       } else if (opt.res == 4) {
         params = {2e-4, 0.9, 0.999, 1e-8, 1e-4, 0.995, 1e-1, 1e-6,
-                  1e14, 5,   800,  opt.dt, 20,   1e-4};
+                  1e14, 5,   800,  opt.dt, 20,   1e-4, opt.material};
       } else if (opt.res == 8) {
         params = {2.5e-4, 0.9, 0.999, 1e-8, 1e-4, 0.998, 1e-1, 1e-6,
-                  1e14,   5,   800,  opt.dt, 20,   1e-4};
+                  1e14,   5,   800,  opt.dt, 20,   1e-4, opt.material};
       } else if (opt.res == 16) {
         params = {2.5e-4, 0.9, 0.999, 1e-8, 1e-4, 0.998, 1e-1, 1e-6,
-                  1e14,   5,   800,  opt.dt, 20,   1e-4};
+                  1e14,   5,   800,  opt.dt, 20,   1e-4, opt.material};
       } else {
         std::cerr << "Unsupported resolution" << std::endl;
         return 1;

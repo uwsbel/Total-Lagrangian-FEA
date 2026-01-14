@@ -16,6 +16,7 @@
 #include <cmath>
 #include <iomanip>
 #include <iostream>
+#include <type_traits>
 
 #include "SyncedAdamWNocoop.cuh"
 
@@ -204,6 +205,23 @@ __global__ void adamw_compute_p_kernel(ElementType *d_data,
   }
 }
 
+// FEAT10-specific kernel with compile-time material model dispatch
+template <int Mat>
+__global__ void adamw_compute_p_kernel_feat10(GPU_FEAT10_Data *d_data,
+                                              SyncedAdamWNocoopSolver *d_solver) {
+  int tid    = blockIdx.x * blockDim.x + threadIdx.x;
+  int stride = blockDim.x * gridDim.x;
+
+  int total = d_solver->get_n_beam() * d_solver->gpu_n_total_qp();
+
+  for (int idx = tid; idx < total; idx += stride) {
+    int elem_idx = idx / d_solver->gpu_n_total_qp();
+    int qp_idx   = idx % d_solver->gpu_n_total_qp();
+    compute_p_impl<Mat>(elem_idx, qp_idx, d_data, d_solver->v_guess().data(),
+                        d_solver->solver_time_step());
+  }
+}
+
 template <typename ElementType>
 __global__ void adamw_clear_internal_force_kernel(ElementType *d_data) {
   clear_internal_force(d_data);
@@ -368,8 +386,20 @@ void SyncedAdamWNocoopSolver::OneStepAdamWNocoop() {
         adamw_update_positions_from_prev_kernel<<<blocks_coef, threadsPerBlock>>>(
             typed_data, d_adamw_solver_);
 
-        adamw_compute_p_kernel<<<blocks_p, threadsPerBlock>>>(typed_data,
-                                                              d_adamw_solver_);
+        // Compile-time material model dispatch for compute_p
+        if constexpr (std::is_same_v<std::decay_t<decltype(*typed_data)>,
+                                     GPU_FEAT10_Data>) {
+          if (material_model_ == MATERIAL_MODEL_MOONEY_RIVLIN) {
+            adamw_compute_p_kernel_feat10<MATERIAL_MODEL_MOONEY_RIVLIN>
+                <<<blocks_p, threadsPerBlock>>>(typed_data, d_adamw_solver_);
+          } else {
+            adamw_compute_p_kernel_feat10<MATERIAL_MODEL_SVK>
+                <<<blocks_p, threadsPerBlock>>>(typed_data, d_adamw_solver_);
+          }
+        } else {
+          adamw_compute_p_kernel<<<blocks_p, threadsPerBlock>>>(typed_data,
+                                                                d_adamw_solver_);
+        }
 
         adamw_clear_internal_force_kernel<<<blocks_dof, threadsPerBlock>>>(
             typed_data);

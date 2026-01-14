@@ -172,6 +172,9 @@ class SyncedAdamWNocoopSolver : public SolverBase {
     cudaMemset(d_v_guess_, 0, n_coef_ * 3 * sizeof(double));
     cudaMemset(d_v_prev_, 0, n_coef_ * 3 * sizeof(double));
     cudaMemset(d_lambda_guess_, 0, n_constraints_ * sizeof(double));
+
+    // Store material model for FEAT10 kernel dispatch
+    material_model_ = p->material_model;
   }
 
   void Setup() {
@@ -316,6 +319,7 @@ class SyncedAdamWNocoopSolver : public SolverBase {
   double compute_l2_norm_cublas(double *d_vec, int n_dofs);
 
   ElementType type_;
+  int material_model_;  // Material model for FEAT10 dispatch
   ElementBase *d_data_;
   SyncedAdamWNocoopSolver *d_adamw_solver_;
   int n_total_qp_, n_shape_;

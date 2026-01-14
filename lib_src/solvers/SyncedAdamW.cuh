@@ -31,6 +31,7 @@ struct SyncedAdamWParams {
   double time_step;
   int convergence_check_interval;
   double inner_rtol;
+  int material_model = MATERIAL_MODEL_SVK;  // Material model for FEAT10 (default: SVK)
 };
 
 class SyncedAdamWSolver : public SolverBase {

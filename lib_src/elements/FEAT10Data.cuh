@@ -573,6 +573,7 @@ struct GPU_FEAT10_Data : public ElementBase {
     }
 
     int material_model = MATERIAL_MODEL_SVK;
+    h_material_model_  = MATERIAL_MODEL_SVK;
     double mu10        = 0.0;
     double mu01        = 0.0;
     double kappa       = 0.0;
@@ -623,6 +624,7 @@ struct GPU_FEAT10_Data : public ElementBase {
     }
 
     int material_model = MATERIAL_MODEL_MOONEY_RIVLIN;
+    h_material_model_  = MATERIAL_MODEL_MOONEY_RIVLIN;
     HANDLE_ERROR(cudaMemcpy(d_material_model, &material_model, sizeof(int),
                             cudaMemcpyHostToDevice));
     HANDLE_ERROR(
@@ -801,6 +803,7 @@ struct GPU_FEAT10_Data : public ElementBase {
   // Material properties
   double *d_E, *d_nu, *d_rho0, *d_lambda, *d_mu;
   int *d_material_model;
+  int h_material_model_ = MATERIAL_MODEL_SVK;  // Host-side copy for kernel dispatch
   double *d_mu10, *d_mu01, *d_kappa;
   // Damping parameters
   double *d_eta_damp, *d_lambda_damp;
