@@ -84,7 +84,7 @@ __device__ __forceinline__ void reduce_scale_and_atomicAdd(
   * @param pInternalForceNodes      The internal force of the nodes. [O]
  */
  
-__global__ void internalF_KelvinVoigt_4QP(
+__global__ void internalF_MooenyRivling_KelvinVoigt_4QP(
      const double* __restrict__ pPosNodes,
      const int* __restrict__ pElement_NodeIndexes,
      const float* __restrict__ pIsoMapInverse,
@@ -843,9 +843,58 @@ __global__ void internalF_KelvinVoigt_4QP(
       reduce_scale_and_atomicAdd(tile, lane_in_tile, pInternalForceNodes, whichGlobalNode, 2, internalForce, forceScalingFactor);
 
     }   
+
+    // Hygiene: undefine the intermediate_Matrix variables.
+    #undef intermediate_Matrix00
+    #undef intermediate_Matrix01
+    #undef intermediate_Matrix02
+    #undef intermediate_Matrix11
+    #undef intermediate_Matrix12
+    #undef intermediate_Matrix22
   }  
-  // end of computation of the internal acceleration for the element.
+  // end of computation of the Mooney-Rivlin internal force contribution for this element.
+
+  if (!include_kelvin_voigt_model) {
+    return;
+  }
+
+  // Start of computation of the Kelvin-Voigt internal force contribution for the element.
+  {
+    // TODO: implement the Kelvin-Voigt internal force contribution for the element.
+  }
+  // end of computation of the Kelvin-Voigt internal force contribution for the element.
   
+  
+  #undef PKone_00
+  #undef PKone_01
+  #undef PKone_02
+  #undef PKone_10
+  #undef PKone_11
+  #undef PKone_12
+  #undef PKone_20
+  #undef PKone_21
+  #undef PKone_22
+
+  #undef isoJacInv00
+  #undef isoJacInv01
+  #undef isoJacInv02
+  #undef isoJacInv10
+  #undef isoJacInv11
+  #undef isoJacInv12
+  #undef isoJacInv20
+  #undef isoJacInv21
+  #undef isoJacInv22
+
+  #undef F00
+  #undef F01
+  #undef F02
+  #undef F10
+  #undef F11
+  #undef F12
+  #undef F20
+  #undef F21
+  #undef F22
+
   return;
 }
  

@@ -7,3 +7,4 @@ constexpr float minJthreshold = 1e-6f; // minimum value of the determinant of th
 constexpr float mu10 = 1.0f; // first Lame parameter
 constexpr float mu01 = 1.0f; // second Lame parameter
 constexpr float bulkK = 1.0f; // bulk modulus
+constexpr bool include_kelvin_voigt_model = false; // whether to include the Kelvin-Voigt model in the internal force calculation
