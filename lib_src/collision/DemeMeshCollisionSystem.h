@@ -13,7 +13,10 @@
 
 #include <cstddef>
 #include <memory>
+#include <utility>
 #include <vector>
+
+#include <Eigen/Dense>
 
 #include "lib_src/collision/CollisionSystemBase.h"
 #include "lib_utils/surface_trimesh.h"
@@ -41,6 +44,10 @@ struct DemeMeshCollisionBody {
   // If true, skip processing contact forces for this body (body still
   // participates in collision detection for other bodies to collide with it).
   bool skip_self_contact_forces = false;
+
+  // Mass of the body in kg. Used by DEME for contact/friction calculations.
+  // Default 1.0 for backward compatibility; should be set to actual mass.
+  float mass = 1.0f;
 };
 
 // Collision system that couples DEM-Engine (DEME) mesh-mesh contact to this
@@ -56,8 +63,18 @@ struct DemeMeshCollisionBody {
 // - FE coupling: `DEME_FORCE_DISTRIB_K`, `DEME_FORCE_SCALE`, `DEME_FORCE_CLAMP`
 class DemeMeshCollisionSystem final : public CollisionSystem {
  public:
+  // Backward-compatible constructor: uses restitution (CoR) = 0.5 by default
+  // (overridable via `DEME_CONTACT_COR`).
   DemeMeshCollisionSystem(std::vector<DemeMeshCollisionBody> bodies,
-                          double friction, bool enable_self_collision);
+                          double friction, double stiffness,
+                          bool enable_self_collision)
+      : DemeMeshCollisionSystem(std::move(bodies), friction, stiffness, 0.5,
+                                enable_self_collision) {}
+
+  DemeMeshCollisionSystem(std::vector<DemeMeshCollisionBody> bodies,
+                          double friction, double stiffness,
+                          double restitution,
+                          bool enable_self_collision);
 
   ~DemeMeshCollisionSystem() override;
 
@@ -70,15 +87,25 @@ class DemeMeshCollisionSystem final : public CollisionSystem {
   int GetNumContacts() const override;
 
  private:
-  void BuildSolver(double friction);
+  void BuildSolver(double friction, double stiffness, double restitution);
 
-  struct RuntimeBody {
+ struct RuntimeBody {
     DemeMeshCollisionBody body;
     // Handle returned by DEME during setup; its `owner` ID is populated during
     // `solver_->Initialize()`.
     std::shared_ptr<deme::DEMMesh> mesh_handle;
     unsigned int owner = 0;
     size_t tri_start   = 0;
+
+    // Reference vertex positions in the owner's local frame at t=0, used to
+    // recover a best-fit rigid pose (pos+orientation) from current nodal
+    // positions. Keeping pose separate from deformation is important for DEME's
+    // patch-level collision and friction computations.
+    std::vector<Eigen::Vector3d> ref_vertices_local;
+
+    // Previous pose for velocity/omega estimation.
+    Eigen::Vector3d prev_pos = Eigen::Vector3d::Zero();
+    Eigen::Quaterniond prev_quat = Eigen::Quaterniond::Identity();
   };
 
   std::vector<RuntimeBody> bodies_;
@@ -99,4 +126,8 @@ class DemeMeshCollisionSystem final : public CollisionSystem {
   std::vector<double> h_f_contact_;
 
   int num_contacts_ = 0;
+
+  // Pose tracking for friction computation: DEME needs (lin/ang) velocity to
+  // compute friction directions. We estimate owner velocities from pose changes.
+  bool first_step_ = true;
 };

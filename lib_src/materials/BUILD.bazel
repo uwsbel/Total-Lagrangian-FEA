@@ -16,6 +16,7 @@ cc_library(
         "MaterialModel.cuh",
         "MooneyRivlin.cuh",
         "SVK.cuh",
+        "SolidMaterialProperties.h",
     ],
     copts = ["--std=c++17"],
 )

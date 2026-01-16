@@ -33,21 +33,28 @@
 #include "../../lib_utils/surface_trimesh_extract.h"
 #include "../../lib_utils/visualization_utils.h"
 
-// Material properties - Dragon (T10)
-const double E_dragon   = 1e7;    // Young's modulus (Pa)
-const double nu_dragon  = 0.3;    // Poisson's ratio
-const double rho_dragon = 500.0;  // Density (kg/m^3)
+// Material properties (using SolidMaterialProperties)
+const SolidMaterialProperties mat_dragon = SolidMaterialProperties::SVK(
+    1e7,   // E: Young's modulus (Pa)
+    0.3,   // nu: Poisson's ratio
+    80.0,  // rho0: Density (kg/m³)
+    1e4,   // eta_damp
+    1e4    // lambda_damp
+);
 
-// Material properties - Net (ANCF3243)
-const double E_net   = 1e8;     // Young's modulus (Pa) - softened for stability
-const double nu_net  = 0.33;    // Poisson's ratio
-const double rho_net = 2700.0;  // Density (kg/m^3)
+const SolidMaterialProperties mat_net = SolidMaterialProperties::SVK(
+    2e8,   // E: Young's modulus (Pa) - softened for stability
+    0.33,  // nu: Poisson's ratio
+    50.0,  // rho0: Density (kg/m³)
+    5e5,   // eta_damp
+    5e5    // lambda_damp
+);
 
 // Simulation parameters
 const double gravity        = -9.81;  // Gravity acceleration (m/s^2)
-const double dt             = 5e-4;   // Time step (s)
-const int num_steps_default = 10000;
-const int export_interval   = 25;
+const double dt             = 1e-4;   // Time step (s)
+const int num_steps_default = 100000;
+const int export_interval   = 50;
 
 // Contact parameters
 const double contact_friction = 0.6;
@@ -161,9 +168,7 @@ int main(int argc, char** argv) {
   gpu_dragon.Setup(Quadrature::tet5pt_x, Quadrature::tet5pt_y,
                    Quadrature::tet5pt_z, Quadrature::tet5pt_weights,
                    h_dragon_x, h_dragon_y, h_dragon_z, dragon_elems_local);
-  gpu_dragon.SetDensity(rho_dragon);
-  gpu_dragon.SetDamping(1e4, 1e4);
-  gpu_dragon.SetSVK(E_dragon, nu_dragon);
+  gpu_dragon.ApplyMaterial(mat_dragon);
   gpu_dragon.CalcDnDuPre();
   gpu_dragon.CalcMassMatrix();
   // Dragon has no fixed nodes - skip constraint setup
@@ -195,9 +200,9 @@ int main(int argc, char** argv) {
                 net_mesh.x12, net_mesh.y12, net_mesh.z12, 
                 net_mesh.element_connectivity);
 
-  gpu_net.SetDensity(rho_net);
-  gpu_net.SetDamping(5e5, 5e5);
-  gpu_net.SetSVK(E_net, nu_net);
+  gpu_net.SetDensity(mat_net.rho0);
+  gpu_net.SetDamping(mat_net.eta_damp, mat_net.lambda_damp);
+  gpu_net.SetSVK(mat_net.E, mat_net.nu);
 
   // Build constraints: mesh constraints + four corner clamps
   const int net_n_coef = 4 * net_mesh.n_nodes;
@@ -429,8 +434,9 @@ int main(int argc, char** argv) {
     bodies.push_back(std::move(body));
   }
 
+  const double contact_stiffness = 1.0e8;  // Contact stiffness (Young's modulus E)
   auto collision_system = std::make_unique<DemeMeshCollisionSystem>(
-      std::move(bodies), contact_friction, false);
+      std::move(bodies), contact_friction, contact_stiffness, false);
 
   // Combined collision node buffer
   double* d_collision_nodes = nullptr;

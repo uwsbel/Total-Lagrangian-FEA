@@ -69,9 +69,9 @@ TEST_F(TestSparseMass, FEA_T10_SparseMassMatrix) {
     h_z12(i) = nodes(i, 2);  // Z coordinates
   }
 
-  const double E    = 7e8;   // Young's modulus
-  const double nu   = 0.33;  // Poisson's ratio
-  const double rho0 = 2700;  // Density
+  // Material properties (using SolidMaterialProperties)
+  const SolidMaterialProperties mat_beam = SolidMaterialProperties::SVK(
+      7e8, 0.33, 2700, 0.0, 0.0);
 
   // Get quadrature data from quadrature_utils.h
   const Eigen::VectorXd& tet5pt_x_host       = Quadrature::tet5pt_x;
@@ -111,10 +111,7 @@ TEST_F(TestSparseMass, FEA_T10_SparseMassMatrix) {
   gpu_t10_data.Setup(tet5pt_x_host, tet5pt_y_host, tet5pt_z_host,
                      tet5pt_weights_host, h_x12, h_y12, h_z12, elements);
 
-  gpu_t10_data.SetDensity(rho0);
-  gpu_t10_data.SetDamping(0.0, 0.0);
-
-  gpu_t10_data.SetSVK(E, nu);
+  gpu_t10_data.ApplyMaterial(mat_beam);
 
   gpu_t10_data.CalcDnDuPre();
 

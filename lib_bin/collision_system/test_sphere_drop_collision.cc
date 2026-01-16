@@ -26,10 +26,14 @@
 #include "../../lib_utils/quadrature_utils.h"
 #include "../../lib_utils/visualization_utils.h"
 
-// Material properties
-const double E    = 4e6;     // Young's modulus (softer for visible deformation)
-const double nu   = 0.3;     // Poisson's ratio
-const double rho0 = 3500.0;  // Density (kg/m^3)
+// Material properties (using SolidMaterialProperties)
+const SolidMaterialProperties mat_sphere = SolidMaterialProperties::SVK(
+    4e6,     // E: Young's modulus (softer for visible deformation)
+    0.3,     // nu: Poisson's ratio
+    3500.0,  // rho0: Density (kg/m³)
+    1e4,     // eta_damp
+    1e4      // lambda_damp
+);
 
 // Simulation parameters
 const double gravity = -9.81;  // Gravity acceleration (m/s^2)
@@ -205,10 +209,7 @@ int main(int argc, char** argv) {
   gpu_t10_data.Setup(tet5pt_x, tet5pt_y, tet5pt_z, tet5pt_weights, h_x12, h_y12,
                      h_z12, elements);
 
-  gpu_t10_data.SetDensity(rho0);
-  gpu_t10_data.SetDamping(1e4, 1e4);
-
-  gpu_t10_data.SetSVK(E, nu);
+  gpu_t10_data.ApplyMaterial(mat_sphere);
 
   gpu_t10_data.CalcDnDuPre();
   gpu_t10_data.CalcMassMatrix();
@@ -361,7 +362,7 @@ int main(int argc, char** argv) {
     // Add gravity (only to top sphere nodes - bottom is fixed anyway)
     // F = m * g, distributed per node
     // For simplicity, assume uniform mass distribution
-    double total_mass    = rho0 * (4.0 / 3.0 * M_PI * 0.15 * 0.15 * 0.15);
+    double total_mass    = mat_sphere.rho0 * (4.0 / 3.0 * M_PI * 0.15 * 0.15 * 0.15);
     double mass_per_node = total_mass / instance_top.num_nodes;
     double gravity_force_per_node = mass_per_node * gravity;
 

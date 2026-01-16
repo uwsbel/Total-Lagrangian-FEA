@@ -30,11 +30,30 @@
 #include "../../lib_utils/quadrature_utils.h"
 #include "../../lib_utils/visualization_utils.h"
 
-// Material properties
-const double E_val =
-    1e6;  // Young's modulus (Pa) - softer for larger visible deformation
-const double nu   = 0.4;     // Poisson's ratio
-const double rho0 = 1000.0;  // Density (kg/m^3)
+// Material properties (using SolidMaterialProperties)
+const SolidMaterialProperties mat_gripper = SolidMaterialProperties::SVK(
+    1e6,     // E: Young's modulus (Pa) - softer for larger visible deformation
+    0.4,     // nu: Poisson's ratio
+    1000.0,  // rho0: Density (kg/m³)
+    1e4,     // eta_damp
+    1e4      // lambda_damp
+);
+
+const SolidMaterialProperties mat_bunny = SolidMaterialProperties::SVK(
+    1e6,     // E: Young's modulus (Pa)
+    0.4,     // nu: Poisson's ratio
+    1000.0,  // rho0: Density (kg/m³)
+    1e4,     // eta_damp
+    1e4      // lambda_damp
+);
+
+const SolidMaterialProperties mat_floor = SolidMaterialProperties::SVK(
+    1e6,     // E: Young's modulus (Pa)
+    0.4,     // nu: Poisson's ratio
+    1000.0,  // rho0: Density (kg/m³)
+    1e4,     // eta_damp
+    1e4      // lambda_damp
+);
 
 // Simulation parameters
 const double gravity = -9.81;  // Gravity acceleration (m/s^2)
@@ -335,15 +354,14 @@ int main(int argc, char** argv) {
   const Eigen::VectorXd& tet5pt_z       = Quadrature::tet5pt_z;
   const Eigen::VectorXd& tet5pt_weights = Quadrature::tet5pt_weights;
 
-  // Use soft material for visible deformation
-  double eta_damp    = 1e3;  // Viscous damping
-  double lambda_damp = 1e3;  // Volume damping
   gpu_t10_data.Setup(tet5pt_x, tet5pt_y, tet5pt_z, tet5pt_weights, h_x12, h_y12,
                      h_z12, elements);
 
-  gpu_t10_data.SetDensity(rho0);
-  gpu_t10_data.SetDamping(eta_damp, lambda_damp);
-  gpu_t10_data.SetSVK(E_val, nu);
+  // Create modified material with custom damping for this simulation
+  SolidMaterialProperties mat_sim = mat_bunny;
+  mat_sim.eta_damp    = 1e3;  // Viscous damping
+  mat_sim.lambda_damp = 1e3;  // Volume damping
+  gpu_t10_data.ApplyMaterial(mat_sim);
 
   gpu_t10_data.CalcDnDuPre();
   gpu_t10_data.CalcMassMatrix();

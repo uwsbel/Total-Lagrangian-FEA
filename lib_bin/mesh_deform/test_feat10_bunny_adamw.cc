@@ -23,9 +23,14 @@
 #include "../../lib_utils/cpu_utils.h"
 #include "../../lib_utils/quadrature_utils.h"
 
-const double E    = 5.0e7;   // Pa
-const double nu   = 0.28;    // -
-const double rho0 = 1200.0;  // kg/m^3
+// Material properties (using SolidMaterialProperties)
+const SolidMaterialProperties mat_bunny = SolidMaterialProperties::SVK(
+    5.0e7,   // E: Young's modulus (Pa)
+    0.28,    // nu: Poisson's ratio
+    1200.0,  // rho0: Density (kg/m³)
+    0.0,     // eta_damp
+    0.0      // lambda_damp
+);
 
 int main() {
   // Read mesh data
@@ -107,10 +112,7 @@ int main() {
   gpu_t10_data.Setup(tet5pt_x_host, tet5pt_y_host, tet5pt_z_host,
                      tet5pt_weights_host, h_x12, h_y12, h_z12, elements);
 
-  gpu_t10_data.SetDensity(rho0);
-  gpu_t10_data.SetDamping(0.0, 0.0);
-
-  gpu_t10_data.SetSVK(E, nu);
+  gpu_t10_data.ApplyMaterial(mat_bunny);
 
   gpu_t10_data.CalcDnDuPre();
 

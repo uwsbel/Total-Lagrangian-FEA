@@ -37,10 +37,22 @@
 #include "../../lib_utils/surface_trimesh_extract.h"
 #include "../../lib_utils/visualization_utils.h"
 
-// Material properties (for deformable items)
-const double E_val = 1e7;    // Young's modulus (Pa)
-const double nu    = 0.3;    // Poisson's ratio
-const double rho0  = 500.0;  // Density (kg/m^3)
+// Material properties (using SolidMaterialProperties)
+const SolidMaterialProperties mat_item = SolidMaterialProperties::SVK(
+    1e7,    // E: Young's modulus (Pa)
+    0.3,    // nu: Poisson's ratio
+    500.0,  // rho0: Density (kg/m³)
+    1e4,    // eta_damp
+    1e4     // lambda_damp
+);
+
+const SolidMaterialProperties mat_floor = SolidMaterialProperties::SVK(
+    1e7,    // E: Young's modulus (Pa)
+    0.3,    // nu: Poisson's ratio
+    500.0,  // rho0: Density (kg/m³)
+    1e4,    // eta_damp
+    1e4     // lambda_damp
+);
 
 // Simulation parameters
 const double gravity        = -9.81;  // Gravity acceleration (m/s^2)
@@ -418,14 +430,14 @@ int main(int argc, char** argv) {
   const Eigen::VectorXd& tet5pt_z       = Quadrature::tet5pt_z;
   const Eigen::VectorXd& tet5pt_weights = Quadrature::tet5pt_weights;
 
-  // Material (bulk/viscous) damping to reduce oscillations after impact.
-  const double eta_damp    = 5e3;
-  const double lambda_damp = 5e3;
   gpu_t10_data.Setup(tet5pt_x, tet5pt_y, tet5pt_z, tet5pt_weights, h_x12, h_y12,
                      h_z12, elements);
-  gpu_t10_data.SetDensity(rho0);
-  gpu_t10_data.SetDamping(eta_damp, lambda_damp);
-  gpu_t10_data.SetSVK(E_val, nu);
+
+  // Create modified material with custom damping for this simulation
+  SolidMaterialProperties mat_sim = mat_item;
+  mat_sim.eta_damp    = 5e3;  // Increased damping to reduce oscillations
+  mat_sim.lambda_damp = 5e3;
+  gpu_t10_data.ApplyMaterial(mat_sim);
   gpu_t10_data.CalcDnDuPre();
   gpu_t10_data.CalcMassMatrix();
   gpu_t10_data.CalcConstraintData();
@@ -512,7 +524,8 @@ int main(int argc, char** argv) {
       bodies.push_back(std::move(body));
     }
     collision_system = std::make_unique<DemeMeshCollisionSystem>(
-        std::move(bodies), opt.contact_friction, opt.enable_self_collision);
+        std::move(bodies), opt.contact_friction, 1.0e7,
+        opt.enable_self_collision);
   } else {
     std::cerr << "Unknown collision backend: " << opt.collision_backend << "\n";
     return 1;

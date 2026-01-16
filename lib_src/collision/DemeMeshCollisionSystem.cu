@@ -179,6 +179,12 @@ static float4 IdentityQuat() {
   return make_float4(0.f, 0.f, 0.f, 1.f);
 }
 
+static float4 ToQuatXYZW(const Eigen::Quaterniond& q) {
+  Eigen::Quaterniond qq = q.normalized();
+  return make_float4(static_cast<float>(qq.x()), static_cast<float>(qq.y()),
+                     static_cast<float>(qq.z()), static_cast<float>(qq.w()));
+}
+
 static float3 Vec3FromNodesXYZ(const std::vector<double>& h_nodes_xyz,
                                int n_nodes, int global_node_id) {
   const double x = h_nodes_xyz[global_node_id];
@@ -188,18 +194,51 @@ static float3 Vec3FromNodesXYZ(const std::vector<double>& h_nodes_xyz,
                      static_cast<float>(z));
 }
 
+static Eigen::Matrix3d BestFitRotationKabsch(
+    const std::vector<Eigen::Vector3d>& ref_local,
+    const std::vector<float3>& cur_global,
+    const Eigen::Vector3d& cur_centroid) {
+  if (ref_local.size() != cur_global.size() || ref_local.size() < 3) {
+    return Eigen::Matrix3d::Identity();
+  }
+
+  Eigen::Matrix3d H = Eigen::Matrix3d::Zero();
+  for (size_t i = 0; i < ref_local.size(); ++i) {
+    const Eigen::Vector3d p = ref_local[i];
+    const Eigen::Vector3d q(static_cast<double>(cur_global[i].x) - cur_centroid.x(),
+                            static_cast<double>(cur_global[i].y) - cur_centroid.y(),
+                            static_cast<double>(cur_global[i].z) - cur_centroid.z());
+    H += p * q.transpose();
+  }
+
+  Eigen::JacobiSVD<Eigen::Matrix3d> svd(
+      H, Eigen::ComputeFullU | Eigen::ComputeFullV);
+  Eigen::Matrix3d V = svd.matrixV();
+  const Eigen::Matrix3d U = svd.matrixU();
+  Eigen::Matrix3d R = V * U.transpose();
+
+  // Fix reflection if needed.
+  if (R.determinant() < 0.0) {
+    V.col(2) *= -1.0;
+    R = V * U.transpose();
+  }
+  return R;
+}
+
 static void AccumulatePointForcesToKNearestNodes(
     const std::vector<float3>& mesh_vertices,
     const std::vector<int>& global_node_ids, const std::vector<float3>& points,
     const std::vector<float3>& forces, int k, double force_scale,
-    double clamp_force_norm, std::vector<double>& h_f_contact) {
+    double clamp_force_norm, double damping_scale,
+    std::vector<double>& h_f_contact) {
   if (k <= 0)
     return;
+  const double combined_scale = force_scale * damping_scale;
   for (size_t i = 0; i < points.size() && i < forces.size(); ++i) {
     float3 f = forces[i];
-    f.x      = static_cast<float>(static_cast<double>(f.x) * force_scale);
-    f.y      = static_cast<float>(static_cast<double>(f.y) * force_scale);
-    f.z      = static_cast<float>(static_cast<double>(f.z) * force_scale);
+    f.x      = static_cast<float>(static_cast<double>(f.x) * combined_scale);
+    f.y      = static_cast<float>(static_cast<double>(f.y) * combined_scale);
+    f.z      = static_cast<float>(static_cast<double>(f.z) * combined_scale);
 
     if (clamp_force_norm > 0.0) {
       const double fn = std::sqrt(static_cast<double>(f.x) * f.x +
@@ -281,7 +320,7 @@ static void ExtendBBox(Eigen::Vector3d& mn, Eigen::Vector3d& mx,
 
 DemeMeshCollisionSystem::DemeMeshCollisionSystem(
     std::vector<DemeMeshCollisionBody> bodies, double friction,
-    bool enable_self_collision)
+    double stiffness, double restitution, bool enable_self_collision)
     : enable_self_collision_(enable_self_collision) {
   if (bodies.empty()) {
     throw std::invalid_argument(
@@ -319,7 +358,7 @@ DemeMeshCollisionSystem::DemeMeshCollisionSystem(
     bodies_.push_back(std::move(rb));
   }
 
-  BuildSolver(friction);
+  BuildSolver(friction, stiffness, restitution);
 }
 
 DemeMeshCollisionSystem::~DemeMeshCollisionSystem() {
@@ -329,7 +368,8 @@ DemeMeshCollisionSystem::~DemeMeshCollisionSystem() {
   }
 }
 
-void DemeMeshCollisionSystem::BuildSolver(double friction) {
+void DemeMeshCollisionSystem::BuildSolver(double friction, double stiffness,
+                                          double restitution) {
   ConfigureDemeRuntimePathsFromBazelBin();
 
   solver_ = std::make_unique<deme::DEMSolver>(1);
@@ -354,11 +394,12 @@ void DemeMeshCollisionSystem::BuildSolver(double friction) {
   // Contact stiffness tuning:
   // - DEM-Engine uses a Hertzian-style contact model which can easily produce
   //   forces that are too stiff for our implicit FE solve if E is large.
-  // - Default `E` here is chosen to roughly match this repo's `test_item_drop`
-  //   material scale; override with env var `DEME_CONTACT_E` when needed.
-  const float contact_E   = EnvFloatOr("DEME_CONTACT_E", 1.0e7f);
+  // - Use the provided stiffness parameter; env var `DEME_CONTACT_E` overrides.
+  const float default_E   = static_cast<float>(stiffness);
+  const float contact_E   = EnvFloatOr("DEME_CONTACT_E", default_E);
   const float contact_nu  = EnvFloatOr("DEME_CONTACT_NU", 0.3f);
-  const float contact_cor = EnvFloatOr("DEME_CONTACT_COR", 0.0f);
+  const float default_cor = static_cast<float>(std::clamp(restitution, 0.0, 1.0));
+  const float contact_cor = EnvFloatOr("DEME_CONTACT_COR", default_cor);
 
   const float mu = static_cast<float>(std::max(0.0, friction));
   auto mat       = solver_->LoadMaterial({{"E", contact_E},
@@ -369,19 +410,17 @@ void DemeMeshCollisionSystem::BuildSolver(double friction) {
 
   auto make_mesh = [&](const ANCFCPUUtils::SurfaceTriMesh& surf,
                        unsigned int family, bool split_into_patches,
-                       float patch_angle_deg, const char* label) {
+                       float patch_angle_deg, const Eigen::Vector3d& centroid,
+                       const std::vector<float3>& vertices_local,
+                       float body_mass, const char* label) {
     deme::DEMMesh mesh;
     mesh.SetFamily(family);
 
     // DEME expects mesh vertices in the owner's local frame. Keep the owner
     // init position meaningful by centering vertices at the initial centroid.
-    const Eigen::Vector3d centroid = ComputeCentroid(surf.vertices);
     mesh.SetInitPos(ToFloat3(centroid));
 
-    mesh.m_vertices.reserve(surf.vertices.size());
-    for (const auto& v : surf.vertices) {
-      mesh.m_vertices.push_back(ToFloat3(v - centroid));
-    }
+    mesh.m_vertices = vertices_local;
 
     mesh.m_face_v_indices.reserve(surf.triangles.size());
     for (const auto& tri : surf.triangles) {
@@ -439,8 +478,10 @@ void DemeMeshCollisionSystem::BuildSolver(double friction) {
     mesh.SetMaterial(mat);
 
     mesh.SetInitQuat(IdentityQuat());
-    mesh.SetMass(1.f);
-    mesh.SetMOI(make_float3(1.f, 1.f, 1.f));
+    mesh.SetMass(body_mass);
+    // Approximate MOI as uniform sphere with equivalent mass (placeholder)
+    const float moi = body_mass * 0.4f;
+    mesh.SetMOI(make_float3(moi, moi, moi));
 
     return mesh;
   };
@@ -486,8 +527,22 @@ void DemeMeshCollisionSystem::BuildSolver(double friction) {
     const float patch_angle = body.split_into_patches ? angle : 0.0f;
     const std::string label = "mesh[" + std::to_string(bi) + "]";
 
+    const Eigen::Vector3d centroid = ComputeCentroid(body.surface.vertices);
+    rb.ref_vertices_local.clear();
+    rb.ref_vertices_local.reserve(body.surface.vertices.size());
+    std::vector<float3> vertices_local;
+    vertices_local.reserve(body.surface.vertices.size());
+    for (const auto& v : body.surface.vertices) {
+      const Eigen::Vector3d local = v - centroid;
+      rb.ref_vertices_local.push_back(local);
+      vertices_local.push_back(ToFloat3(local));
+    }
+    rb.prev_pos  = centroid;
+    rb.prev_quat = Eigen::Quaterniond::Identity();
+
     auto mesh = make_mesh(body.surface, body.family, body.split_into_patches,
-                          patch_angle, label.c_str());
+                          patch_angle, centroid, vertices_local, body.mass,
+                          label.c_str());
     rb.mesh_handle = solver_->AddMesh(mesh);
   }
 
@@ -538,6 +593,9 @@ void DemeMeshCollisionSystem::BindNodesDevicePtr(double* d_nodes_xyz,
   h_nodes_xyz_.resize(static_cast<size_t>(3 * n_nodes_));
   h_f_contact_.resize(static_cast<size_t>(3 * n_nodes_));
 
+  // Initialize velocity tracking: one COM position per body
+  first_step_ = true;
+
   if (d_f_contact_ == nullptr) {
     HANDLE_ERROR(cudaMalloc(
         &d_f_contact_, static_cast<size_t>(3 * n_nodes_) * sizeof(double)));
@@ -546,7 +604,6 @@ void DemeMeshCollisionSystem::BindNodesDevicePtr(double* d_nodes_xyz,
 
 void DemeMeshCollisionSystem::Step(const CollisionSystemInput& in,
                                    const CollisionSystemParams& params) {
-  (void)params;
   if (d_nodes_xyz_ == nullptr || n_nodes_ <= 0) {
     throw std::runtime_error(
         "DemeMeshCollisionSystem::Step called before BindNodesDevicePtr");
@@ -564,9 +621,12 @@ void DemeMeshCollisionSystem::Step(const CollisionSystemInput& in,
 
   // DEME expects triangle node positions in the mesh owner's local frame, and
   // uses owner position + patch locations for contact detection. Keep owner
-  // positions updated, and send local vertex positions.
+  // poses (pos+orientation) updated, and send local vertex positions in that
+  // owner frame. This keeps patch locations consistent and avoids encoding
+  // rigid-body rotations as "mesh deformation" (which breaks patch contact and
+  // friction).
   for (size_t bi = 0; bi < bodies_.size(); ++bi) {
-    const auto& rb   = bodies_[bi];
+    auto& rb         = bodies_[bi];
     const auto& surf = rb.body.surface;
 
     auto& nodes = nodes_global[bi];
@@ -576,15 +636,69 @@ void DemeMeshCollisionSystem::Step(const CollisionSystemInput& in,
           Vec3FromNodesXYZ(h_nodes_xyz_, n_nodes_, surf.global_node_ids[i]);
     }
 
-    const float3 com = MeanOf(nodes);
+    const float3 com_f = MeanOf(nodes);
+    const Eigen::Vector3d com(static_cast<double>(com_f.x),
+                              static_cast<double>(com_f.y),
+                              static_cast<double>(com_f.z));
     if (rb.owner == static_cast<unsigned int>(deme::NULL_BODYID)) {
       throw std::runtime_error(
           "DemeMeshCollisionSystem::Step: DEME mesh owner ID is NULL_BODYID");
     }
-    solver_->SetOwnerPosition(rb.owner, std::vector<float3>{com});
-    const std::vector<float3> nodes_local = Subtract(nodes, com);
+    const Eigen::Matrix3d R =
+        BestFitRotationKabsch(rb.ref_vertices_local, nodes, com);
+    Eigen::Quaterniond quat(R);
+    quat.normalize();
+
+    solver_->SetOwnerPosition(rb.owner, std::vector<float3>{com_f});
+    solver_->SetOwnerOriQ(rb.owner, std::vector<float4>{ToQuatXYZW(quat)});
+
+    std::vector<float3> nodes_local;
+    nodes_local.resize(nodes.size());
+    const Eigen::Matrix3d RT = R.transpose();
+    for (size_t i = 0; i < nodes.size(); ++i) {
+      const Eigen::Vector3d q(static_cast<double>(nodes[i].x),
+                              static_cast<double>(nodes[i].y),
+                              static_cast<double>(nodes[i].z));
+      const Eigen::Vector3d local = RT * (q - com);
+      nodes_local[i] = make_float3(static_cast<float>(local.x()),
+                                   static_cast<float>(local.y()),
+                                   static_cast<float>(local.z()));
+    }
     solver_->SetTriNodeRelPos(rb.owner, rb.tri_start, nodes_local);
+
+    // Compute and update velocity for DEME friction computation.
+    // DEME's Hertzian friction model uses relative tangential velocity to
+    // determine friction force direction. Without velocity updates, DEME sees
+    // all bodies as stationary and friction is not computed correctly.
+    if (!first_step_) {
+      const double inv_dt = 1.0 / in.dt;
+      const Eigen::Vector3d v = (com - rb.prev_pos) * inv_dt;
+      solver_->SetOwnerVelocity(
+          rb.owner,
+          std::vector<float3>{make_float3(static_cast<float>(v.x()),
+                                          static_cast<float>(v.y()),
+                                          static_cast<float>(v.z()))});
+
+      Eigen::Quaterniond q_rel = quat * rb.prev_quat.conjugate();
+      if (q_rel.w() < 0.0) {
+        q_rel.coeffs() *= -1.0;
+      }
+      Eigen::AngleAxisd aa(q_rel);
+      const double ang = aa.angle();
+      Eigen::Vector3d omega = Eigen::Vector3d::Zero();
+      if (std::isfinite(ang) && ang > 1e-10) {
+        omega = aa.axis() * (ang * inv_dt);
+      }
+      solver_->SetOwnerAngVel(
+          rb.owner,
+          std::vector<float3>{make_float3(static_cast<float>(omega.x()),
+                                          static_cast<float>(omega.y()),
+                                          static_cast<float>(omega.z()))});
+    }
+    rb.prev_pos  = com;
+    rb.prev_quat = quat;
   }
+  first_step_ = false;
 
   solver_->DoDynamics(in.dt);
 
@@ -600,18 +714,24 @@ void DemeMeshCollisionSystem::Step(const CollisionSystemInput& in,
   const double force_scale = EnvDoubleOr("DEME_FORCE_SCALE", 1.0);
   const double clamp_norm  = EnvDoubleOr("DEME_FORCE_CLAMP", 0.0);
   const int k = static_cast<int>(EnvDoubleOr("DEME_FORCE_DISTRIB_K", 4.0));
+  (void)params;
+  const double damping_scale = 1.0;
 
   for (size_t bi = 0; bi < bodies_.size(); ++bi) {
     const auto& rb    = bodies_[bi];
     const auto& surf  = rb.body.surface;
     const auto& nodes = nodes_global[bi];
 
+    if (rb.body.skip_self_contact_forces) {
+      continue;
+    }
+
     std::vector<float3> points, forces;
     num_contacts_ += static_cast<int>(
         solver_->GetOwnerContactForces({rb.owner}, points, forces));
     AccumulatePointForcesToKNearestNodes(nodes, surf.global_node_ids, points,
                                          forces, k, force_scale, clamp_norm,
-                                         h_f_contact_);
+                                         damping_scale, h_f_contact_);
   }
 
   HANDLE_ERROR(cudaMemcpy(d_f_contact_, h_f_contact_.data(),

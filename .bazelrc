@@ -4,5 +4,5 @@ build --cxxopt=-std=c++17
 build --host_cxxopt=-std=c++17
 
 # If supported by your rules_cuda:
-build --@rules_cuda//cuda:archs='compute_61:sm_61;compute_75:sm_75;compute_86:sm_86,compute_86'
+build --@rules_cuda//cuda:archs='compute_75:sm_75;compute_86:sm_86,compute_86'
 build --flag_alias=cuda_archs=@rules_cuda//cuda:archs

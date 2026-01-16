@@ -9,6 +9,7 @@
 #include "../../lib_utils/cuda_utils.h"
 #include "../../lib_utils/quadrature_utils.h"
 #include "../materials/MaterialModel.cuh"
+#include "../materials/SolidMaterialProperties.h"
 #include "ElementBase.h"
 
 // Definition of GPU_ANCF3443 and data access device functions
@@ -206,6 +207,14 @@ struct GPU_FEAT10_Data : public ElementBase {
   // ================================
   __device__ double rho0() const {
     return *d_rho0;
+  }
+
+  // Optional per-element density override (used for multi-body problems where
+  // each mesh instance has its own rho0). If not configured, falls back to the
+  // global scalar density.
+  __device__ double rho0(int elem_idx) const {
+    return (d_rho0_elem != nullptr) ? static_cast<double>(d_rho0_elem[elem_idx])
+                                    : *d_rho0;
   }
 
   __device__ double nu() const {
@@ -546,6 +555,50 @@ struct GPU_FEAT10_Data : public ElementBase {
   }
 
   /**
+   * Override density for a contiguous element range [elem_start, elem_start + elem_count).
+   *
+   * This allocates a per-element density array on first use and initializes it
+   * to the current global density, then applies the override on the requested
+   * range.
+   */
+  void SetDensityForElementRange(int elem_start, int elem_count, double rho0) {
+    if (!is_setup) {
+      std::cerr << "GPU_FEAT10_Data must be set up before setting density."
+                << std::endl;
+      return;
+    }
+    if (elem_start < 0 || elem_count <= 0 || elem_start + elem_count > n_elem) {
+      std::cerr << "SetDensityForElementRange: invalid element range."
+                << std::endl;
+      return;
+    }
+
+    if (d_rho0_elem == nullptr) {
+      // Allocate and initialize to the current global density.
+      HANDLE_ERROR(cudaMalloc(&d_rho0_elem,
+                              static_cast<size_t>(n_elem) * sizeof(float)));
+      double rho0_default = 0.0;
+      HANDLE_ERROR(cudaMemcpy(&rho0_default, d_rho0, sizeof(double),
+                              cudaMemcpyDeviceToHost));
+      std::vector<float> init(static_cast<size_t>(n_elem),
+                              static_cast<float>(rho0_default));
+      HANDLE_ERROR(cudaMemcpy(d_rho0_elem, init.data(),
+                              static_cast<size_t>(n_elem) * sizeof(float),
+                              cudaMemcpyHostToDevice));
+
+      // Update the device-side copy of this struct so kernels can see the new pointer.
+      HANDLE_ERROR(cudaMemcpy(d_data, this, sizeof(GPU_FEAT10_Data),
+                              cudaMemcpyHostToDevice));
+    }
+
+    std::vector<float> range(static_cast<size_t>(elem_count),
+                             static_cast<float>(rho0));
+    HANDLE_ERROR(cudaMemcpy(d_rho0_elem + elem_start, range.data(),
+                            static_cast<size_t>(elem_count) * sizeof(float),
+                            cudaMemcpyHostToDevice));
+  }
+
+  /**
    * Set Kelvin-Voigt damping parameters.
    * eta_damp: shear-like damping coefficient
    * lambda_damp: volumetric-like damping coefficient
@@ -631,6 +684,31 @@ struct GPU_FEAT10_Data : public ElementBase {
         cudaMemcpy(d_mu01, &mu01, sizeof(double), cudaMemcpyHostToDevice));
     HANDLE_ERROR(
         cudaMemcpy(d_kappa, &kappa, sizeof(double), cudaMemcpyHostToDevice));
+  }
+
+  /**
+   * Apply all material properties from a SolidMaterialProperties struct.
+   * This is the preferred way to set material properties for an object.
+   */
+  void ApplyMaterial(const SolidMaterialProperties &props) {
+    if (!is_setup) {
+      std::cerr << "GPU_FEAT10_Data must be set up before applying material."
+                << std::endl;
+      return;
+    }
+
+    // Set density
+    SetDensity(props.rho0);
+
+    // Set damping
+    SetDamping(props.eta_damp, props.lambda_damp);
+
+    // Set material model and parameters
+    if (props.material_model == MATERIAL_MODEL_MOONEY_RIVLIN) {
+      SetMooneyRivlin(props.mu10, props.mu01, props.kappa);
+    } else {
+      SetSVK(props.E, props.nu);
+    }
   }
 
   void SetExternalForce(const Eigen::VectorXd &h_f_ext) {
@@ -749,6 +827,10 @@ struct GPU_FEAT10_Data : public ElementBase {
     HANDLE_ERROR(cudaFree(d_f_ext));
 
     HANDLE_ERROR(cudaFree(d_rho0));
+    if (d_rho0_elem != nullptr) {
+      HANDLE_ERROR(cudaFree(d_rho0_elem));
+      d_rho0_elem = nullptr;
+    }
     HANDLE_ERROR(cudaFree(d_nu));
     HANDLE_ERROR(cudaFree(d_E));
     HANDLE_ERROR(cudaFree(d_lambda));
@@ -813,6 +895,7 @@ struct GPU_FEAT10_Data : public ElementBase {
 
   // Material properties
   double *d_E, *d_nu, *d_rho0, *d_lambda, *d_mu;
+  float* d_rho0_elem = nullptr;
   int *d_material_model;
   double *d_mu10, *d_mu01, *d_kappa;
   // Damping parameters
