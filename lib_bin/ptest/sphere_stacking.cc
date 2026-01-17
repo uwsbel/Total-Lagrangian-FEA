@@ -18,11 +18,13 @@
 #include <iomanip>
 #include <iostream>
 #include <memory>
+#include <string_view>
 
 #include "../../lib_src/collision/DemeMeshCollisionSystem.h"
 #include "../../lib_src/elements/FEAT10Data.cuh"
 #include "../../lib_src/solvers/SyncedNewton.cuh"
 #include "../../lib_utils/cpu_utils.h"
+#include "../../lib_utils/cli_utils.h"
 #include "../../lib_utils/mesh_manager.h"
 #include "../../lib_utils/quadrature_utils.h"
 #include "../../lib_utils/surface_trimesh_extract.h"
@@ -97,14 +99,47 @@ int main(int argc, char** argv) {
   int max_steps              = num_steps;
   int export_interval        = 10;
 
-  if (argc > 1) contact_damping = std::atof(argv[1]);
-  if (argc > 2) contact_friction = std::atof(argv[2]);
-  if (argc > 3) enable_self_collision = (std::atoi(argv[3]) != 0);
-  if (argc > 4) {
-    int v = std::atoi(argv[4]);
-    if (v > 0) max_steps = v;
+  const bool has_flag_args =
+      (argc > 1 && argv[1] &&
+       (std::string_view(argv[1]) == "--help" ||
+        std::string_view(argv[1]) == "-h" ||
+        std::string_view(argv[1]).rfind("--", 0) == 0));
+  if (has_flag_args) {
+    ANCFCPUUtils::Cli cli(argv[0] ? argv[0] : "sphere_stacking");
+    cli.SetDescription(
+        "Sphere stacking demo (DEME mesh-mesh contact coupled to FE).");
+    cli.AddDouble("cor", contact_damping_default,
+                  "contact restitution (CoR), range [0, 1]");
+    cli.AddDouble("mu", contact_friction_default, "contact friction mu");
+    cli.AddBool("self_collision", false, "enable self collision");
+    cli.AddInt("steps", num_steps, "max simulation steps");
+    cli.AddInt("export_interval", 10, "VTK export interval (0 disables)");
+
+    std::string err;
+    if (!cli.Parse(argc, argv, &err) || cli.HelpRequested()) {
+      if (!err.empty()) std::cerr << "Error: " << err << "\n\n";
+      cli.PrintUsage(std::cerr);
+      return cli.HelpRequested() ? 0 : 1;
+    }
+
+    contact_damping        = cli.GetDouble("cor");
+    contact_friction       = cli.GetDouble("mu");
+    enable_self_collision  = cli.GetBool("self_collision");
+    max_steps              = cli.GetInt("steps");
+    export_interval        = cli.GetInt("export_interval");
+  } else {
+    // Backward-compatible positional args:
+    //   argv[1]=CoR, argv[2]=mu, argv[3]=self_collision (0/1),
+    //   argv[4]=steps, argv[5]=export_interval
+    if (argc > 1) contact_damping = std::atof(argv[1]);
+    if (argc > 2) contact_friction = std::atof(argv[2]);
+    if (argc > 3) enable_self_collision = (std::atoi(argv[3]) != 0);
+    if (argc > 4) {
+      int v = std::atoi(argv[4]);
+      if (v > 0) max_steps = v;
+    }
+    if (argc > 5) export_interval = std::atoi(argv[5]);
   }
-  if (argc > 5) export_interval = std::atoi(argv[5]);
 
   std::cout << "Contact restitution (CoR): " << contact_damping << std::endl;
   std::cout << "Contact friction: " << contact_friction << std::endl;

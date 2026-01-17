@@ -11,12 +11,14 @@
 
 #pragma once
 
+#include <cstdint>
 #include <cstddef>
 #include <memory>
 #include <utility>
 #include <vector>
 
 #include <Eigen/Dense>
+#include <cuda_runtime.h>
 
 #include "lib_src/collision/CollisionSystemBase.h"
 #include "lib_utils/surface_trimesh.h"
@@ -106,6 +108,10 @@ class DemeMeshCollisionSystem final : public CollisionSystem {
     // Previous pose for velocity/omega estimation.
     Eigen::Vector3d prev_pos = Eigen::Vector3d::Zero();
     Eigen::Quaterniond prev_quat = Eigen::Quaterniond::Identity();
+
+    int surf_vert_start = 0;
+    int surf_vert_count = 0;
+    int tri_count       = 0;
   };
 
   std::vector<RuntimeBody> bodies_;
@@ -121,9 +127,62 @@ class DemeMeshCollisionSystem final : public CollisionSystem {
   // Output buffer (device): length 3*n_nodes_
   double* d_f_contact_ = nullptr;
 
+  // Triangle velocity coupling (device): per DEME triangle primitive.
+  int n_tris_               = 0;
+  int3* d_tri_global_nodes_ = nullptr;   // length n_tris_
+  float3* d_tri_vel_center_ = nullptr;   // length n_tris_
+
+  int n_surf_verts_            = 0;
+  int* d_surf_global_node_id_  = nullptr;
+  int* d_surf_body_id_         = nullptr;
+  double3* d_surf_ref_local_   = nullptr;
+  float3* d_surf_pos_global_   = nullptr;
+  float3* d_surf_pos_local_    = nullptr;
+
+  int n_bodies_                = 0;
+  uint32_t* d_body_owner_id_   = nullptr;
+  int* d_owner_to_body_        = nullptr;
+  int owner_to_body_size_      = 0;
+  int* d_body_vert_start_      = nullptr;
+  int* d_body_vert_count_      = nullptr;
+  double* d_body_inv_vert_count_ = nullptr;
+  uint8_t* d_body_skip_forces_ = nullptr;
+  float3* d_body_pos_f_        = nullptr;
+  float4* d_body_quat_f_       = nullptr;
+  float3* d_body_lin_vel_f_    = nullptr;
+  float3* d_body_omega_f_      = nullptr;
+
+  double3* d_body_com_         = nullptr;
+  double* d_body_H_            = nullptr;
+
+  int3* d_tri_surf_vert_ids_   = nullptr;
+  float3* d_tri_relpos_n1_     = nullptr;
+  float3* d_tri_relpos_n2_     = nullptr;
+  float3* d_tri_relpos_n3_     = nullptr;
+
+  size_t contact_capacity_     = 0;
+  float3* d_contact_points_    = nullptr;
+  float3* d_contact_forces_    = nullptr;
+  uint32_t* d_contact_owner_ = nullptr;
+
   // Host scratch
   std::vector<double> h_nodes_xyz_;
   std::vector<double> h_f_contact_;
+  std::vector<float3> h_tri_vel_center_;
+
+  std::vector<double3> h_body_com_;
+  std::vector<double> h_body_H_;
+
+  std::vector<float3> h_body_pos_f_;
+  std::vector<float4> h_body_quat_f_;
+  std::vector<float3> h_body_lin_vel_f_;
+  std::vector<float3> h_body_omega_f_;
+
+  std::vector<float3> h_owner_pos_;
+  std::vector<float4> h_owner_quat_;
+  std::vector<float3> h_owner_lin_vel_;
+  std::vector<float3> h_owner_omega_;
+  bool owners_dense_ = false;
 
   int num_contacts_ = 0;
 

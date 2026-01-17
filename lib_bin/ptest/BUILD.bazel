@@ -17,6 +17,7 @@ cc_binary(
         "//lib_src/collision:deme_mesh_collision_system",
         "//lib_src/elements:FEAT10Data",
         "//lib_src/solvers:solvers_syncednewton",
+        "//lib_utils:cli_utils",
         "//lib_utils:cpu_utils",
         "//lib_utils:mesh_manager",
         "//lib_utils:surface_trimesh_extract",
