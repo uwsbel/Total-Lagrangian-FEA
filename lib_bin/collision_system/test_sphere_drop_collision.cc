@@ -44,7 +44,8 @@ const double sphere_gap =
 
 // Contact damping (Drake-style normal damping coefficient)
 const double contact_damping_default  = 0.2;
-const double contact_friction_default = 0.8;
+const double contact_mu_s_default = 0.8;
+const double contact_mu_k_default = 0.8;
 
 using ANCFCPUUtils::VisualizationUtils;
 
@@ -54,7 +55,8 @@ int main(int argc, char** argv) {
   std::cout << "========================================" << std::endl;
 
   double contact_damping     = contact_damping_default;
-  double contact_friction    = contact_friction_default;
+  double contact_mu_s        = contact_mu_s_default;
+  double contact_mu_k        = contact_mu_k_default;
   bool enable_self_collision = false;
   int max_steps              = num_steps;
   int export_interval        = 5;
@@ -62,7 +64,8 @@ int main(int argc, char** argv) {
     contact_damping = std::atof(argv[1]);
   }
   if (argc > 2) {
-    contact_friction = std::atof(argv[2]);
+    contact_mu_s = std::atof(argv[2]);
+    contact_mu_k = contact_mu_s;
   }
   if (argc > 3) {
     enable_self_collision = (std::atoi(argv[3]) != 0);
@@ -77,7 +80,8 @@ int main(int argc, char** argv) {
     export_interval = std::atoi(argv[5]);
   }
   std::cout << "Contact damping: " << contact_damping << std::endl;
-  std::cout << "Contact friction: " << contact_friction << std::endl;
+  std::cout << "Contact static friction (mu_s): " << contact_mu_s << std::endl;
+  std::cout << "Contact kinetic friction (mu_k): " << contact_mu_k << std::endl;
   std::cout << "Enable self collision: " << (enable_self_collision ? 1 : 0)
             << std::endl;
   std::cout << "Max steps: " << max_steps << std::endl;
@@ -354,7 +358,7 @@ int main(int argc, char** argv) {
 
     // Add contact forces from collision patches (GPU version)
     Eigen::VectorXd contact_forces = narrowphase.ComputeExternalForcesGPU(
-        solver.GetVelocityGuessDevicePtr(), contact_damping, contact_friction);
+        solver.GetVelocityGuessDevicePtr(), contact_damping, contact_mu_k);
     if (contact_forces.size() == h_f_ext.size()) {
       h_f_ext += contact_forces;
     }

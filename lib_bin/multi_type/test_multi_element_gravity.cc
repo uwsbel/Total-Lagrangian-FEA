@@ -57,7 +57,8 @@ const int num_steps_default = 100000;
 const int export_interval   = 50;
 
 // Contact parameters
-const double contact_friction = 0.6;
+const double contact_mu_s = 0.6;
+const double contact_mu_k = 0.6;
 
 using ANCFCPUUtils::VisualizationUtils;
 
@@ -436,7 +437,8 @@ int main(int argc, char** argv) {
 
   const double contact_stiffness = 1.0e8;  // Contact stiffness (Young's modulus E)
   auto collision_system = std::make_unique<DemeMeshCollisionSystem>(
-      std::move(bodies), contact_friction, contact_stiffness, false);
+      std::move(bodies), contact_mu_s, contact_mu_k, contact_stiffness, 0.5,
+      false, dt);
 
   // Combined collision node buffer
   double* d_collision_nodes = nullptr;
@@ -525,7 +527,7 @@ int main(int argc, char** argv) {
 
     CollisionSystemParams coll_params;
     coll_params.damping = 50.0;
-    coll_params.friction = contact_friction;
+    coll_params.friction = contact_mu_k;
 
     collision_system->Step(coll_in, coll_params);
 

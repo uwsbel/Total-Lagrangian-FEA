@@ -34,7 +34,7 @@
 const SolidMaterialProperties mat_plate = SolidMaterialProperties::SVK(
     1e7,     // E: Young's modulus (Pa)
     0.3,     // nu: Poisson's ratio
-    1000.0,  // rho0: Density (kg/m³)
+    70.7355,  // rho0: Density (kg/m³)
     2e4,     // eta_damp
     2e4      // lambda_damp
 );
@@ -42,7 +42,7 @@ const SolidMaterialProperties mat_plate = SolidMaterialProperties::SVK(
 const SolidMaterialProperties mat_sphere1 = SolidMaterialProperties::SVK(
     1e7,     // E: Young's modulus (Pa)
     0.3,     // nu: Poisson's ratio
-    1000.0,  // rho0: Density (kg/m³)
+    70.7355,  // rho0: Density (kg/m³)
     2e4,     // eta_damp
     2e4      // lambda_damp
 );
@@ -50,7 +50,7 @@ const SolidMaterialProperties mat_sphere1 = SolidMaterialProperties::SVK(
 const SolidMaterialProperties mat_sphere2 = SolidMaterialProperties::SVK(
     1e7,     // E: Young's modulus (Pa)
     0.3,     // nu: Poisson's ratio
-    1000.0,  // rho0: Density (kg/m³)
+    70.7355,  // rho0: Density (kg/m³)
     2e4,     // eta_damp
     2e4      // lambda_damp
 );
@@ -58,7 +58,7 @@ const SolidMaterialProperties mat_sphere2 = SolidMaterialProperties::SVK(
 const SolidMaterialProperties mat_sphere3 = SolidMaterialProperties::SVK(
     1e7,     // E: Young's modulus (Pa)
     0.3,     // nu: Poisson's ratio
-    300.0,  // rho0: Density (kg/m³)
+    20.0,  // rho0: Density (kg/m³)
     2e4,     // eta_damp
     2e4      // lambda_damp
 );
@@ -70,14 +70,15 @@ const double gap_factor    = 0.3;  // Gap = 0.3 * R between bottom spheres
 // Simulation parameters
 const double gravity = -9.81;
 const double dt      = 5e-4;
-const int num_steps  = 5000;
+const int num_steps  = 2000;
 
 // Contact parameters
 // DEME uses coefficient of restitution (CoR) in its frictional Hertzian model.
 // Valid range is [0, 1].
-const double contact_damping_default  = 0.5;
-const double contact_friction_default = 0.01;
-const double contact_stiffness        = 2e8;
+const double contact_damping_default  = 0.4;
+const double contact_mu_s_default = 0.01;
+const double contact_mu_k_default = 0.01;
+const double contact_stiffness        = 1e8;
 
 using ANCFCPUUtils::VisualizationUtils;
 
@@ -94,10 +95,16 @@ int main(int argc, char** argv) {
   std::cout << "========================================" << std::endl;
 
   double contact_damping     = contact_damping_default;
-  double contact_friction    = contact_friction_default;
+  double contact_mu_s        = contact_mu_s_default;
+  double contact_mu_k        = contact_mu_k_default;
+  double sphere_E            = mat_sphere1.E;
+  double m_c_ratio           = mat_sphere3.rho0 / mat_sphere1.rho0;
+  double gap_factor_runtime  = gap_factor;
   bool enable_self_collision = false;
   int max_steps              = num_steps;
   int export_interval        = 10;
+  std::string sphere_res     = "low";
+  std::string out_suffix;
 
   const bool has_flag_args =
       (argc > 1 && argv[1] &&
@@ -110,10 +117,18 @@ int main(int argc, char** argv) {
         "Sphere stacking demo (DEME mesh-mesh contact coupled to FE).");
     cli.AddDouble("cor", contact_damping_default,
                   "contact restitution (CoR), range [0, 1]");
-    cli.AddDouble("mu", contact_friction_default, "contact friction mu");
+    cli.AddDouble("mu_s", contact_mu_s_default, "contact static friction mu_s");
+    cli.AddDouble("mu_k", contact_mu_k_default, "contact kinetic friction mu_k");
+    cli.AddDouble("sphere_E", mat_sphere1.E, "sphere Young's modulus (Pa)");
+    cli.AddDouble("m_c_ratio", mat_sphere3.rho0 / mat_sphere1.rho0,
+                  "top sphere density ratio: rho_top = m_c_ratio * rho_bottom");
+    cli.AddDouble("gap_factor", gap_factor,
+                  "gap factor between bottom spheres: gap = gap_factor * R");
+    cli.AddString("sphere_res", "low", "sphere mesh resolution: low|med|high");
     cli.AddBool("self_collision", false, "enable self collision");
     cli.AddInt("steps", num_steps, "max simulation steps");
     cli.AddInt("export_interval", 10, "VTK export interval (0 disables)");
+    cli.AddString("out_suffix", "", "suffix appended to output folder name");
 
     std::string err;
     if (!cli.Parse(argc, argv, &err) || cli.HelpRequested()) {
@@ -123,16 +138,25 @@ int main(int argc, char** argv) {
     }
 
     contact_damping        = cli.GetDouble("cor");
-    contact_friction       = cli.GetDouble("mu");
+    contact_mu_s           = cli.GetDouble("mu_s");
+    contact_mu_k           = cli.GetDouble("mu_k");
+    sphere_E               = cli.GetDouble("sphere_E");
+    m_c_ratio              = cli.GetDouble("m_c_ratio");
+    gap_factor_runtime      = cli.GetDouble("gap_factor");
+    sphere_res             = cli.GetString("sphere_res");
     enable_self_collision  = cli.GetBool("self_collision");
     max_steps              = cli.GetInt("steps");
     export_interval        = cli.GetInt("export_interval");
+    out_suffix             = cli.GetString("out_suffix");
   } else {
     // Backward-compatible positional args:
-    //   argv[1]=CoR, argv[2]=mu, argv[3]=self_collision (0/1),
+    //   argv[1]=CoR, argv[2]=mu_s (mu_k defaults to mu_s), argv[3]=self_collision (0/1),
     //   argv[4]=steps, argv[5]=export_interval
     if (argc > 1) contact_damping = std::atof(argv[1]);
-    if (argc > 2) contact_friction = std::atof(argv[2]);
+    if (argc > 2) {
+      contact_mu_s = std::atof(argv[2]);
+      contact_mu_k = contact_mu_s;
+    }
     if (argc > 3) enable_self_collision = (std::atoi(argv[3]) != 0);
     if (argc > 4) {
       int v = std::atoi(argv[4]);
@@ -141,21 +165,60 @@ int main(int argc, char** argv) {
     if (argc > 5) export_interval = std::atoi(argv[5]);
   }
 
+  if (sphere_res != "low" && sphere_res != "med" && sphere_res != "high") {
+    std::cerr << "Invalid --sphere_res: " << sphere_res
+              << " (expected low|med|high)" << std::endl;
+    return 1;
+  }
+  if (sphere_E <= 0.0) {
+    std::cerr << "Invalid --sphere_E: " << sphere_E
+              << " (expected > 0)" << std::endl;
+    return 1;
+  }
+  if (m_c_ratio < 0.0) {
+    std::cerr << "Invalid --m_c_ratio: " << m_c_ratio
+              << " (expected >= 0)" << std::endl;
+    return 1;
+  }
+  if (gap_factor_runtime < 0.0) {
+    std::cerr << "Invalid --gap_factor: " << gap_factor_runtime
+              << " (expected >= 0)" << std::endl;
+    return 1;
+  }
+
+  if (out_suffix.find('/') != std::string::npos ||
+      out_suffix.find('\\') != std::string::npos) {
+    std::cerr << "Invalid --out_suffix: " << out_suffix
+              << " (must not contain path separators)" << std::endl;
+    return 1;
+  }
+
+  std::string output_dir = "output/sphere_stacking";
+  if (!out_suffix.empty()) {
+    output_dir += "_" + out_suffix;
+  }
+
   std::cout << "Contact restitution (CoR): " << contact_damping << std::endl;
-  std::cout << "Contact friction: " << contact_friction << std::endl;
+  std::cout << "Contact static friction (mu_s): " << contact_mu_s << std::endl;
+  std::cout << "Contact kinetic friction (mu_k): " << contact_mu_k << std::endl;
+  std::cout << "Sphere Young's modulus (E): " << sphere_E << std::endl;
+  std::cout << "Top sphere density ratio (m_c_ratio): " << m_c_ratio << std::endl;
+  std::cout << "Gap factor (gap_factor): " << gap_factor_runtime << std::endl;
   std::cout << "Enable self collision: " << (enable_self_collision ? 1 : 0) << std::endl;
   std::cout << "Max steps: " << max_steps << std::endl;
   std::cout << "Export interval: " << export_interval << std::endl;
 
-  std::filesystem::create_directories("output/sphere_stacking");
+  std::filesystem::create_directories(output_dir);
 
   // =========================================================================
   // Load meshes
   // =========================================================================
   ANCFCPUUtils::MeshManager mesh_manager;
 
-  const std::string sphere_node = "data/meshes/ptest/sphere/sphere_r0p15_low.1.node";
-  const std::string sphere_ele  = "data/meshes/ptest/sphere/sphere_r0p15_low.1.ele";
+  const std::string sphere_prefix =
+      std::string("data/meshes/ptest/sphere/sphere_r0p15_") + sphere_res + ".1";
+  const std::string sphere_node = sphere_prefix + ".node";
+  const std::string sphere_ele  = sphere_prefix + ".ele";
   const std::string plate_node  = "data/meshes/ptest/plate/1.1.001plate.1.node";
   const std::string plate_ele   = "data/meshes/ptest/plate/1.1.001plate.1.ele";
 
@@ -188,7 +251,7 @@ int main(int argc, char** argv) {
   // Position the objects
   // =========================================================================
   const double R   = sphere_radius;
-  const double gap = gap_factor * R;  // 0.3 * 0.15 = 0.045
+  const double gap = gap_factor_runtime * R;  // 0.3 * 0.15 = 0.045
 
   // Get plate top z (plate spans z from -0.025 to 0.025, top at z=0.025)
   // We need to check the actual plate bounds
@@ -205,6 +268,7 @@ int main(int argc, char** argv) {
   // Plate is already centered at origin, top at z ~ 0.025
   // Small clearance above plate for initialization
   const double init_clearance = 0.00002;
+  // const double top_clearance = 0.00001;
   const double plate_top_z    = 0.025;
 
   // Bottom two spheres: centers at z = plate_top + clearance + R
@@ -228,7 +292,7 @@ int main(int argc, char** argv) {
   // - Top-to-bottom-right = 2R (touching)
   // Using geometry: vertical offset = sqrt((2R)^2 - x_offset^2)
   const double top_vertical_offset = std::sqrt(4.0 * R * R - x_offset * x_offset);
-  const double top_sphere_z = bottom_sphere_z + top_vertical_offset - 0.002;
+  const double top_sphere_z = bottom_sphere_z + top_vertical_offset + init_clearance;
 
   mesh_manager.TranslateMesh(mesh_sphere3, 0.0, 0.0, top_sphere_z);
 
@@ -291,7 +355,12 @@ int main(int argc, char** argv) {
   // Note: Currently GPU element data uses uniform material properties.
   // The SolidMaterialProperties abstraction allows per-object specification
   // even though GPU storage is shared.
-  gpu_t10_data.ApplyMaterial(mat_sphere1);
+  SolidMaterialProperties mat_sphere_runtime = mat_sphere1;
+  mat_sphere_runtime.E = sphere_E;
+  gpu_t10_data.ApplyMaterial(mat_sphere_runtime);
+
+  const double rho_bottom = mat_sphere1.rho0;
+  const double rho_top    = m_c_ratio * rho_bottom;
 
   // Per-mesh density overrides (affects mass matrix + gravity).
   // This is important because `GPU_FEAT10_Data` otherwise assumes a uniform rho0.
@@ -302,7 +371,7 @@ int main(int argc, char** argv) {
   gpu_t10_data.SetDensityForElementRange(inst_sphere2.element_offset,
                                         inst_sphere2.num_elements, mat_sphere2.rho0);
   gpu_t10_data.SetDensityForElementRange(inst_sphere3.element_offset,
-                                        inst_sphere3.num_elements, mat_sphere3.rho0);
+                                        inst_sphere3.num_elements, rho_top);
 
   gpu_t10_data.CalcDnDuPre();
   gpu_t10_data.CalcMassMatrix();
@@ -338,7 +407,7 @@ int main(int argc, char** argv) {
   // =========================================================================
   // Initialize Newton solver
   // =========================================================================
-  SyncedNewtonParams params = {1e-4, 0.0, 1e-6, 1e12, 3, 10, dt};
+  SyncedNewtonParams params = {1e-6, 0.0, 1e-6, 1e12, 3, 10, dt};
   SyncedNewtonSolver solver(&gpu_t10_data, gpu_t10_data.get_n_constraint());
   solver.Setup();
   solver.SetParameters(&params);
@@ -365,7 +434,7 @@ int main(int argc, char** argv) {
   const double sphere_volume = (4.0 / 3.0) * M_PI * R * R * R;
   const float mass_sphere1 = static_cast<float>(mat_sphere1.rho0 * sphere_volume);
   const float mass_sphere2 = static_cast<float>(mat_sphere2.rho0 * sphere_volume);
-  const float mass_sphere3 = static_cast<float>(mat_sphere3.rho0 * sphere_volume);
+  const float mass_sphere3 = static_cast<float>(rho_top * sphere_volume);
 
   std::cout << "Sphere masses: " << mass_sphere1 << ", " << mass_sphere2 
             << ", " << mass_sphere3 << " kg" << std::endl;
@@ -411,8 +480,9 @@ int main(int argc, char** argv) {
         << contact_damping << " (will be clamped by DEME).\n";
   }
   auto collision_system = std::make_unique<DemeMeshCollisionSystem>(
-      std::move(bodies), contact_friction, contact_stiffness, contact_damping,
-      enable_self_collision);
+      std::move(bodies), contact_mu_s, contact_mu_k, contact_stiffness,
+      contact_damping,
+      enable_self_collision, dt);
 
   // Device buffer for collision node positions (column-major: [x... y... z...])
   double* d_nodes_collision = nullptr;
@@ -480,7 +550,7 @@ int main(int argc, char** argv) {
 
     CollisionSystemParams coll_params;
     coll_params.damping  = 0.0;  // DEME uses constructor `restitution` (CoR)
-    coll_params.friction = contact_friction;
+    coll_params.friction = contact_mu_k;
 
     collision_system->Step(coll_in, coll_params);
     const int num_contacts = collision_system->GetNumContacts();
@@ -517,7 +587,7 @@ int main(int argc, char** argv) {
       }
 
       std::ostringstream filename;
-      filename << "output/sphere_stacking/mesh_" << std::setfill('0')
+      filename << output_dir << "/mesh_" << std::setfill('0')
                << std::setw(4) << step << ".vtu";
       VisualizationUtils::ExportMeshWithDisplacement(
           current_nodes, elements, displacement, filename.str());
@@ -552,7 +622,7 @@ int main(int argc, char** argv) {
 
   std::cout << "\n========================================" << std::endl;
   std::cout << "Simulation complete!" << std::endl;
-  std::cout << "Output files in: output/sphere_stacking/" << std::endl;
+  std::cout << "Output files in: " << output_dir << "/" << std::endl;
   std::cout << "========================================" << std::endl;
 
   return 0;

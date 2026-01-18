@@ -616,12 +616,18 @@ __global__ void ComputeTriCenterVelKernel(const int3* tri_global_nodes,
 }  // namespace
 
 DemeMeshCollisionSystem::DemeMeshCollisionSystem(
-    std::vector<DemeMeshCollisionBody> bodies, double friction,
-    double stiffness, double restitution, bool enable_self_collision)
-    : enable_self_collision_(enable_self_collision) {
+    std::vector<DemeMeshCollisionBody> bodies, double mu_s, double mu_k,
+    double stiffness, double restitution, bool enable_self_collision,
+    double time_step)
+    : enable_self_collision_(enable_self_collision), dt_(time_step) {
   if (bodies.empty()) {
     throw std::invalid_argument(
         "DemeMeshCollisionSystem: bodies must be non-empty");
+  }
+
+  if (dt_ <= 0.0) {
+    throw std::invalid_argument(
+        "DemeMeshCollisionSystem: time_step must be > 0");
   }
 
   bodies_.reserve(bodies.size());
@@ -660,7 +666,7 @@ DemeMeshCollisionSystem::DemeMeshCollisionSystem(
     bodies_.push_back(std::move(rb));
   }
 
-  BuildSolver(friction, stiffness, restitution);
+  BuildSolver(mu_s, mu_k, stiffness, restitution);
 
   // Build a triangle -> global node ID mapping (used to compute per-triangle
   // velocity estimates on GPU for DEME's patch-based friction/damping).
@@ -989,7 +995,8 @@ DemeMeshCollisionSystem::~DemeMeshCollisionSystem() {
   }
 }
 
-void DemeMeshCollisionSystem::BuildSolver(double friction, double stiffness,
+void DemeMeshCollisionSystem::BuildSolver(double mu_s, double mu_k,
+                                          double stiffness,
                                           double restitution) {
   ConfigureDemeRuntimePathsFromBazelBin();
 
@@ -1022,11 +1029,13 @@ void DemeMeshCollisionSystem::BuildSolver(double friction, double stiffness,
   const float default_cor = static_cast<float>(std::clamp(restitution, 0.0, 1.0));
   const float contact_cor = EnvFloatOr("DEME_CONTACT_COR", default_cor);
 
-  const float mu = static_cast<float>(std::max(0.0, friction));
+  const float mu_s_f = static_cast<float>(std::max(0.0, mu_s));
+  const float mu_k_f = static_cast<float>(std::max(0.0, mu_k));
   auto mat       = solver_->LoadMaterial({{"E", contact_E},
                                           {"nu", contact_nu},
                                           {"CoR", contact_cor},
-                                          {"mu", mu},
+                                          {"mu_s", mu_s_f},
+                                          {"mu_k", mu_k_f},
                                           {"Crr", 0.0f}});
 
   auto make_mesh = [&](const ANCFCPUUtils::SurfaceTriMesh& surf,
@@ -1184,7 +1193,7 @@ void DemeMeshCollisionSystem::BuildSolver(double friction, double stiffness,
   // DEME's patch-based mesh contact damping/friction.
   solver_->SetUsePatchRelativeVelocityOverride(true);
 
-  solver_->SetInitTimeStep(1e-4);
+  solver_->SetInitTimeStep(dt_);
   solver_->Initialize();
 
   // DEME assigns mesh owner IDs during initialization. Cache them now so we
@@ -1251,6 +1260,15 @@ void DemeMeshCollisionSystem::Step(const CollisionSystemInput& in,
   if (in.dt <= 0.0) {
     throw std::invalid_argument(
         "DemeMeshCollisionSystem::Step: dt must be > 0");
+  }
+
+  {
+    const double tol =
+        1e-15 * std::max(1.0, std::max(std::abs(dt_), std::abs(in.dt)));
+    if (std::abs(in.dt - dt_) > tol) {
+      solver_->UpdateStepSize(in.dt);
+      dt_ = in.dt;
+    }
   }
   const bool have_fea_vel = (in.d_vel_xyz != nullptr);
 

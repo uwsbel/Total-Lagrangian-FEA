@@ -63,20 +63,27 @@ struct DemeMeshCollisionBody {
 // - Patch splitting: `DEME_PATCH_ANGLE_DEG` (smaller -> more patches)
 // - Contact material: `DEME_CONTACT_E`, `DEME_CONTACT_NU`, `DEME_CONTACT_COR`
 // - FE coupling: `DEME_FORCE_DISTRIB_K`, `DEME_FORCE_SCALE`, `DEME_FORCE_CLAMP`
-class DemeMeshCollisionSystem final : public CollisionSystem {
+ class DemeMeshCollisionSystem final : public CollisionSystem {
  public:
   // Backward-compatible constructor: uses restitution (CoR) = 0.5 by default
   // (overridable via `DEME_CONTACT_COR`).
   DemeMeshCollisionSystem(std::vector<DemeMeshCollisionBody> bodies,
                           double friction, double stiffness,
-                          bool enable_self_collision)
-      : DemeMeshCollisionSystem(std::move(bodies), friction, stiffness, 0.5,
-                                enable_self_collision) {}
+                          bool enable_self_collision, double time_step)
+      : DemeMeshCollisionSystem(std::move(bodies), friction, friction, stiffness,
+                                0.5, enable_self_collision, time_step) {}
 
   DemeMeshCollisionSystem(std::vector<DemeMeshCollisionBody> bodies,
                           double friction, double stiffness,
                           double restitution,
-                          bool enable_self_collision);
+                          bool enable_self_collision, double time_step)
+      : DemeMeshCollisionSystem(std::move(bodies), friction, friction, stiffness,
+                                restitution, enable_self_collision, time_step) {}
+
+  DemeMeshCollisionSystem(std::vector<DemeMeshCollisionBody> bodies,
+                          double mu_s, double mu_k, double stiffness,
+                          double restitution,
+                          bool enable_self_collision, double time_step);
 
   ~DemeMeshCollisionSystem() override;
 
@@ -89,7 +96,7 @@ class DemeMeshCollisionSystem final : public CollisionSystem {
   int GetNumContacts() const override;
 
  private:
-  void BuildSolver(double friction, double stiffness, double restitution);
+  void BuildSolver(double mu_s, double mu_k, double stiffness, double restitution);
 
  struct RuntimeBody {
     DemeMeshCollisionBody body;
@@ -189,4 +196,6 @@ class DemeMeshCollisionSystem final : public CollisionSystem {
   // Pose tracking for friction computation: DEME needs (lin/ang) velocity to
   // compute friction directions. We estimate owner velocities from pose changes.
   bool first_step_ = true;
-};
+
+  double dt_ = 0.0;
+ };

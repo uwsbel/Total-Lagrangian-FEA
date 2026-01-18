@@ -121,7 +121,8 @@ namespace {
 
 struct Options {
   double contact_damping        = contact_damping_default;
-  double contact_friction       = contact_friction_default;
+  double contact_mu_s           = contact_friction_default;
+  double contact_mu_k           = contact_friction_default;
   bool enable_self_collision    = false;
   std::string collision_backend = "hydro";  // hydro | deme
   int max_steps                 = num_steps_default;
@@ -161,7 +162,7 @@ bool ParseDouble(const std::string& s, double& out) {
 void PrintUsage(const char* argv0) {
   std::cout << "Usage:\n"
             << "  " << argv0
-            << " [contact_damping] [contact_friction] [self_collision(0/1)] "
+            << " [contact_damping] [mu_s (mu_k defaults to mu_s)] [self_collision(0/1)] "
                "[max_steps] [export_interval]\n"
             << "  " << argv0
             << " [positional args...] [--collision=hydro|deme] [--help]\n"
@@ -212,8 +213,11 @@ bool ParseArgs(int argc, char** argv, Options& opt) {
         break;
       }
       case 1: {
-        if (!ParseDouble(arg, opt.contact_friction))
+        double v = 0.0;
+        if (!ParseDouble(arg, v))
           return false;
+        opt.contact_mu_s = v;
+        opt.contact_mu_k = v;
         break;
       }
       case 2: {
@@ -268,7 +272,8 @@ int main(int argc, char** argv) {
 
   std::cout << "Solver: newton\n";
   std::cout << "Contact damping: " << opt.contact_damping << "\n";
-  std::cout << "Contact friction: " << opt.contact_friction << "\n";
+  std::cout << "Contact static friction (mu_s): " << opt.contact_mu_s << "\n";
+  std::cout << "Contact kinetic friction (mu_k): " << opt.contact_mu_k << "\n";
   std::cout << "Enable self collision: " << (opt.enable_self_collision ? 1 : 0)
             << "\n";
   std::cout << "Collision backend: " << opt.collision_backend << "\n";
@@ -524,8 +529,8 @@ int main(int argc, char** argv) {
       bodies.push_back(std::move(body));
     }
     collision_system = std::make_unique<DemeMeshCollisionSystem>(
-        std::move(bodies), opt.contact_friction, 1.0e7,
-        opt.enable_self_collision);
+        std::move(bodies), opt.contact_mu_s, opt.contact_mu_k, 1.0e7,
+        opt.enable_self_collision, dt);
   } else {
     std::cerr << "Unknown collision backend: " << opt.collision_backend << "\n";
     return 1;
@@ -593,7 +598,7 @@ int main(int argc, char** argv) {
 
     CollisionSystemParams coll_params;
     coll_params.damping  = opt.contact_damping;
-    coll_params.friction = opt.contact_friction;
+    coll_params.friction = opt.contact_mu_k;
 
     collision_system->Step(coll_in, coll_params);
     const int num_contacts = collision_system->GetNumContacts();
