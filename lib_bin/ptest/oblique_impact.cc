@@ -1,3 +1,4 @@
+// ./bazel-bin/lib_bin/ptest/oblique_impact --theta=0.3 --v_i=2.0
 #include <cuda_runtime.h>
 
 #include <Eigen/Dense>
@@ -23,6 +24,8 @@
 #include "../../lib_utils/visualization_utils.h"
 
 using ANCFCPUUtils::VisualizationUtils;
+
+
 
 static void AxisMinMaxForInstance(const Eigen::MatrixXd& nodes,
                                   const ANCFCPUUtils::MeshInstance& inst,

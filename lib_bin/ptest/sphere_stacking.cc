@@ -6,6 +6,9 @@
  * small gap, one sphere on top. Contact handled via DEME collision system.
  */
 
+ // ./bazel-bin/lib_bin/ptest/sphere_stacking --mu_s 0.8 --mu_k 0.7 --gap_factor=0.3 --sphere_res=med 
+ // --m_c_ratio=0.3 --out_suffix=s0.8k0.7gap0.3mc0.3
+
 #include <cublas_v2.h>
 #include <cuda_runtime.h>
 

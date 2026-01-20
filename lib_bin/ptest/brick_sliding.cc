@@ -1,3 +1,6 @@
+// use only constraint type 0 for now:
+// ./bazel-bin/lib_bin/ptest/brick_sliding --slope=04 --constraint_type=0 --E=5e6
+
 #include <cublas_v2.h>
 #include <cuda_runtime.h>
 
@@ -11,6 +14,7 @@
 #include <iomanip>
 #include <iostream>
 #include <memory>
+#include <sstream>
 #include <string_view>
 
 #include "../../lib_src/collision/DemeMeshCollisionSystem.h"
@@ -99,8 +103,11 @@ int main(int argc, char** argv) {
   const bool enable_self_collision      = false;
   const double init_clearance           = 1e-5;
   const double brick_mass_kg            = 1.0;
+  const double slope_rho0               = 1500.0;
 
   std::string slope_key        = "02";
+  int constraint_type          = 0;
+  double young_E               = 1e7;
   double contact_cor          = contact_cor_default;
   double contact_mu_s         = contact_mu_s_default;
   double contact_mu_k         = contact_mu_k_default;
@@ -119,11 +126,13 @@ int main(int argc, char** argv) {
                        );
     cli.AddString("slope", "02",
                   "slope selection: 1|2|3|4|01|02|03|04|03p1|03p2|03p3|03p4");
+    cli.AddInt("constraint_type", constraint_type,
+               "0: fix all slope nodes, 1: fix bottom face nodes only");
+    cli.AddDouble("E", young_E, "Young's modulus (Pa)");
     cli.AddDouble("cor", contact_cor_default,
                   "contact restitution (CoR), range [0, 1]");
     cli.AddDouble("mu_s", contact_mu_s_default, "contact static friction mu_s");
-    cli.AddDouble("mu_k", contact_mu_k_default,
-                  "contact kinetic friction mu_k");
+    cli.AddDouble("mu_k", contact_mu_k_default, "contact kinetic friction mu_k");
     cli.AddInt("steps", max_steps, "max simulation steps");
     cli.AddInt("export_interval", export_interval,
                "VTK export interval (0 disables)");
@@ -137,6 +146,8 @@ int main(int argc, char** argv) {
     }
 
     slope_key       = cli.GetString("slope");
+    constraint_type = cli.GetInt("constraint_type");
+    young_E         = cli.GetDouble("E");
     contact_cor     = cli.GetDouble("cor");
     contact_mu_s    = cli.GetDouble("mu_s");
     contact_mu_k    = cli.GetDouble("mu_k");
@@ -160,6 +171,16 @@ int main(int argc, char** argv) {
       out_suffix.find('\\') != std::string::npos) {
     std::cerr << "Invalid --out_suffix: " << out_suffix
               << " (must not contain path separators)" << std::endl;
+    return 1;
+  }
+
+  if (constraint_type != 0 && constraint_type != 1) {
+    std::cerr << "Invalid --constraint_type: " << constraint_type
+              << " (expected 0 or 1)" << std::endl;
+    return 1;
+  }
+  if (young_E <= 0.0) {
+    std::cerr << "Invalid --E: " << young_E << " (expected > 0)" << std::endl;
     return 1;
   }
 
@@ -201,6 +222,26 @@ int main(int argc, char** argv) {
     output_dir += "_" + out_suffix;
   }
   output_dir += "_s" + slope_key;
+  output_dir += "_ctype" + std::to_string(constraint_type);
+  {
+    std::ostringstream oss;
+    oss << std::scientific << std::setprecision(0) << young_E;
+    std::string tag = oss.str();
+    const size_t pos_e = tag.find('e');
+    if (pos_e != std::string::npos && pos_e + 1 < tag.size()) {
+      if (tag[pos_e + 1] == '+') {
+        tag.erase(pos_e + 1, 1);
+      }
+      size_t exp_pos = pos_e + 1;
+      if (tag[exp_pos] == '-') {
+        exp_pos++;
+      }
+      while (exp_pos + 1 < tag.size() && tag[exp_pos] == '0') {
+        tag.erase(exp_pos, 1);
+      }
+    }
+    output_dir += "_E" + tag;
+  }
   std::filesystem::create_directories(output_dir);
 
   ANCFCPUUtils::MeshManager mesh_manager;
@@ -403,6 +444,15 @@ int main(int argc, char** argv) {
             << " m^3" << std::endl;
   std::cout << "Brick rho0: " << brick_rho0 << " kg/m^3" << std::endl;
 
+  const double slope_volume = ComputeTetMeshVolume_T10_UsingCorners(
+      initial_nodes, elements, inst_slope.element_offset,
+      inst_slope.num_elements);
+  if (slope_volume <= 0.0) {
+    std::cerr << "Invalid slope volume computed: " << slope_volume << std::endl;
+    return 1;
+  }
+  const double slope_mass_kg = slope_rho0 * slope_volume;
+
   const int n_nodes = mesh_manager.GetTotalNodes();
   const int n_elems = mesh_manager.GetTotalElements();
 
@@ -417,9 +467,44 @@ int main(int argc, char** argv) {
   }
 
   std::vector<int> fixed_node_indices;
-  fixed_node_indices.reserve(static_cast<size_t>(inst_slope.num_nodes));
-  for (int i = 0; i < inst_slope.num_nodes; ++i) {
-    fixed_node_indices.push_back(inst_slope.node_offset + i);
+  if (constraint_type == 0) {
+    fixed_node_indices.reserve(static_cast<size_t>(inst_slope.num_nodes));
+    for (int i = 0; i < inst_slope.num_nodes; ++i) {
+      fixed_node_indices.push_back(inst_slope.node_offset + i);
+    }
+  } else {
+    const Eigen::Vector3d n_raw(-std::tan(alpha), 0.0, 1.0);
+    const Eigen::Vector3d n = n_raw.normalized();
+
+    double proj_min = 1e100;
+    double proj_max = -1e100;
+    for (int i = 0; i < inst_slope.num_nodes; ++i) {
+      const int idx           = inst_slope.node_offset + i;
+      const Eigen::Vector3d p = initial_nodes.row(idx);
+      const double proj       = n.dot(p);
+      proj_min                = std::min(proj_min, proj);
+      proj_max                = std::max(proj_max, proj);
+    }
+
+    const double span = proj_max - proj_min;
+    const double eps  = std::max(1e-9, 1e-6 * span);
+
+    fixed_node_indices.reserve(static_cast<size_t>(inst_slope.num_nodes));
+    for (int i = 0; i < inst_slope.num_nodes; ++i) {
+      const int idx           = inst_slope.node_offset + i;
+      const Eigen::Vector3d p = initial_nodes.row(idx);
+      const double proj       = n.dot(p);
+      if (proj <= proj_min + eps) {
+        fixed_node_indices.push_back(idx);
+      }
+    }
+
+    if (fixed_node_indices.empty()) {
+      fixed_node_indices.reserve(static_cast<size_t>(inst_slope.num_nodes));
+      for (int i = 0; i < inst_slope.num_nodes; ++i) {
+        fixed_node_indices.push_back(inst_slope.node_offset + i);
+      }
+    }
   }
   Eigen::VectorXi h_fixed_nodes(fixed_node_indices.size());
   for (size_t i = 0; i < fixed_node_indices.size(); ++i) {
@@ -436,11 +521,11 @@ int main(int argc, char** argv) {
                      h_z12, elements);
 
   const SolidMaterialProperties mat_default =
-      SolidMaterialProperties::SVK(1e7, 0.3, 1000.0, 2e4, 2e4);
+      SolidMaterialProperties::SVK(young_E, 0.3, slope_rho0, 2e4, 2e4);
   gpu_t10_data.ApplyMaterial(mat_default);
 
   gpu_t10_data.SetDensityForElementRange(inst_slope.element_offset,
-                                        inst_slope.num_elements, 1000.0);
+                                        inst_slope.num_elements, slope_rho0);
   gpu_t10_data.SetDensityForElementRange(inst_brick.element_offset,
                                         inst_brick.num_elements, brick_rho0);
 
@@ -491,7 +576,7 @@ int main(int argc, char** argv) {
     body.family                  = 0;
     body.split_into_patches      = false;
     body.skip_self_contact_forces = true;
-    body.mass                    = 1000.0f;
+    body.mass                    = static_cast<float>(slope_mass_kg);
     bodies.push_back(std::move(body));
   }
   {
