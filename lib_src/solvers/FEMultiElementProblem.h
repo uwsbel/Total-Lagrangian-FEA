@@ -107,6 +107,13 @@ class FEMultiElementProblem {
   // Copies [d_x12, d_y12, d_z12] -> d_nodes_collision in column-major layout.
   void UpdateCollisionNodeBuffer();
 
+  void SetVelocityFromHostPtr(const double* h_vel_xyz, int n_dofs);
+  void SetVelocityBlockFromHostPtr(int block_idx, const double* h_vel_xyz,
+                                   int n_dofs);
+  void SetVelocityFromDevicePtr(const double* d_vel_xyz, int n_dofs);
+  void SetVelocityBlockFromDevicePtr(int block_idx, const double* d_vel_xyz,
+                                     int n_dofs);
+
  private:
   struct Block {
     ElementBase* element;  // Owned pointer

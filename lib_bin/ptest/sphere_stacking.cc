@@ -78,7 +78,7 @@ const int num_steps  = 2000;
 const double contact_damping_default  = 0.4;
 const double contact_mu_s_default = 0.01;
 const double contact_mu_k_default = 0.01;
-const double contact_stiffness        = 1e8;
+const double contact_stiffness        = 5e7;
 
 using ANCFCPUUtils::VisualizationUtils;
 

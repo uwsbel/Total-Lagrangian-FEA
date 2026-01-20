@@ -1119,6 +1119,9 @@ void SyncedNewtonSolver::OneStepNewtonCuDSS() {
             d_newton_solver_, typed_data);
       }
 
+      cudss_solve_update_pos<<<numBlocks_update_pos, threadsPerBlock>>>(
+          d_newton_solver_, typed_data);
+
       cudss_solve_update_v_prev<<<numBlocks_update_prev_v, threadsPerBlock>>>(
           d_newton_solver_);
 
@@ -1234,6 +1237,9 @@ void SyncedNewtonSolver::OneStepNewtonCuDSS() {
             d_newton_solver_, typed_data);
       }
 
+      cudss_solve_update_pos<<<numBlocks_update_pos, threadsPerBlock>>>(
+          d_newton_solver_, typed_data);
+
       cudss_solve_update_v_prev<<<numBlocks_update_prev_v, threadsPerBlock>>>(
           d_newton_solver_);
 
@@ -1348,6 +1354,9 @@ void SyncedNewtonSolver::OneStepNewtonCuDSS() {
         cudss_solve_update_pos<<<numBlocks_update_pos, threadsPerBlock>>>(
             d_newton_solver_, typed_data);
       }
+
+      cudss_solve_update_pos<<<numBlocks_update_pos, threadsPerBlock>>>(
+          d_newton_solver_, typed_data);
 
       cudss_solve_update_v_prev<<<numBlocks_update_prev_v, threadsPerBlock>>>(
           d_newton_solver_);

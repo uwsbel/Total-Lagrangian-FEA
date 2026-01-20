@@ -148,6 +148,96 @@ void FEMultiElementProblem::Finalize() {
             << GetTotalDofs() << " total DOFs\n";
 }
 
+void FEMultiElementProblem::SetVelocityFromHostPtr(const double* h_vel_xyz,
+                                                   int n_dofs) {
+  if (!finalized_) {
+    throw std::runtime_error(
+        "FEMultiElementProblem::SetVelocityFromHostPtr: problem not finalized");
+  }
+  if (h_vel_xyz == nullptr) {
+    throw std::invalid_argument(
+        "FEMultiElementProblem::SetVelocityFromHostPtr: null input");
+  }
+  if (n_dofs != GetTotalDofs()) {
+    throw std::invalid_argument(
+        "FEMultiElementProblem::SetVelocityFromHostPtr: n_dofs mismatch");
+  }
+  HANDLE_ERROR(cudaMemcpy(state_.d_velocity, h_vel_xyz,
+                          static_cast<size_t>(n_dofs) * sizeof(double),
+                          cudaMemcpyHostToDevice));
+}
+
+void FEMultiElementProblem::SetVelocityBlockFromHostPtr(int block_idx,
+                                                        const double* h_vel_xyz,
+                                                        int n_dofs) {
+  if (!finalized_) {
+    throw std::runtime_error(
+        "FEMultiElementProblem::SetVelocityBlockFromHostPtr: problem not finalized");
+  }
+  if (block_idx < 0 || block_idx >= static_cast<int>(blocks_.size())) {
+    throw std::out_of_range(
+        "FEMultiElementProblem::SetVelocityBlockFromHostPtr: block index out of range");
+  }
+  if (h_vel_xyz == nullptr) {
+    throw std::invalid_argument(
+        "FEMultiElementProblem::SetVelocityBlockFromHostPtr: null input");
+  }
+  const int expected = blocks_[block_idx].n_coef * 3;
+  if (n_dofs != expected) {
+    throw std::invalid_argument(
+        "FEMultiElementProblem::SetVelocityBlockFromHostPtr: n_dofs mismatch");
+  }
+  const int dof_offset = blocks_[block_idx].coef_offset * 3;
+  HANDLE_ERROR(cudaMemcpy(state_.d_velocity + dof_offset, h_vel_xyz,
+                          static_cast<size_t>(n_dofs) * sizeof(double),
+                          cudaMemcpyHostToDevice));
+}
+
+void FEMultiElementProblem::SetVelocityFromDevicePtr(const double* d_vel_xyz,
+                                                     int n_dofs) {
+  if (!finalized_) {
+    throw std::runtime_error(
+        "FEMultiElementProblem::SetVelocityFromDevicePtr: problem not finalized");
+  }
+  if (d_vel_xyz == nullptr) {
+    throw std::invalid_argument(
+        "FEMultiElementProblem::SetVelocityFromDevicePtr: null input");
+  }
+  if (n_dofs != GetTotalDofs()) {
+    throw std::invalid_argument(
+        "FEMultiElementProblem::SetVelocityFromDevicePtr: n_dofs mismatch");
+  }
+  HANDLE_ERROR(cudaMemcpy(state_.d_velocity, d_vel_xyz,
+                          static_cast<size_t>(n_dofs) * sizeof(double),
+                          cudaMemcpyDeviceToDevice));
+}
+
+void FEMultiElementProblem::SetVelocityBlockFromDevicePtr(int block_idx,
+                                                          const double* d_vel_xyz,
+                                                          int n_dofs) {
+  if (!finalized_) {
+    throw std::runtime_error(
+        "FEMultiElementProblem::SetVelocityBlockFromDevicePtr: problem not finalized");
+  }
+  if (block_idx < 0 || block_idx >= static_cast<int>(blocks_.size())) {
+    throw std::out_of_range(
+        "FEMultiElementProblem::SetVelocityBlockFromDevicePtr: block index out of range");
+  }
+  if (d_vel_xyz == nullptr) {
+    throw std::invalid_argument(
+        "FEMultiElementProblem::SetVelocityBlockFromDevicePtr: null input");
+  }
+  const int expected = blocks_[block_idx].n_coef * 3;
+  if (n_dofs != expected) {
+    throw std::invalid_argument(
+        "FEMultiElementProblem::SetVelocityBlockFromDevicePtr: n_dofs mismatch");
+  }
+  const int dof_offset = blocks_[block_idx].coef_offset * 3;
+  HANDLE_ERROR(cudaMemcpy(state_.d_velocity + dof_offset, d_vel_xyz,
+                          static_cast<size_t>(n_dofs) * sizeof(double),
+                          cudaMemcpyDeviceToDevice));
+}
+
 // -----------------------------------------------------------------------------
 // Accessors
 // -----------------------------------------------------------------------------

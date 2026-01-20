@@ -1,3 +1,4 @@
+
 package(default_visibility = ["//visibility:public"])
 
 cc_binary(
@@ -8,17 +9,20 @@ cc_binary(
         "-L/usr/local/cuda/lib64",
         "-lnvrtc",
         "-lcuda",
+        "-lcublas",
         "-lcusparse",
         "-lcudart",
         "-lcudss",
-        "-lcublas",
+    ],
+    data = [
+        "//:data_meshes",
     ],
     deps = [
         "//lib_src/collision:deme_mesh_collision_system",
         "//lib_src/elements:FEAT10Data",
         "//lib_src/solvers:solvers_syncednewton",
         "//lib_utils:cli_utils",
-        "//lib_utils:cpu_utils",
+        "//lib_utils:cuda_utils",
         "//lib_utils:mesh_manager",
         "//lib_utils:surface_trimesh_extract",
         "//lib_utils:visualization_utils",
@@ -34,17 +38,49 @@ cc_binary(
         "-L/usr/local/cuda/lib64",
         "-lnvrtc",
         "-lcuda",
+        "-lcublas",
         "-lcusparse",
         "-lcudart",
         "-lcudss",
-        "-lcublas",
+    ],
+    data = [
+        "//:data_meshes",
     ],
     deps = [
         "//lib_src/collision:deme_mesh_collision_system",
         "//lib_src/elements:FEAT10Data",
         "//lib_src/solvers:solvers_syncednewton",
         "//lib_utils:cli_utils",
-        "//lib_utils:cpu_utils",
+        "//lib_utils:cuda_utils",
+        "//lib_utils:mesh_manager",
+        "//lib_utils:surface_trimesh_extract",
+        "//lib_utils:visualization_utils",
+        "@eigen//:eigen",
+    ],
+)
+
+cc_binary(
+    name = "oblique_impact",
+    srcs = ["oblique_impact.cc"],
+    copts = ["--std=c++17"],
+    linkopts = [
+        "-L/usr/local/cuda/lib64",
+        "-lnvrtc",
+        "-lcuda",
+        "-lcusparse",
+        "-lcudart",
+        "-lcudss",
+        "-lcublas",
+    ],
+    data = [
+        "//:data_meshes",
+    ],
+    deps = [
+        "//lib_src/collision:deme_mesh_collision_system",
+        "//lib_src/elements:FEAT10Data",
+        "//lib_src/solvers:solvers_syncednewton",
+        "//lib_utils:cli_utils",
+        "//lib_utils:cuda_utils",
         "//lib_utils:mesh_manager",
         "//lib_utils:surface_trimesh_extract",
         "//lib_utils:visualization_utils",

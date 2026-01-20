@@ -15,6 +15,10 @@
 
 #include <cublas_v2.h>  // cuBLAS header
 
+#include <Eigen/Dense>
+
+#include <iostream>
+
 #include "../../lib_utils/cuda_utils.h"
 #include "../../lib_utils/quadrature_utils.h"
 #include "../elements/ANCF3243Data.cuh"
@@ -340,6 +344,33 @@ class SyncedNewtonSolver : public SolverBase {
   // ..])
   double *GetVelocityGuessDevicePtr() const {
     return d_v_guess_;
+  }
+
+  void SetInitialVelocity(const Eigen::VectorXd& h_v0) {
+    if (h_v0.size() != n_coef_ * 3) {
+      std::cerr << "SetInitialVelocity: size mismatch (got " << h_v0.size()
+                << ", expected " << (n_coef_ * 3) << ")\n";
+      return;
+    }
+    HANDLE_ERROR(cudaMemcpy(d_v_guess_, h_v0.data(),
+                            static_cast<size_t>(n_coef_) * 3 * sizeof(double),
+                            cudaMemcpyHostToDevice));
+    HANDLE_ERROR(cudaMemcpy(d_v_prev_, h_v0.data(),
+                            static_cast<size_t>(n_coef_) * 3 * sizeof(double),
+                            cudaMemcpyHostToDevice));
+  }
+
+  void SetInitialVelocityFromDevicePtr(const double* d_v0) {
+    if (d_v0 == nullptr) {
+      std::cerr << "SetInitialVelocityFromDevicePtr: null input pointer\n";
+      return;
+    }
+    HANDLE_ERROR(cudaMemcpy(d_v_guess_, d_v0,
+                            static_cast<size_t>(n_coef_) * 3 * sizeof(double),
+                            cudaMemcpyDeviceToDevice));
+    HANDLE_ERROR(cudaMemcpy(d_v_prev_, d_v0,
+                            static_cast<size_t>(n_coef_) * 3 * sizeof(double),
+                            cudaMemcpyDeviceToDevice));
   }
 
   void OneStepNewtonCuDSS();
