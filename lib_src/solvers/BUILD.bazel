@@ -96,3 +96,18 @@ cuda_library(
     ],
 )
 
+cuda_library(
+    name = "solvers_syncedexplicit",
+    srcs = ["SyncedExplicit.cu"],
+    hdrs = [
+        "SolverBase.h",
+        "SyncedExplicit.cuh",
+    ],
+    copts = ["--std=c++17", "-O3", "--use_fast_math", "--extra-device-vectorization"],
+    deps = [
+        "//lib_src/elements:FEAT10Data",
+        "//lib_utils:cuda_utils",
+        "@eigen//:eigen",
+    ],
+)
+

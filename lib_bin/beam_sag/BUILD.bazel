@@ -67,6 +67,22 @@ cc_binary(
 )
 
 cc_binary(
+    name = "test_feat10_explicit",
+    srcs = ["test_feat10_explicit.cc"],
+    copts = ["--std=c++17"],
+    linkopts = [
+        "-L/usr/local/cuda/lib64",
+        "-lcudart",
+    ],
+    deps = [
+        "//lib_src/elements:FEAT10Data",
+        "//lib_src/solvers:solvers_syncedexplicit",
+        "//lib_utils:cpu_utils",
+        "@eigen//:eigen",
+    ],
+)
+
+cc_binary(
     name = "test_feat10_resolution",
     srcs = ["test_feat10_resolution.cc"],
     copts = ["--std=c++17"],
