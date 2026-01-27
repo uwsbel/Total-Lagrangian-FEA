@@ -281,6 +281,81 @@ __global__ void calc_constraint_kernel(GPU_FEAT10_Data *d_data) {
   compute_constraint_data(d_data);
 }
 
+// HRZ (Hinton-Rock-Zienkiewicz) lumped mass kernel
+// One thread per element - computes lumped mass for all 10 nodes of the element
+// and atomicAdds to global mass vector
+__global__ void compute_hrz_lumped_mass_kernel(GPU_FEAT10_Data *d_data,
+                                                double *d_mass_lumped) {
+  int elem_idx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (elem_idx >= d_data->gpu_n_elem()) return;
+
+  double rho = d_data->rho0();
+
+  // Accumulators for HRZ algorithm
+  double vol_elem = 0.0;
+  double diag_consistent[10] = {0.0};
+
+  // Loop over quadrature points
+  for (int qp = 0; qp < Quadrature::N_QP_T10_5; qp++) {
+    double xi   = d_data->tet5pt_x(qp);
+    double eta  = d_data->tet5pt_y(qp);
+    double zeta = d_data->tet5pt_z(qp);
+    double wq   = d_data->tet5pt_weights(qp);
+    double detJ = d_data->detJ_ref(elem_idx, qp);
+
+    // Compute barycentric coordinates
+    double L1 = 1.0 - xi - eta - zeta;
+    double L2 = xi;
+    double L3 = eta;
+    double L4 = zeta;
+    double L[4] = {L1, L2, L3, L4};
+
+    // Compute shape functions for T10 element
+    double N[10];
+
+    // Corner nodes (0-3): N_i = L_i * (2*L_i - 1)
+    for (int k = 0; k < 4; k++) {
+      N[k] = L[k] * (2.0 * L[k] - 1.0);
+    }
+
+    // Edge nodes (4-9): N_k = 4 * L_i * L_j
+    // Edge connectivity: [(0,1), (1,2), (0,2), (0,3), (1,3), (2,3)]
+    int edges[6][2] = {{0, 1}, {1, 2}, {0, 2}, {0, 3}, {1, 3}, {2, 3}};
+    for (int k = 0; k < 6; k++) {
+      int ii = edges[k][0];
+      int jj = edges[k][1];
+      N[k + 4] = 4.0 * L[ii] * L[jj];
+    }
+
+    double dV = detJ * wq;
+    vol_elem += dV;
+
+    // Accumulate diagonal of consistent mass: ∫ N_i² dV
+    for (int i = 0; i < 10; i++) {
+      diag_consistent[i] += N[i] * N[i] * dV;
+    }
+  }
+
+  // HRZ scaling: preserve total element mass
+  double total_mass = rho * vol_elem;
+  double sum_diag = 0.0;
+  for (int i = 0; i < 10; i++) {
+    sum_diag += diag_consistent[i];
+  }
+
+  // Avoid division by zero
+  if (sum_diag < 1e-30) return;
+
+  double scale = total_mass / sum_diag;
+
+  // Assemble to global mass vector
+  for (int i_local = 0; i_local < 10; i_local++) {
+    int i_global = d_data->element_connectivity()(elem_idx, i_local);
+    double m_lumped = diag_consistent[i_local] * scale;
+    atomicAdd(&d_mass_lumped[i_global], m_lumped);
+  }
+}
+
 void GPU_FEAT10_Data::CalcDnDuPre() {
   int total_threads = n_elem * Quadrature::N_QP_T10_5;
 
@@ -346,6 +421,30 @@ void GPU_FEAT10_Data::CalcConstraintData() {
 
   calc_constraint_kernel<<<blocks, threads_per_block>>>(d_data);
   cudaDeviceSynchronize();
+}
+
+void GPU_FEAT10_Data::CalcLumpedMassHRZ() {
+  if (is_lumped_mass_computed) {
+    // Already computed, just return
+    return;
+  }
+
+  // Zero out the lumped mass vector
+  HANDLE_ERROR(cudaMemset(d_mass_lumped, 0, n_coef * sizeof(double)));
+
+  // Launch kernel: one thread per element
+  int threads_per_block = 128;
+  int blocks = (n_elem + threads_per_block - 1) / threads_per_block;
+
+  compute_hrz_lumped_mass_kernel<<<blocks, threads_per_block>>>(d_data,
+                                                                 d_mass_lumped);
+  HANDLE_ERROR(cudaDeviceSynchronize());
+
+  is_lumped_mass_computed = true;
+
+  // Update device copy of struct
+  HANDLE_ERROR(cudaMemcpy(d_data, this, sizeof(GPU_FEAT10_Data),
+                          cudaMemcpyHostToDevice));
 }
 
 void GPU_FEAT10_Data::CalcMassMatrix() {
@@ -705,6 +804,15 @@ void GPU_FEAT10_Data::RetrieveExternalForceToCPU(
   // Copy from device to host
   HANDLE_ERROR(cudaMemcpy(external_force.data(), d_f_ext,
                           total_dofs * sizeof(double), cudaMemcpyDeviceToHost));
+}
+
+void GPU_FEAT10_Data::RetrieveLumpedMassToCPU(Eigen::VectorXd &lumped_mass) {
+  // Resize to number of nodes (one scalar per node)
+  lumped_mass.resize(n_coef);
+
+  // Copy from device to host
+  HANDLE_ERROR(cudaMemcpy(lumped_mass.data(), d_mass_lumped,
+                          n_coef * sizeof(double), cudaMemcpyDeviceToHost));
 }
 
 void GPU_FEAT10_Data::RetrievePositionToCPU(Eigen::VectorXd &x12,

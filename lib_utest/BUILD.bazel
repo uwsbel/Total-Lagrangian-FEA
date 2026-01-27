@@ -125,3 +125,23 @@ cc_test(
     ],
 )
 
+cc_test(
+    name = "utest_hrz_mass",
+    srcs = ["utest_hrz_mass.cc"],
+    copts = ["--std=c++17"],
+    linkopts = [
+        "-L/usr/local/cuda/lib64",
+        "-lcusparse",
+        "-lcudart",
+    ],
+    data = [
+        "//:data_meshes",
+        "//:data_utest",
+    ],
+    deps = [
+        "//lib_src/elements:FEAT10Data",
+        "//lib_utils:cpu_utils",
+        "@eigen//:eigen",
+        "@googletest//:gtest_main",
+    ],
+)
