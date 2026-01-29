@@ -245,13 +245,18 @@ if __name__ == "__main__":
     x_nodes = X_nodes.copy()
     v = np.zeros(3 * X_nodes.shape[0])  # velocity (flat)
     
-    # External force
+    # External force: distribute 5000N in +x at x == 3
     f_ext = np.zeros(3 * X_nodes.shape[0])
-    f_ext[3*19 + 0] = 1000.0  # 1000 N in x-direction on node 19
+    force_node_indices = np.where(np.isclose(X_nodes[:, 0], 3.0))[0]
+    if len(force_node_indices) > 0:
+        force_per_node = 5000.0 / len(force_node_indices)
+        for node_idx in force_node_indices:
+            f_ext[3*node_idx + 0] = force_per_node
+    print(f"External force: {len(force_node_indices)} nodes at x=3.0, {5000.0:.1f}N total ({5000.0/len(force_node_indices):.1f}N per node)")
     
     # Time integration parameters
-    dt = 1e-6  # Time step (larger for longer simulation)
-    total_time = 0.005  # Total simulation time in seconds
+    dt = 1e-5  # Time step (larger for longer simulation)
+    total_time = 0.05  # Total simulation time in seconds (matching Newton)
     Nt = int(total_time / dt)  # Number of steps based on total_time and dt
     
     print(f"\nTime integration:")
@@ -271,20 +276,17 @@ if __name__ == "__main__":
     print(f"  Critical dt ≈ {dt_crit:.2e} s")
     print(f"  Using dt = {dt:.2e} s ({'OK' if dt < dt_crit else 'WARNING: May be unstable!'})")
     
-    # Storage for tracking
-    node19_x = []
-    node20_x = []
-    
-    t = 0.0
-    force_removal_step = 2500  # Remove force after step 2500 (0.05s)
+    # Storage for tracking (matches C++ test_feat10_explicit.cc: node 23)
+    plot_target_node = 23
+    if X_nodes.shape[0] <= plot_target_node:
+        raise ValueError(f"Mesh too small for node {plot_target_node} tracking.")
+    target_node_x = []
+    target_node_y = []
+    target_node_z = []
     
     print("\nStarting simulation...\n")
     
     for step in range(Nt):
-        # Remove force after specified step
-        if step > force_removal_step:
-            f_ext[3*19 + 0] = 0.0
-        
         # Compute internal forces at current configuration
         f_int = tet10_internal_force_mesh(x_nodes, X_elem, pre_mesh, lam, mu)
         f_int_flat = f_int.flatten()
@@ -315,47 +317,51 @@ if __name__ == "__main__":
             print(f"Max displacement: {max_disp:.3e} m")
             break
         
-        # Save data
-        node19_x.append(x_nodes[19, 0])
-        node20_x.append(x_nodes[20, 0])
+        # Save data (track node 23 to match C++ implementation)
+        target_node_x.append(x_nodes[plot_target_node, 0])
+        target_node_y.append(x_nodes[plot_target_node, 1])
+        target_node_z.append(x_nodes[plot_target_node, 2])
         
         # Print progress every 500 steps
         if step % 500 == 0:
-            print(f"Step {step}/{Nt}: t={step*dt:.4f}s, node 19 x={x_nodes[19,0]:.6e}, node 20 x={x_nodes[20,0]:.6e}")
+            print(f"Step {step}/{Nt}: node {plot_target_node} x = {x_nodes[plot_target_node,0]:.17e} y = {x_nodes[plot_target_node,1]:.17e} z = {x_nodes[plot_target_node,2]:.17e}")
     
     print("\nSimulation complete!\n")
     
-    # Save results to file (in same directory as script)
-    output_file = os.path.join(script_dir, "results_explicit.npz")
-    time_array = np.arange(len(node19_x)) * dt
-    np.savez(output_file,
-             time=time_array,
-             node19_x=np.array(node19_x),
-             node20_x=np.array(node20_x),
-             x_final=x_nodes,
-             X_initial=X_nodes,
-             dt=dt,
-             Nt=Nt,
-             force_removal_step=force_removal_step,
-             total_mass=np.sum(M_lumped)/3)
-    print(f"Results saved to: {output_file}")
+    # Save results to CSV file (matches C++ format: step,x_position,y_position,z_position)
+    output_file = os.path.join(script_dir, "feat10_python_explicit.csv")
+    data = np.column_stack([
+        np.arange(len(target_node_x)),
+        np.array(target_node_x),
+        np.array(target_node_y),
+        np.array(target_node_z)
+    ])
+    header = "step,x_position,y_position,z_position"
+    np.savetxt(output_file, data, delimiter=',', header=header, comments='', fmt='%.17e')
+    print(f"Wrote CSV: {output_file}")
     
     # Plot after simulation
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
+    fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(15, 5))
     
-    time_array = np.arange(len(node19_x)) * dt
+    step_array = np.arange(len(target_node_x))
     
-    ax1.plot(time_array, node19_x, linewidth=2)
-    ax1.set_xlabel("Time (s)")
-    ax1.set_ylabel("Node 19 X Position (m)")
-    ax1.set_title("Node 19 X Position vs Time (Symplectic Euler)")
+    ax1.plot(step_array, target_node_x, linewidth=2)
+    ax1.set_xlabel("Step")
+    ax1.set_ylabel("Node 23 X Position (m)")
+    ax1.set_title("Node 23 X Position vs Step (Symplectic Euler)")
     ax1.grid(True)
     
-    ax2.plot(time_array, node20_x, color='orange', linewidth=2)
-    ax2.set_xlabel("Time (s)")
-    ax2.set_ylabel("Node 20 X Position (m)")
-    ax2.set_title("Node 20 X Position vs Time (Symplectic Euler)")
+    ax2.plot(step_array, target_node_y, color='orange', linewidth=2)
+    ax2.set_xlabel("Step")
+    ax2.set_ylabel("Node 23 Y Position (m)")
+    ax2.set_title("Node 23 Y Position vs Step (Symplectic Euler)")
     ax2.grid(True)
+    
+    ax3.plot(step_array, target_node_z, color='green', linewidth=2)
+    ax3.set_xlabel("Step")
+    ax3.set_ylabel("Node 23 Z Position (m)")
+    ax3.set_title("Node 23 Z Position vs Step (Symplectic Euler)")
+    ax3.grid(True)
     
     plt.tight_layout()
     plt.show()

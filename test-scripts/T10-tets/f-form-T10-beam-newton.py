@@ -87,8 +87,6 @@ def tet10_precompute_reference_mesh(X_nodes, X_elem):
     for elem_idx in range(X_elem.shape[0]):
         node_indices = X_elem[elem_idx]
         X_elem_nodes = X_nodes[node_indices]      # (10, 3)
-        print("=====")
-        print(X_elem_nodes)
         pre = tet10_precompute_reference(X_elem_nodes)
         pre_list.append(pre)
     return pre_list
@@ -284,7 +282,7 @@ def tet10_tangent_svk_mesh(X_nodes, x_nodes, X_elem, pre_mesh, lam, mu):
 def newton_inner(v0, q_prev, v_prev, M, f_int_func, f_ext, h,
                  X_nodes, X_elem, pre_mesh, lam, mu,
                  lam_mult, rho_bb,
-                 max_newton=20, tol_R=1e-8, tol_step=1e-10):
+                 max_newton=20, tol_R=1e-4, tol_step=1e-6):
     """
     Plain Newton on R(v)=0 with:
       R(v) = (M/h)(v-v_prev) + f_int(x) - f_ext + h T^T (lam + rho c)
@@ -334,7 +332,7 @@ def newton_inner(v0, q_prev, v_prev, M, f_int_func, f_ext, h,
 
 def alm_newton_step(v_guess, lam_guess, v_prev, q_prev, M, f_int_func, f_ext, h, rho_bb,
                     X_nodes, X_elem, pre_mesh, lam, mu,
-                    max_outer=5, outer_tol=1e-6):
+                    max_outer=5, outer_tol=1e-4):
     """
     ALM outer loop with classic Newton inner solves (no line search).
     """
@@ -351,7 +349,7 @@ def alm_newton_step(v_guess, lam_guess, v_prev, q_prev, M, f_int_func, f_ext, h,
         v, nit = newton_inner(v, q_prev, v_prev, M, f_int_func, f_ext, h,
                               X_nodes, X_elem, pre_mesh, lam, mu,
                               lam_mult, rho_bb,
-                              max_newton=20, tol_R=1e-8, tol_step=1e-10)
+                              max_newton=10, tol_R=1e-4, tol_step=1e-6)
         total_newton_iters += nit
 
         # ALM multiplier update (note: no 'h' here)
@@ -369,25 +367,43 @@ def alm_newton_step(v_guess, lam_guess, v_prev, q_prev, M, f_int_func, f_ext, h,
 # Main simulation
 # ----------------------------
 if __name__ == "__main__":
-    # shape: (n_nodes, 3)
-    X_nodes = read_node("../../data/meshes/T10/beam_3x2x1.1.node")
+    import os
+    # Get absolute path to mesh files
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    mesh_dir = os.path.join(script_dir, "../../data/meshes/T10")
+    node_file = os.path.join(mesh_dir, "beam_3x2x1.1.node")
+    ele_file = os.path.join(mesh_dir, "beam_3x2x1.1.ele")
+    
+    # Load mesh
+    X_nodes = read_node(node_file)
     x_nodes = X_nodes.copy()
-    X_elem = read_ele("../../data/meshes/T10/beam_3x2x1.1.ele")
+    X_elem = read_ele(ele_file)
+    
+    print(f"Mesh: {X_nodes.shape[0]} nodes, {X_elem.shape[0]} elements")
+    print(f"Material: E={E_mat:.2e} Pa, nu={nu}, rho={rho0} kg/m³")
+    print(f"Lamé parameters: lambda={lam:.2e}, mu={mu:.2e}")
 
-    print(X_nodes)
-    print(X_elem)
+    # Precompute reference configuration data
     pre_mesh = tet10_precompute_reference_mesh(X_nodes, X_elem)
 
-    print(pre_mesh)
-
-    np.set_printoptions(threshold=np.inf, linewidth=200, suppress=True)
-
+    # Compute consistent mass matrix
+    print("\nComputing consistent mass matrix...")
     M_full = tet10_consistent_mass_mesh(X_nodes, X_elem, rho0)
-    print("shape M_full:", M_full.shape)
-    print(M_full)
+    print(f"Total mass: {np.sum(M_full.diagonal())/3:.6e} kg")
+    
+    # Get fixed nodes
+    fixed_nodes = get_fixed_nodes(X_nodes)
+    print(f"Fixed nodes: {len(fixed_nodes)} nodes at x=0")
 
+    # External force: distribute 5000N in +x at x == 3
     f_ext = np.zeros(3 * X_nodes.shape[0])
-    f_ext[3*19 + 0] = 1000.0  # 1000 N force in x direction at node index 19
+    force_node_indices = np.where(np.isclose(X_nodes[:, 0], 3.0))[0]
+    if len(force_node_indices) > 0:
+        force_per_node = 5000.0 / len(force_node_indices)
+        for node_idx in force_node_indices:
+            f_ext[3*node_idx + 0] = force_per_node
+    print(f"External force: {len(force_node_indices)} nodes at x=3.0, {5000.0:.1f}N total ({5000.0/len(force_node_indices):.1f}N per node)")
+    
     time_step = 1e-3
     rho_bb = 1e14
 
@@ -396,16 +412,28 @@ if __name__ == "__main__":
     v_guess = v_prev.copy()
     lam_guess = np.zeros(3 * len(get_fixed_nodes(X_nodes)))
 
-    Nt = 200
-    node19_x = []
-    node20_x = []
+    # Time integration parameters (matching explicit solver total time)
+    total_time = 0.05  # Total simulation time in seconds (matching explicit)
+    Nt = int(total_time / time_step)  # Number of steps based on total_time and dt
+    
+    print(f"\nTime integration:")
+    print(f"  dt = {time_step:.2e} s")
+    print(f"  Steps = {Nt}")
+    print(f"  Total time = {Nt * time_step:.4f} s")
+    
+    # Storage for tracking (matches C++ test_feat10_explicit.cc: node 23)
+    plot_target_node = 23
+    if X_nodes.shape[0] <= plot_target_node:
+        raise ValueError(f"Mesh too small for node {plot_target_node} tracking.")
+    target_node_x = []
+    target_node_y = []
+    target_node_z = []
     outer_iters_per_step = []
     inner_iters_per_step = []
 
-    for step in range(Nt):
-        if step > 50:
-            f_ext[3*19 + 0] = 0.0  # remove force after step 50
+    print("\nStarting simulation...\n")
 
+    for step in range(Nt):
         # ---- switch to Newton-based ALM step ----
         v_res, lam_res, outer_iters, inner_iters = alm_newton_step(
             v_guess, lam_guess, v_prev, q_prev, M_full,
@@ -416,36 +444,57 @@ if __name__ == "__main__":
         q_new = q_prev + time_step * v_guess
         x_nodes = q_new.reshape(X_nodes.shape[0], 3)
 
-        print(f"Step {step}: node 19 position = {x_nodes[19]}, node 20 position = {x_nodes[20]}")
-        print(f"Step {step}: outer iters = {outer_iters}, newton iters = {inner_iters}")
-
-        node19_x.append(x_nodes[19, 0])
-        node20_x.append(x_nodes[20, 0])
+        # Save data (track node 23 to match C++ implementation)
+        target_node_x.append(x_nodes[plot_target_node, 0])
+        target_node_y.append(x_nodes[plot_target_node, 1])
+        target_node_z.append(x_nodes[plot_target_node, 2])
         outer_iters_per_step.append(outer_iters)
         inner_iters_per_step.append(inner_iters if inner_iters is not None else 0)
+
+        # Print progress every 5 steps (matching explicit format)
+        if step % 5 == 0:
+            print(f"Step {step}/{Nt}: node {plot_target_node} x = {x_nodes[plot_target_node,0]:.17e} y = {x_nodes[plot_target_node,1]:.17e} z = {x_nodes[plot_target_node,2]:.17e}")
 
         q_prev = q_new.copy()
         v_prev = v_guess.copy()
 
+    print("\nSimulation complete!\n")
+
+    # Save results to CSV file (matches C++ format: step,x_position,y_position,z_position)
+    output_file = os.path.join(script_dir, "feat10_python_newton.csv")
+    data = np.column_stack([
+        np.arange(len(target_node_x)),
+        np.array(target_node_x),
+        np.array(target_node_y),
+        np.array(target_node_z)
+    ])
+    header = "step,x_position,y_position,z_position"
+    np.savetxt(output_file, data, delimiter=',', header=header, comments='', fmt='%.17e')
+    print(f"Wrote CSV: {output_file}")
+    
     # Plot after simulation
-    fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(12, 10))
-
-    ax1.plot(range(Nt), node19_x, marker='o', linewidth=2, markersize=4)
-    ax1.set_xlabel("Step"); ax1.set_ylabel("Node 19 X Position")
-    ax1.set_title("Node 19 X Position vs Step"); ax1.grid(True)
-
-    ax2.plot(range(Nt), node20_x, marker='x', color='orange', linewidth=2, markersize=4)
-    ax2.set_xlabel("Step"); ax2.set_ylabel("Node 20 X Position")
-    ax2.set_title("Node 20 X Position vs Step"); ax2.grid(True)
-
-    ax3.plot(range(Nt), outer_iters_per_step, marker='s', color='red', linewidth=2, markersize=4)
-    ax3.set_xlabel("Step"); ax3.set_ylabel("Outer Iterations")
-    ax3.set_title("Outer Loop Iterations per Step"); ax3.grid(True); ax3.set_ylim(bottom=0)
-
-    ax4.plot(range(Nt), inner_iters_per_step, marker='^', color='green', linewidth=2, markersize=4)
-    ax4.set_xlabel("Step"); ax4.set_ylabel("Newton Iterations")
-    ax4.set_title("Newton Iterations per Step"); ax4.grid(True); ax4.set_ylim(bottom=0)
-
+    fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(15, 5))
+    
+    step_array = np.arange(len(target_node_x))
+    
+    ax1.plot(step_array, target_node_x, linewidth=2)
+    ax1.set_xlabel("Step")
+    ax1.set_ylabel("Node 23 X Position (m)")
+    ax1.set_title("Node 23 X Position vs Step (Newton)")
+    ax1.grid(True)
+    
+    ax2.plot(step_array, target_node_y, color='orange', linewidth=2)
+    ax2.set_xlabel("Step")
+    ax2.set_ylabel("Node 23 Y Position (m)")
+    ax2.set_title("Node 23 Y Position vs Step (Newton)")
+    ax2.grid(True)
+    
+    ax3.plot(step_array, target_node_z, color='green', linewidth=2)
+    ax3.set_xlabel("Step")
+    ax3.set_ylabel("Node 23 Z Position (m)")
+    ax3.set_title("Node 23 Z Position vs Step (Newton)")
+    ax3.grid(True)
+    
     plt.tight_layout()
     plt.show()
 
@@ -461,14 +510,3 @@ if __name__ == "__main__":
     print(f"Max Newton iterations in a step: {max(inner_iters_per_step)}")
     print(f"Min outer iterations in a step: {min(outer_iters_per_step)}")
     print(f"Min Newton iterations in a step: {min(inner_iters_per_step)}")
-
-    # Cumulative iteration plot
-    plt.figure(figsize=(10, 6))
-    cumulative_outer = np.cumsum(outer_iters_per_step)
-    cumulative_inner = np.cumsum(inner_iters_per_step)
-    plt.plot(range(Nt), cumulative_outer, label='Cumulative Outer Iterations', linewidth=2)
-    plt.plot(range(Nt), cumulative_inner, label='Cumulative Newton Iterations', linewidth=2)
-    plt.xlabel("Step"); plt.ylabel("Cumulative Iterations")
-    plt.title("Cumulative Iteration Count")
-    plt.legend(); plt.grid(True)
-    plt.show()
