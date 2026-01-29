@@ -247,6 +247,10 @@ int main(int argc, char** argv) {
   for (int step = 0; step < opt.steps; ++step) {
     solver.Solve();
 
+    // Print timing for this step
+    std::cout << "Step " << step << ": SyncedExplicit kernel time: "
+              << solver.GetLastStepTime() << " ms" << std::endl;
+
     double x_target = 0.0, y_target = 0.0, z_target = 0.0;
     HANDLE_ERROR(cudaMemcpy(&x_target,
                             gpu_t10_data.GetX12DevicePtr() + plot_target_node,

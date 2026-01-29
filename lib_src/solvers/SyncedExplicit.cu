@@ -138,7 +138,10 @@ SyncedExplicitSolver::SyncedExplicitSolver(GPU_FEAT10_Data* element)
       current_time_(0.0),
       current_step_(0),
       is_initialized_(false),
-      inv_mass_ready_(false) {
+      inv_mass_ready_(false),
+      timing_start_(nullptr),
+      timing_stop_(nullptr),
+      last_step_time_ms_(0.0f) {
   // Set default parameters
   params_.dt = 1e-6;
 
@@ -152,6 +155,10 @@ void SyncedExplicitSolver::AllocateMemory() {
   HANDLE_ERROR(cudaMalloc(&d_vel_, n_nodes_ * 3 * sizeof(double)));
   HANDLE_ERROR(cudaMemset(d_vel_, 0, n_nodes_ * 3 * sizeof(double)));
   HANDLE_ERROR(cudaMalloc(&d_inv_mass_, n_nodes_ * sizeof(double)));
+
+  // Create timing events
+  HANDLE_ERROR(cudaEventCreate(&timing_start_));
+  HANDLE_ERROR(cudaEventCreate(&timing_stop_));
 
   is_initialized_ = true;
 }
@@ -168,6 +175,14 @@ void SyncedExplicitSolver::FreeMemory() {
   if (d_fixed_nodes_) {
     HANDLE_ERROR(cudaFree(d_fixed_nodes_));
     d_fixed_nodes_ = nullptr;
+  }
+  if (timing_start_) {
+    HANDLE_ERROR(cudaEventDestroy(timing_start_));
+    timing_start_ = nullptr;
+  }
+  if (timing_stop_) {
+    HANDLE_ERROR(cudaEventDestroy(timing_stop_));
+    timing_stop_ = nullptr;
   }
   is_initialized_ = false;
 }
@@ -236,6 +251,8 @@ void SyncedExplicitSolver::Solve() {
   const int clear_grid = (n_nodes_ * 3 + block_size - 1) / block_size;
   const int node_grid = (node_threads + block_size - 1) / block_size;
 
+  HANDLE_ERROR(cudaEventRecord(timing_start_));
+
   if (!inv_mass_ready_) {
     explicit_compute_inv_mass<<<grid_size, block_size>>>(
         d_inv_mass_, element_->GetLumpedMassDevicePtr(), n_nodes_);
@@ -265,6 +282,11 @@ void SyncedExplicitSolver::Solve() {
   // Step 4: Update positions
   explicit_position_update<<<grid_size, block_size>>>(
       element_->d_data, d_vel_, params_.dt);
+
+  // Record timing
+  HANDLE_ERROR(cudaEventRecord(timing_stop_));
+  HANDLE_ERROR(cudaEventSynchronize(timing_stop_));
+  HANDLE_ERROR(cudaEventElapsedTime(&last_step_time_ms_, timing_start_, timing_stop_));
 
   // Update time tracking
   current_time_ += params_.dt;
