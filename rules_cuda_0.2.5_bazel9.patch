@@ -1,0 +1,170 @@
+diff --git a/cuda/private/cuda_helper.bzl b/cuda/private/cuda_helper.bzl
+index 1dd0c73..2ee90a8 100644
+--- a/cuda/private/cuda_helper.bzl
++++ b/cuda/private/cuda_helper.bzl
+@@ -1,5 +1,6 @@
+ """private helpers"""
+ 
++load("@@rules_cc+//cc:defs.bzl", "CcInfo", "cc_common")
+ load("@bazel_skylib//lib:paths.bzl", "paths")
+ load("@bazel_skylib//lib:types.bzl", "types")
+ load("@bazel_skylib//rules:common_settings.bzl", "BuildSettingInfo")
+diff --git a/cuda/private/rules/cuda_library.bzl b/cuda/private/rules/cuda_library.bzl
+index d7b6ddc..c262c66 100644
+--- a/cuda/private/rules/cuda_library.bzl
++++ b/cuda/private/rules/cuda_library.bzl
+@@ -1,3 +1,4 @@
++load("@@rules_cc+//cc:defs.bzl", "CcInfo", "cc_common")
+ load("@bazel_tools//tools/cpp:toolchain_utils.bzl", "find_cpp_toolchain")
+ load("//cuda/private:actions/compile.bzl", "compile")
+ load("//cuda/private:actions/dlink.bzl", "device_link")
+diff --git a/cuda/private/rules/cuda_objects.bzl b/cuda/private/rules/cuda_objects.bzl
+index 0c9c1b8..a74f8a7 100644
+--- a/cuda/private/rules/cuda_objects.bzl
++++ b/cuda/private/rules/cuda_objects.bzl
+@@ -1,3 +1,4 @@
++load("@@rules_cc+//cc:defs.bzl", "CcInfo", "cc_common")
+ load("@bazel_tools//tools/cpp:toolchain_utils.bzl", "find_cpp_toolchain")
+ load("//cuda/private:actions/compile.bzl", "compile")
+ load("//cuda/private:cuda_helper.bzl", "cuda_helper")
+
+diff --git a/cuda/private/templates/BUILD.local_cuda_shared b/cuda/private/templates/BUILD.local_cuda_shared
+index 8760094..cd7c3f0 100644
+--- a/cuda/private/templates/BUILD.local_cuda_shared
++++ b/cuda/private/templates/BUILD.local_cuda_shared
+@@ -1,6 +1,14 @@
+ load("@bazel_skylib//rules:common_settings.bzl", "bool_setting")  # @unused
++load("@@rules_cc+//cc:defs.bzl", "cc_import", "cc_library")
+ load("@rules_cuda//cuda:defs.bzl", "cc_import_versioned_sos", "if_linux", "if_windows")  # @unused
+ 
+ package(
+     default_visibility = ["//visibility:public"],
+ )
++
++# Bazel 9 no longer implicitly exports source files as targets.
++# rules_cuda's generated toolchain BUILD refers to CUDA tools as file targets
++# (e.g. :cuda/bin/nvcc), so explicitly export the CUDA binary tree.
++exports_files(
++    glob(["cuda/bin/**"], allow_empty = True, exclude_directories = 1),
++)
+
+diff --git a/cuda/private/os_helpers.bzl b/cuda/private/os_helpers.bzl
+index 0b7dcf7..82cc409 100644
+--- a/cuda/private/os_helpers.bzl
++++ b/cuda/private/os_helpers.bzl
+@@ -1,4 +1,5 @@
+ load("@bazel_skylib//lib:paths.bzl", "paths")
++load("@@rules_cc+//cc:defs.bzl", "cc_import", "cc_library")
+ 
+ def if_linux(if_true, if_false = []):
+     return select({
+@@ -27,13 +28,13 @@ def cc_import_versioned_sos(name, shared_library):
+     # NOTE: only empty when the componnent is not installed on the system, say, cublas is not installed with apt-get
+     so_paths = native.glob([shared_library + "*"], allow_empty = True)
+ 
+-    [native.cc_import(
++    [cc_import(
+         name = paths.basename(p),
+         shared_library = p,
+         target_compatible_with = ["@platforms//os:linux"],
+     ) for p in so_paths]
+ 
+-    native.cc_library(
++    cc_library(
+         name = name,
+         deps = [":%s" % paths.basename(p) for p in so_paths],
+     )
+
+diff --git a/cuda/private/macros/cuda_binary.bzl b/cuda/private/macros/cuda_binary.bzl
+index 2f28306..134c7bf 100644
+--- a/cuda/private/macros/cuda_binary.bzl
++++ b/cuda/private/macros/cuda_binary.bzl
+@@ -1,4 +1,5 @@
+ load("//cuda/private:rules/cuda_library.bzl", _cuda_library = "cuda_library")
++load("@@rules_cc+//cc:defs.bzl", "cc_binary")
+ 
+ def cuda_binary(name, **attrs):
+     """A macro wraps cuda_library and cc_binary to ensure the binary is compiled with the CUDA compiler.
+@@ -27,7 +28,7 @@ def cuda_binary(name, **attrs):
+         **cuda_library_attrs
+     )
+ 
+-    native.cc_binary(
++    cc_binary(
+         name = name,
+         deps = [cuda_library_name],
+         **{k: v for k, v in attrs.items() if k not in cuda_library_only_attrs}
+     )
+
+diff --git a/cuda/private/macros/cuda_test.bzl b/cuda/private/macros/cuda_test.bzl
+index 7eae157..c0366ce 100644
+--- a/cuda/private/macros/cuda_test.bzl
++++ b/cuda/private/macros/cuda_test.bzl
+@@ -1,4 +1,5 @@
+ load("//cuda/private:rules/cuda_library.bzl", _cuda_library = "cuda_library")
++load("@@rules_cc+//cc:defs.bzl", "cc_test")
+ 
+ def cuda_test(name, **attrs):
+     """A macro wraps cuda_library and cc_test to ensure the test is compiled with the CUDA compiler.
+@@ -28,7 +29,7 @@ def cuda_test(name, **attrs):
+         **cuda_library_attrs
+     )
+ 
+-    native.cc_test(
++    cc_test(
+         name = name,
+         deps = [cuda_library_name],
+         **{k: v for k, v in attrs.items() if k not in cuda_library_only_attrs}
+     )
+
+diff --git a/cuda/private/actions/compile.bzl b/cuda/private/actions/compile.bzl
+index 4078762..2c28ad8 100644
+--- a/cuda/private/actions/compile.bzl
++++ b/cuda/private/actions/compile.bzl
+@@ -1,3 +1,4 @@
++load("@@rules_cc+//cc:defs.bzl", "cc_common")
+ load("@bazel_tools//tools/build_defs/cc:action_names.bzl", CC_ACTION_NAMES = "ACTION_NAMES")
+ load("//cuda/private:action_names.bzl", "ACTION_NAMES")
+ load("//cuda/private:cuda_helper.bzl", "cuda_helper")
+
+diff --git a/cuda/private/actions/dlink.bzl b/cuda/private/actions/dlink.bzl
+index 8b8be00..c91a86e 100644
+--- a/cuda/private/actions/dlink.bzl
++++ b/cuda/private/actions/dlink.bzl
+@@ -1,5 +1,6 @@
+ ""
+ 
++load("@@rules_cc+//cc:defs.bzl", "cc_common")
+ load("@bazel_tools//tools/build_defs/cc:action_names.bzl", CC_ACTION_NAMES = "ACTION_NAMES")
+ load("//cuda/private:action_names.bzl", "ACTION_NAMES")
+ load("//cuda/private:actions/compile.bzl", "compile")
+
+diff --git a/cuda/private/toolchain_configs/clang.bzl b/cuda/private/toolchain_configs/clang.bzl
+index 4c4a5b8..4c0c8b7 100644
+--- a/cuda/private/toolchain_configs/clang.bzl
++++ b/cuda/private/toolchain_configs/clang.bzl
+@@ -1,3 +1,4 @@
++load("@@rules_cc+//cc:defs.bzl", "cc_common")
+ load("@bazel_skylib//lib:paths.bzl", "paths")
+ load("@bazel_tools//tools/build_defs/cc:action_names.bzl", CC_ACTION_NAMES = "ACTION_NAMES")
+ load("@bazel_tools//tools/cpp:toolchain_utils.bzl", "find_cpp_toolchain")
+
+diff --git a/cuda/private/toolchain_configs/nvcc.bzl b/cuda/private/toolchain_configs/nvcc.bzl
+index 4af330e..33cc495 100644
+--- a/cuda/private/toolchain_configs/nvcc.bzl
++++ b/cuda/private/toolchain_configs/nvcc.bzl
+@@ -1,3 +1,4 @@
++load("@@rules_cc+//cc:defs.bzl", "cc_common")
+ load("@bazel_skylib//lib:paths.bzl", "paths")
+ load("@bazel_tools//tools/build_defs/cc:action_names.bzl", CC_ACTION_NAMES = "ACTION_NAMES")
+ load("@bazel_tools//tools/cpp:toolchain_utils.bzl", "find_cpp_toolchain")
+
+diff --git a/cuda/private/toolchain_configs/nvcc_msvc.bzl b/cuda/private/toolchain_configs/nvcc_msvc.bzl
+index 50f0544..3d718ca 100644
+--- a/cuda/private/toolchain_configs/nvcc_msvc.bzl
++++ b/cuda/private/toolchain_configs/nvcc_msvc.bzl
+@@ -1,3 +1,4 @@
++load("@@rules_cc+//cc:defs.bzl", "cc_common")
+ load("@bazel_skylib//lib:paths.bzl", "paths")
+ load("@bazel_tools//tools/build_defs/cc:action_names.bzl", CC_ACTION_NAMES = "ACTION_NAMES")
+ load("@bazel_tools//tools/cpp:toolchain_utils.bzl", "find_cpp_toolchain")

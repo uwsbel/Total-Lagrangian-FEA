@@ -558,6 +558,10 @@ int main(int argc, char** argv) {
   SyncedNewtonParams params = {1e-6, 0.0, 1e-6, 1e12, 3, 10, dt};
   SyncedNewtonSolver solver(&gpu_t10_data, gpu_t10_data.get_n_constraint());
   solver.Setup();
+  // The global Hessian CSR structure does not change across time steps here
+  // (penalty contact is applied as external force), so reuse CuDSS analysis and
+  // prefer refactorization for faster solves.
+  solver.SetFixedSparsityPattern(true);
   solver.SetParameters(&params);
   solver.AnalyzeHessianSparsity();
 

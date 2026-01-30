@@ -19,6 +19,8 @@
 #include <thrust/scan.h>
 
 #include <algorithm>
+#include <chrono>
+#include <iomanip>
 #include <vector>
 
 #include "../elements/ANCF3243Data.cuh"
@@ -1019,13 +1021,23 @@ void SyncedNewtonSolver::OneStepNewtonCuDSS() {
 
   HANDLE_ERROR(cudaEventRecord(start));
 
-  // Only run analysis if needed
-  if (!analysis_done_ || !fixed_sparsity_pattern_) {
+  // Analysis (symbolic) depends on the matrix structure (CSR pattern), not on
+  // the numeric values. Since this solver builds a fixed CSR pattern once and
+  // reuses it, analysis only needs to run once.
+  if (!analysis_done_) {
+    const auto t0 = std::chrono::steady_clock::now();
+    std::cout << "CuDSS analysis..." << std::endl;
     CUDSS_OK(cudssExecute(cudss_handle_, CUDSS_PHASE_ANALYSIS, cudss_config_,
                           cudss_data_, dssA, dssX, dssB));
     analysis_done_ = true;
     factorization_done_ =
         false;  // Reset factorization flag when analysis is redone
+    const auto t1 = std::chrono::steady_clock::now();
+    const double secs =
+        std::chrono::duration_cast<std::chrono::duration<double>>(t1 - t0)
+            .count();
+    std::cout << "CuDSS analysis done (" << std::fixed << std::setprecision(3)
+              << secs << " s)" << std::endl;
   }
 
   // Dispatch based on element type

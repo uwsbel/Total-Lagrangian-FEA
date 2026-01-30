@@ -90,17 +90,41 @@ static void ConfigureDemeRuntimePathsFromBazelBin() {
   // The `external/` dir lives under the `bin/` root, not next to the
   // executable, so search upward from the executable directory for a matching
   // install tree.
-  const fs::path install_rel =
-      fs::path("external") / "+_repo_rules+dem_engine" / "dem_engine";
+  // Repository names can differ depending on whether DEM-Engine is brought in
+  // via bzlmod extensions (`+_repo_rules+...`) or `new_local_repository`
+  // (`+new_local_repository+...`).
+  const fs::path install_rel_candidates[] = {
+      fs::path("external") / "+new_local_repository+dem_engine" / "dem_engine",
+      fs::path("external") / "+_repo_rules+dem_engine" / "dem_engine",
+  };
   for (fs::path p = exe.parent_path(); !p.empty(); p = p.parent_path()) {
-    if (try_set_from_install(p / install_rel))
-      return;
+    for (const auto& install_rel : install_rel_candidates) {
+      if (try_set_from_install(p / install_rel))
+        return;
+    }
   }
 
   // Fallback: common symlink location in the workspace when launched as
   // `./bazel-bin/...`.
-  if (try_set_from_install(fs::path("bazel-bin") / install_rel))
-    return;
+  for (const auto& install_rel : install_rel_candidates) {
+    if (try_set_from_install(fs::path("bazel-bin") / install_rel))
+      return;
+  }
+
+  // If we still didn't find the runtime data/include, emit a one-time hint.
+  // DEME will likely fail later (kernel JIT / includes) in a non-obvious way.
+  static bool warned = false;
+  if (!warned) {
+    warned = true;
+    std::cerr
+        << "[DEME] Warning: failed to locate DEM-Engine runtime data/include"
+           " under bazel-bin. Set DEME_DATA_PATH and DEME_INCLUDE_PATH if"
+           " running outside Bazel.\n"
+        << "       DEMERuntimeDataHelper::data_path = "
+        << DEMERuntimeDataHelper::data_path << "\n"
+        << "       DEMERuntimeDataHelper::include_path = "
+        << DEMERuntimeDataHelper::include_path << "\n";
+  }
 }
 
 static float EnvFloatOr(const char* name, float default_value) {
