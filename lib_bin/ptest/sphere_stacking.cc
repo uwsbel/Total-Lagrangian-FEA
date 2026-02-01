@@ -23,6 +23,8 @@
 #include <memory>
 #include <string_view>
 
+#include "rigid_equivalent_utils.h"
+
 #include "../../lib_src/collision/DemeMeshCollisionSystem.h"
 #include "../../lib_src/elements/FEAT10Data.cuh"
 #include "../../lib_src/solvers/SyncedNewton.cuh"
@@ -108,6 +110,9 @@ int main(int argc, char** argv) {
   int export_interval        = 10;
   std::string sphere_res     = "low";
   std::string out_suffix;
+  std::string rigid_equiv_csv;
+  int rigid_equiv_interval = 1;
+  bool rigid_equiv_enabled = false;
 
   const bool has_flag_args =
       (argc > 1 && argv[1] &&
@@ -132,6 +137,12 @@ int main(int argc, char** argv) {
     cli.AddInt("steps", num_steps, "max simulation steps");
     cli.AddInt("export_interval", 10, "VTK export interval (0 disables)");
     cli.AddString("out_suffix", "", "suffix appended to output folder name");
+    cli.AddOptionalString(
+        "rigid_equiv_csv", "",
+        "Write rigid-equivalent motion (CoM, v_com, omega) to CSV under output_dir "
+        "(optional value is filename; default rigid_equiv.csv)");
+    cli.AddInt("rigid_equiv_interval", rigid_equiv_interval,
+               "Steps between rigid-equivalent CSV rows (>= 1)");
 
     std::string err;
     if (!cli.Parse(argc, argv, &err) || cli.HelpRequested()) {
@@ -151,6 +162,9 @@ int main(int argc, char** argv) {
     max_steps              = cli.GetInt("steps");
     export_interval        = cli.GetInt("export_interval");
     out_suffix             = cli.GetString("out_suffix");
+    rigid_equiv_enabled    = cli.IsSet("rigid_equiv_csv");
+    rigid_equiv_csv        = cli.GetString("rigid_equiv_csv");
+    rigid_equiv_interval   = cli.GetInt("rigid_equiv_interval");
   } else {
     // Backward-compatible positional args:
     //   argv[1]=CoR, argv[2]=mu_s (mu_k defaults to mu_s), argv[3]=self_collision (0/1),
@@ -195,6 +209,11 @@ int main(int argc, char** argv) {
               << " (must not contain path separators)" << std::endl;
     return 1;
   }
+  if (rigid_equiv_interval < 1) {
+    std::cerr << "Invalid --rigid_equiv_interval: " << rigid_equiv_interval
+              << " (expected >= 1)" << std::endl;
+    return 1;
+  }
 
   std::string output_dir = "output/sphere_stacking";
   if (!out_suffix.empty()) {
@@ -212,6 +231,23 @@ int main(int argc, char** argv) {
   std::cout << "Export interval: " << export_interval << std::endl;
 
   std::filesystem::create_directories(output_dir);
+
+  std::unique_ptr<ANCFPtest::RigidEquivalentCsvLogger> rigid_logger;
+  if (rigid_equiv_enabled) {
+    std::string csv_name =
+        rigid_equiv_csv.empty() ? "rigid_equiv.csv" : rigid_equiv_csv;
+    if (csv_name.find('/') != std::string::npos ||
+        csv_name.find('\\') != std::string::npos) {
+      std::cerr << "Invalid --rigid_equiv_csv: " << csv_name
+                << " (must not contain path separators)" << std::endl;
+      return 1;
+    }
+    rigid_logger = std::make_unique<ANCFPtest::RigidEquivalentCsvLogger>(
+        output_dir + "/" + csv_name);
+    if (!rigid_logger->ok()) {
+      rigid_logger.reset();
+    }
+  }
 
   // =========================================================================
   // Load meshes
@@ -533,6 +569,9 @@ int main(int argc, char** argv) {
   Eigen::VectorXd displacement(n_nodes * 3);
   displacement.setZero();
 
+  Eigen::VectorXd x12_current, y12_current, z12_current;
+  Eigen::VectorXd v_xyz_current;
+
   for (int step = 0; step < max_steps; ++step) {
     // Update collision node buffer from solver state (device->device)
     HANDLE_ERROR(cudaMemcpy(d_nodes_collision, gpu_t10_data.GetX12DevicePtr(),
@@ -574,11 +613,46 @@ int main(int argc, char** argv) {
     // Newton solve
     solver.Solve();
 
-    // Export VTK
-    if (export_interval > 0 && step % export_interval == 0) {
-      Eigen::VectorXd x12_current, y12_current, z12_current;
-      gpu_t10_data.RetrievePositionToCPU(x12_current, y12_current, z12_current);
+    const bool do_log = (rigid_logger && (step % rigid_equiv_interval == 0));
+    const bool do_export =
+        (export_interval > 0 && step % export_interval == 0);
+    const bool do_progress = (step % 50 == 0);
 
+    if (do_log || do_export || do_progress) {
+      gpu_t10_data.RetrievePositionToCPU(x12_current, y12_current, z12_current);
+    }
+
+    if (do_log) {
+      v_xyz_current.resize(n_nodes * 3);
+      HANDLE_ERROR(cudaMemcpy(v_xyz_current.data(), d_vel_guess,
+                              static_cast<size_t>(n_nodes) * 3 * sizeof(double),
+                              cudaMemcpyDeviceToHost));
+      const double time = (step + 1) * dt;
+      const std::string s1 =
+          inst_sphere1.name.empty() ? "sphere1" : inst_sphere1.name;
+      const std::string s2 =
+          inst_sphere2.name.empty() ? "sphere2" : inst_sphere2.name;
+      const std::string s3 =
+          inst_sphere3.name.empty() ? "sphere3" : inst_sphere3.name;
+      rigid_logger->WriteRow(
+          time, step, s1,
+          ANCFPtest::ComputeRigidEquivalentForInstance(
+              x12_current, y12_current, z12_current, v_xyz_current, lumped_mass,
+              inst_sphere1));
+      rigid_logger->WriteRow(
+          time, step, s2,
+          ANCFPtest::ComputeRigidEquivalentForInstance(
+              x12_current, y12_current, z12_current, v_xyz_current, lumped_mass,
+              inst_sphere2));
+      rigid_logger->WriteRow(
+          time, step, s3,
+          ANCFPtest::ComputeRigidEquivalentForInstance(
+              x12_current, y12_current, z12_current, v_xyz_current, lumped_mass,
+              inst_sphere3));
+    }
+
+    // Export VTK
+    if (do_export) {
       Eigen::MatrixXd current_nodes(n_nodes, 3);
       for (int i = 0; i < n_nodes; ++i) {
         current_nodes(i, 0)     = x12_current(i);
@@ -597,10 +671,7 @@ int main(int argc, char** argv) {
     }
 
     // Print progress
-    if (step % 50 == 0) {
-      Eigen::VectorXd x12_current, y12_current, z12_current;
-      gpu_t10_data.RetrievePositionToCPU(x12_current, y12_current, z12_current);
-
+    if (do_progress) {
       double top_z_avg = 0.0;
       for (int i = 0; i < inst_sphere3.num_nodes; ++i) {
         int idx = inst_sphere3.node_offset + i;

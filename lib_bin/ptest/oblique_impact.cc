@@ -9,10 +9,13 @@
 #include <iomanip>
 #include <iostream>
 #include <memory>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <string_view>
 #include <vector>
+
+#include "rigid_equivalent_utils.h"
 
 #include "../../lib_src/collision/DemeMeshCollisionSystem.h"
 #include "../../lib_src/elements/FEAT10Data.cuh"
@@ -47,15 +50,18 @@ int main(int argc, char** argv) {
   double theta = 0.0;
   double v_i   = 1.0;
 
-  double contact_mu_s = 0.01;
-  double contact_mu_k = 0.01;
-  double contact_cor  = 0.4;
-  const double contact_stiffness = 1e8;
+  double contact_mu_s = 0.3;
+  double contact_mu_k = 0.3;
+  double contact_cor  = 1.0;
+  const double contact_stiffness = 5e7;
 
-  const double dt = 2e-4;
-  int max_steps = 1000;
-  int export_interval = 5;
+  const double dt = 1e-4;
+  int max_steps = 2000;
+  int export_interval = 10;
   std::string out_suffix;
+  std::string rigid_equiv_csv;
+  int rigid_equiv_interval = 1;
+  bool rigid_equiv_enabled = false;
 
   const bool has_flag_args =
       (argc > 1 && argv[1] &&
@@ -76,6 +82,12 @@ int main(int argc, char** argv) {
     cli.AddInt("steps", max_steps, "max simulation steps");
     cli.AddInt("export_interval", export_interval, "VTK export interval (0 disables)");
     cli.AddString("out_suffix", "", "suffix appended to output folder name");
+    cli.AddOptionalString(
+        "rigid_equiv_csv", "",
+        "Write rigid-equivalent motion (CoM, v_com, omega) to CSV under output_dir "
+        "(optional value is filename; default rigid_equiv.csv)");
+    cli.AddInt("rigid_equiv_interval", rigid_equiv_interval,
+               "Steps between rigid-equivalent CSV rows (>= 1)");
 
     std::string err;
     if (!cli.Parse(argc, argv, &err) || cli.HelpRequested()) {
@@ -92,6 +104,9 @@ int main(int argc, char** argv) {
     max_steps = cli.GetInt("steps");
     export_interval = cli.GetInt("export_interval");
     out_suffix = cli.GetString("out_suffix");
+    rigid_equiv_enabled = cli.IsSet("rigid_equiv_csv");
+    rigid_equiv_csv = cli.GetString("rigid_equiv_csv");
+    rigid_equiv_interval = cli.GetInt("rigid_equiv_interval");
   } else {
     if (argc > 1) theta = std::atof(argv[1]);
     if (argc > 2) v_i = std::atof(argv[2]);
@@ -107,12 +122,34 @@ int main(int argc, char** argv) {
               << " (must not contain path separators)" << std::endl;
     return 1;
   }
+  if (rigid_equiv_interval < 1) {
+    std::cerr << "Invalid --rigid_equiv_interval: " << rigid_equiv_interval
+              << " (expected >= 1)" << std::endl;
+    return 1;
+  }
 
   std::string output_dir = "output/oblique_impact";
   if (!out_suffix.empty()) {
     output_dir += "_" + out_suffix;
   }
   std::filesystem::create_directories(output_dir);
+
+  std::unique_ptr<ANCFPtest::RigidEquivalentCsvLogger> rigid_logger;
+  if (rigid_equiv_enabled) {
+    std::string csv_name =
+        rigid_equiv_csv.empty() ? "rigid_equiv.csv" : rigid_equiv_csv;
+    if (csv_name.find('/') != std::string::npos ||
+        csv_name.find('\\') != std::string::npos) {
+      std::cerr << "Invalid --rigid_equiv_csv: " << csv_name
+                << " (must not contain path separators)" << std::endl;
+      return 1;
+    }
+    rigid_logger = std::make_unique<ANCFPtest::RigidEquivalentCsvLogger>(
+        output_dir + "/" + csv_name);
+    if (!rigid_logger->ok()) {
+      rigid_logger.reset();
+    }
+  }
 
   const double v_n = v_i * std::cos(theta);
   const double v_t = v_i * std::sin(theta);
@@ -206,9 +243,9 @@ int main(int argc, char** argv) {
                      h_z12, elements);
 
   const SolidMaterialProperties mat_sphere = SolidMaterialProperties::SVK(
-      1e7, 0.3, 70.7355, 2e4, 2e4);
+      1e7, 0.3, 70.7355, 5e1, 5e1);
   const SolidMaterialProperties mat_plate = SolidMaterialProperties::SVK(
-      1e7, 0.3, 70.7355, 2e4, 2e4);
+      1e7, 0.3, 70.7355, 5e1, 5e1);
 
   gpu_t10_data.ApplyMaterial(mat_sphere);
   gpu_t10_data.SetDensityForElementRange(inst_plate.element_offset,
@@ -227,6 +264,26 @@ int main(int argc, char** argv) {
   solver.Setup();
   solver.SetParameters(&params);
   solver.AnalyzeHessianSparsity();
+
+  Eigen::VectorXd lumped_mass(n_nodes);
+  lumped_mass.setZero();
+  {
+    std::vector<int> offsets;
+    std::vector<int> columns;
+    std::vector<double> values;
+    gpu_t10_data.RetrieveMassCSRToCPU(offsets, columns, values);
+    if (static_cast<int>(offsets.size()) == n_nodes + 1) {
+      for (int i = 0; i < n_nodes; ++i) {
+        double sum = 0.0;
+        for (int k = offsets[i]; k < offsets[i + 1]; ++k) {
+          sum += values[k];
+        }
+        lumped_mass(i) = sum;
+      }
+    } else {
+      lumped_mass.setOnes();
+    }
+  }
 
   Eigen::VectorXd h_v0 = Eigen::VectorXd::Zero(n_nodes * 3);
   for (int i = 0; i < inst_sphere.num_nodes; ++i) {
@@ -288,6 +345,9 @@ int main(int argc, char** argv) {
   Eigen::VectorXd displacement(n_nodes * 3);
   displacement.setZero();
 
+  Eigen::VectorXd x12_current, y12_current, z12_current;
+  Eigen::VectorXd v_xyz_current;
+
   for (int step = 0; step < max_steps; ++step) {
     HANDLE_ERROR(cudaMemcpy(d_nodes_collision, gpu_t10_data.GetX12DevicePtr(),
                             n_nodes * sizeof(double), cudaMemcpyDeviceToDevice));
@@ -317,10 +377,30 @@ int main(int argc, char** argv) {
 
     solver.Solve();
 
-    if (export_interval > 0 && step % export_interval == 0) {
-      Eigen::VectorXd x12_current, y12_current, z12_current;
-      gpu_t10_data.RetrievePositionToCPU(x12_current, y12_current, z12_current);
+    const bool do_log = (rigid_logger && (step % rigid_equiv_interval == 0));
+    const bool do_export =
+        (export_interval > 0 && (step % export_interval == 0));
 
+    if (do_log || do_export) {
+      gpu_t10_data.RetrievePositionToCPU(x12_current, y12_current, z12_current);
+    }
+
+    if (do_log) {
+      v_xyz_current.resize(n_nodes * 3);
+      HANDLE_ERROR(cudaMemcpy(v_xyz_current.data(), d_vel_guess,
+                              static_cast<size_t>(n_nodes) * 3 * sizeof(double),
+                              cudaMemcpyDeviceToHost));
+      const double time = (step + 1) * dt;
+      const std::string body_name =
+          inst_sphere.name.empty() ? "sphere" : inst_sphere.name;
+      rigid_logger->WriteRow(
+          time, step, body_name,
+          ANCFPtest::ComputeRigidEquivalentForInstance(
+              x12_current, y12_current, z12_current, v_xyz_current, lumped_mass,
+              inst_sphere));
+    }
+
+    if (export_interval > 0 && step % export_interval == 0) {
       Eigen::MatrixXd current_nodes(n_nodes, 3);
       for (int i = 0; i < n_nodes; ++i) {
         current_nodes(i, 0)     = x12_current(i);
