@@ -54,7 +54,8 @@ __device__ __forceinline__ void reduce_scale_and_atomicAdd(
  * 4 threads per element (one per QP), 64 threads per block. Uses warp shuffle reduction.
  */
 __global__ void internalF_MooneyRivlin_4QP(const GPU_FEAT10Opt_Data* __restrict__ d_data,
-                                           bool writeOutDefGradientF) {
+                                           bool writeOutDefGradientF,
+                                           bool writeOutPiolaP) {
   // Define a tile of four threads; each thread handles one quadrature point
   constexpr int TILE = 4;
   namespace cg = cooperative_groups;
@@ -73,8 +74,8 @@ __global__ void internalF_MooneyRivlin_4QP(const GPU_FEAT10Opt_Data* __restrict_
   float* s_invJacobian = s_F + 9 * blockDim.x;
   float* s_PK1 = s_invJacobian + 9 * blockDim.x;
 
-  // Early exit for padded elements beyond actual count
-  if (element_idx >= d_data->n_elem_padded) {
+  // Early exit for padded elements (they have degenerate geometry)
+  if (element_idx >= d_data->n_elem) {
     return;
   }
 
@@ -90,6 +91,7 @@ __global__ void internalF_MooneyRivlin_4QP(const GPU_FEAT10Opt_Data* __restrict_
   const float* __restrict__ pIsoMapInverse = d_data->d_iso_map_inv;
   float* __restrict__ pInternalForceNodes = d_data->d_internal_force;
   float* __restrict__ pDeformationGradientF = d_data->d_deformation_grad_F;
+  float* __restrict__ pPiolaStressP = d_data->d_piola_stress_P;
 
   // QP coordinates for the 4-point rule on the T10 tet element
   // Lane mapping:
@@ -571,6 +573,19 @@ __global__ void internalF_MooneyRivlin_4QP(const GPU_FEAT10Opt_Data* __restrict_
     PKone_22 = fmaf(F00, F11, -(F01 * F10)) * invJ;
     PKone_22 += intermediate_Matrix02 * F02 + intermediate_Matrix12 * F12 +
                 intermediate_Matrix22 * F22;
+
+    // Write P to global memory if requested (for unit tests)
+    if (writeOutPiolaP && pPiolaStressP != nullptr) {
+      pPiolaStressP[baseIdx + 0 * blockDim.x] = PKone_00;
+      pPiolaStressP[baseIdx + 1 * blockDim.x] = PKone_01;
+      pPiolaStressP[baseIdx + 2 * blockDim.x] = PKone_02;
+      pPiolaStressP[baseIdx + 3 * blockDim.x] = PKone_10;
+      pPiolaStressP[baseIdx + 4 * blockDim.x] = PKone_11;
+      pPiolaStressP[baseIdx + 5 * blockDim.x] = PKone_12;
+      pPiolaStressP[baseIdx + 6 * blockDim.x] = PKone_20;
+      pPiolaStressP[baseIdx + 7 * blockDim.x] = PKone_21;
+      pPiolaStressP[baseIdx + 8 * blockDim.x] = PKone_22;
+    }
   }
   // End of PK1 computation
 

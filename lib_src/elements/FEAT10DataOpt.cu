@@ -24,7 +24,8 @@ __global__ void computeInverseJacobian_kernel(GPU_FEAT10Opt_Data* d_data) {
   const int elem_idx = global_thread / TILE;
   const int qp_idx = global_thread % TILE;
 
-  if (elem_idx >= d_data->n_elem_padded) {
+  // Early exit for padded elements (they have degenerate geometry)
+  if (elem_idx >= d_data->n_elem) {
     return;
   }
 
@@ -368,6 +369,7 @@ void GPU_FEAT10Opt_Data::Destroy() {
   if (d_iso_map_inv) cudaFree(d_iso_map_inv);
   if (d_internal_force) cudaFree(d_internal_force);
   if (d_deformation_grad_F) cudaFree(d_deformation_grad_F);
+  if (d_piola_stress_P) cudaFree(d_piola_stress_P);
   if (d_inv_mass_lumped) cudaFree(d_inv_mass_lumped);
   if (d_data) cudaFree(d_data);
 
@@ -377,6 +379,7 @@ void GPU_FEAT10Opt_Data::Destroy() {
   d_iso_map_inv = nullptr;
   d_internal_force = nullptr;
   d_deformation_grad_F = nullptr;
+  d_piola_stress_P = nullptr;
   d_inv_mass_lumped = nullptr;
   d_data = nullptr;
 
@@ -475,7 +478,7 @@ void GPU_FEAT10Opt_Data::ClearInternalForce() {
   HANDLE_ERROR(cudaMemset(d_internal_force, 0, 3 * n_nodes * sizeof(float)));
 }
 
-void GPU_FEAT10Opt_Data::ComputeInternalForce(bool writeOutF) {
+void GPU_FEAT10Opt_Data::ComputeInternalForce(bool writeOutF, bool writeOutP) {
   if (!is_precomputed) {
     std::cerr << "GPU_FEAT10Opt_Data: Must call ComputePrecomputation() first."
               << std::endl;
@@ -491,7 +494,17 @@ void GPU_FEAT10Opt_Data::ComputeInternalForce(bool writeOutF) {
                             cudaMemcpyHostToDevice));
   }
 
-  launchInternalForceKernel_FEAT10Opt(d_data, n_elem_padded, writeOutF);
+  // Allocate P buffer if needed and requested
+  if (writeOutP && d_piola_stress_P == nullptr) {
+    HANDLE_ERROR(
+        cudaMalloc(&d_piola_stress_P, 9 * 4 * n_elem_padded * sizeof(float)));
+    // Update device copy with new pointer
+    HANDLE_ERROR(cudaMemcpy(d_data, this, sizeof(GPU_FEAT10Opt_Data),
+                            cudaMemcpyHostToDevice));
+  }
+
+  launchInternalForceKernel_FEAT10Opt(d_data, n_elem_padded, writeOutF,
+                                      writeOutP);
 }
 
 void GPU_FEAT10Opt_Data::UpdatePositions(const Eigen::MatrixXd& positions) {
@@ -596,10 +609,50 @@ void GPU_FEAT10Opt_Data::RetrieveDeformationGradientToCPU(
   }
 }
 
+void GPU_FEAT10Opt_Data::RetrievePiolaToCPU(
+    std::vector<std::vector<Eigen::Matrix3f>>& P) {
+  if (d_piola_stress_P == nullptr) {
+    std::cerr << "GPU_FEAT10Opt_Data: Piola stress P not computed." << std::endl;
+    return;
+  }
+
+  P.resize(n_elem);
+
+  // Copy all P data from device
+  std::vector<float> P_flat(9 * 4 * n_elem_padded);
+  HANDLE_ERROR(cudaMemcpy(P_flat.data(), d_piola_stress_P,
+                          9 * 4 * n_elem_padded * sizeof(float),
+                          cudaMemcpyDeviceToHost));
+
+  // Unpack from blocked SoA format
+  for (int elem = 0; elem < n_elem; elem++) {
+    P[elem].resize(4);
+
+    for (int qp = 0; qp < 4; qp++) {
+      // Find location in blocked SoA
+      int global_qp = elem * 4 + qp;
+      int qp_block = global_qp / 64;
+      int thread_in_block = global_qp % 64;
+      int base = qp_block * 576 + thread_in_block;
+
+      P[elem][qp](0, 0) = P_flat[base + 0 * 64];
+      P[elem][qp](0, 1) = P_flat[base + 1 * 64];
+      P[elem][qp](0, 2) = P_flat[base + 2 * 64];
+      P[elem][qp](1, 0) = P_flat[base + 3 * 64];
+      P[elem][qp](1, 1) = P_flat[base + 4 * 64];
+      P[elem][qp](1, 2) = P_flat[base + 5 * 64];
+      P[elem][qp](2, 0) = P_flat[base + 6 * 64];
+      P[elem][qp](2, 1) = P_flat[base + 7 * 64];
+      P[elem][qp](2, 2) = P_flat[base + 8 * 64];
+    }
+  }
+}
+
 // Kernel launch wrapper
 
 void launchInternalForceKernel_FEAT10Opt(GPU_FEAT10Opt_Data* d_data,
-                                        int n_elem_padded, bool writeOutF) {
+                                        int n_elem_padded, bool writeOutF,
+                                        bool writeOutP) {
   // 64 threads per block (16 elements * 4 QPs)
   constexpr int BLOCK_SIZE = 64;
   int num_blocks = n_elem_padded / 16;
@@ -608,6 +661,6 @@ void launchInternalForceKernel_FEAT10Opt(GPU_FEAT10Opt_Data* d_data,
   size_t shared_mem_size = getInternalForceKernelSharedMemSize(BLOCK_SIZE);
 
   internalF_MooneyRivlin_4QP<<<num_blocks, BLOCK_SIZE, shared_mem_size>>>(
-      d_data, writeOutF);
+      d_data, writeOutF, writeOutP);
   HANDLE_ERROR(cudaDeviceSynchronize());
 }

@@ -84,6 +84,10 @@ struct GPU_FEAT10Opt_Data {
   // [9 * 4 * n_elem_padded] floats (same layout as d_iso_map_inv)
   float* d_deformation_grad_F;
 
+  // First Piola-Kirchhoff stress P output (optional) - Blocked SoA layout
+  // [9 * 4 * n_elem_padded] floats (same layout as d_iso_map_inv)
+  float* d_piola_stress_P;
+
   // Inverse lumped mass - [n_nodes] floats
   // Stores 1/m for direct multiplication in time integration
   float* d_inv_mass_lumped;
@@ -117,6 +121,7 @@ struct GPU_FEAT10Opt_Data {
         d_iso_map_inv(nullptr),
         d_internal_force(nullptr),
         d_deformation_grad_F(nullptr),
+        d_piola_stress_P(nullptr),
         d_inv_mass_lumped(nullptr),
         d_data(nullptr),
         is_initialized(false),
@@ -190,8 +195,9 @@ struct GPU_FEAT10Opt_Data {
   /**
    * Compute internal forces using the fused kernel.
    * @param writeOutF If true, also write deformation gradient F to device
+   * @param writeOutP If true, also write Piola stress P to device
    */
-  void ComputeInternalForce(bool writeOutF = false);
+  void ComputeInternalForce(bool writeOutF = false, bool writeOutP = false);
 
   // ============================================================
   // Host Methods - Data Transfer
@@ -236,6 +242,12 @@ struct GPU_FEAT10Opt_Data {
    */
   void RetrieveDeformationGradientToCPU(
       std::vector<std::vector<Eigen::Matrix3f>>& F);
+
+  /**
+   * Retrieve first Piola-Kirchhoff stress P from GPU to CPU.
+   * @param P Output: P[elem][qp] is 3x3 matrix
+   */
+  void RetrievePiolaToCPU(std::vector<std::vector<Eigen::Matrix3f>>& P);
 
   // ============================================================
   // Host Methods - Accessors
@@ -291,6 +303,8 @@ struct GPU_FEAT10Opt_Data {
  * @param d_data Device pointer to GPU_FEAT10Opt_Data
  * @param n_elem_padded Padded element count (must be multiple of 16)
  * @param writeOutF Whether to write deformation gradient F
+ * @param writeOutP Whether to write Piola stress P
  */
 void launchInternalForceKernel_FEAT10Opt(GPU_FEAT10Opt_Data* d_data,
-                                         int n_elem_padded, bool writeOutF);
+                                         int n_elem_padded, bool writeOutF,
+                                         bool writeOutP);
