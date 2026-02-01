@@ -761,6 +761,29 @@ void GPU_FEAT10_Data::RetrieveMassCSRToCPU(std::vector<int> &offsets,
                           cudaMemcpyDeviceToHost));
 }
 
+void GPU_FEAT10_Data::RetrieveDeformationGradientToCPU(
+    std::vector<std::vector<Eigen::MatrixXd>> &deformation_gradient) {
+  // Resize to [n_elem][N_QP_T10_5]
+  deformation_gradient.resize(n_elem);
+
+  for (int elem_idx = 0; elem_idx < n_elem; elem_idx++) {
+    deformation_gradient[elem_idx].resize(Quadrature::N_QP_T10_5);
+
+    for (int qp_idx = 0; qp_idx < Quadrature::N_QP_T10_5; qp_idx++) {
+      // Each F matrix: 3 × 3 (deformation gradient)
+      deformation_gradient[elem_idx][qp_idx].resize(3, 3);
+
+      // Calculate offset for this specific element + QP
+      // F is stored as [elem][qp](i,j) where i,j are 0,1,2
+      int offset = (elem_idx * Quadrature::N_QP_T10_5 + qp_idx) * 3 * 3;
+      int size   = 3 * 3 * sizeof(double);
+
+      HANDLE_ERROR(cudaMemcpy(deformation_gradient[elem_idx][qp_idx].data(),
+                              d_F + offset, size, cudaMemcpyDeviceToHost));
+    }
+  }
+}
+
 void GPU_FEAT10_Data::RetrievePFromFToCPU(
     std::vector<std::vector<Eigen::MatrixXd>> &p_from_F) {
   // Resize to [n_elem][N_QP_T10_5]
