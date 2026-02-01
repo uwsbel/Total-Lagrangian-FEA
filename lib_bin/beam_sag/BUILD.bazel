@@ -121,3 +121,19 @@ cc_binary(
         "@eigen//:eigen",
     ],
 )
+
+cc_binary(
+    name = "test_feat10_explicit_opt",
+    srcs = ["test_feat10_explicit_opt.cc"],
+    copts = ["--std=c++17"],
+    linkopts = [
+        "-L/usr/local/cuda/lib64",
+        "-lcudart",
+    ],
+    deps = [
+        "//lib_src/elements:FEAT10DataOpt",
+        "//lib_src/solvers:solvers_syncedexplicitopt",
+        "//lib_utils:cpu_utils",
+        "@eigen//:eigen",
+    ],
+)

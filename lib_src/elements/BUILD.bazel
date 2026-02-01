@@ -56,3 +56,17 @@ cuda_library(
     ],
 )
 
+cuda_library(
+    name = "FEAT10DataOpt",
+    srcs = ["FEAT10DataOpt.cu"],
+    hdrs = [
+        "FEAT10DataOpt.cuh",
+        "FEAT10KernelOpt.cuh",
+    ],
+    copts = ["--std=c++17", "-O3", "--use_fast_math", "--extra-device-vectorization"],
+    deps = [
+        "//lib_utils:cuda_utils",
+        "@eigen//:eigen",
+    ],
+)
+

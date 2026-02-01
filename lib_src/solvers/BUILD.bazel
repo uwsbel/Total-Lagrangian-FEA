@@ -111,3 +111,17 @@ cuda_library(
     ],
 )
 
+cuda_library(
+    name = "solvers_syncedexplicitopt",
+    srcs = ["SyncedExplicitOpt.cu"],
+    hdrs = [
+        "SyncedExplicitOpt.cuh",
+    ],
+    copts = ["--std=c++17", "-O3", "--use_fast_math", "--extra-device-vectorization"],
+    deps = [
+        "//lib_src/elements:FEAT10DataOpt",
+        "//lib_utils:cuda_utils",
+        "@eigen//:eigen",
+    ],
+)
+
