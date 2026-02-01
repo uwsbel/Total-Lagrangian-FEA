@@ -148,7 +148,10 @@ cc_test(
 
 cc_test(
     name = "utest_feat10_internal_force",
-    srcs = ["utest_feat10_internal_force.cc"],
+    srcs = [
+        "feat10_test_utils.h",
+        "utest_feat10_internal_force.cc",
+    ],
     copts = ["--std=c++17"],
     linkopts = [
         "-L/usr/local/cuda/lib64",
@@ -157,6 +160,66 @@ cc_test(
     ],
     deps = [
         "//lib_src/elements:FEAT10Data",
+        "//lib_utils:cpu_utils",
+        "@eigen//:eigen",
+        "@googletest//:gtest_main",
+    ],
+)
+
+cc_test(
+    name = "utest_feat10opt_internal_force",
+    srcs = [
+        "feat10_test_utils.h",
+        "utest_feat10opt_internal_force.cc",
+    ],
+    copts = ["--std=c++17"],
+    linkopts = [
+        "-L/usr/local/cuda/lib64",
+        "-lcusparse",
+        "-lcudart",
+    ],
+    deps = [
+        "//lib_src/elements:FEAT10DataOpt",
+        "//lib_utils:cpu_utils",
+        "@eigen//:eigen",
+        "@googletest//:gtest_main",
+    ],
+)
+
+cc_test(
+    name = "utest_feat10_cross_validation",
+    srcs = ["utest_feat10_cross_validation.cc"],
+    copts = ["--std=c++17"],
+    linkopts = [
+        "-L/usr/local/cuda/lib64",
+        "-lcusparse",
+        "-lcudart",
+    ],
+    deps = [
+        "//lib_src/elements:FEAT10Data",
+        "//lib_src/elements:FEAT10DataOpt",
+        "//lib_utils:cpu_utils",
+        "@eigen//:eigen",
+        "@googletest//:gtest_main",
+    ],
+)
+
+cc_test(
+    name = "utest_feat10_beam_integration",
+    srcs = [
+        "feat10_test_utils.h",
+        "utest_feat10_beam_integration.cc",
+    ],
+    copts = ["--std=c++17"],
+    linkopts = [
+        "-L/usr/local/cuda/lib64",
+        "-lcusparse",
+        "-lcudart",
+    ],
+    data = ["//:data_meshes"],
+    deps = [
+        "//lib_src/elements:FEAT10Data",
+        "//lib_src/elements:FEAT10DataOpt",
         "//lib_utils:cpu_utils",
         "@eigen//:eigen",
         "@googletest//:gtest_main",
