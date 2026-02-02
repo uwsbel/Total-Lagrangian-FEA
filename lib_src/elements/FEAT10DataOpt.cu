@@ -663,5 +663,5 @@ void launchInternalForceKernel_FEAT10Opt(GPU_FEAT10Opt_Data* d_data,
 
   internalF_MooneyRivlin_4QP<<<num_blocks, BLOCK_SIZE, shared_mem_size>>>(
       d_data, writeOutF, writeOutP);
-  HANDLE_ERROR(cudaDeviceSynchronize());
+  // No sync needed - subsequent kernels on same stream will wait automatically
 }

@@ -25,16 +25,16 @@ __global__ void syncedExplicitOpt_velocityUpdate(
   int node = blockIdx.x * blockDim.x + threadIdx.x;
   if (node >= n_nodes) return;
 
-  double m_inv = static_cast<double>(d_inv_mass[node]);
+  int base = node * 3;
+
+  // Pre-compute dt * M^{-1} (single float→double conversion)
+  double dt_minv = dt * d_inv_mass[node];
 
   // v_{n+1} = v_n + dt * M^{-1} * (f_ext - f_int)
-  for (int c = 0; c < 3; c++) {
-    int idx = node * 3 + c;
-    double f_net = static_cast<double>(d_f_ext[idx]) -
-                   static_cast<double>(d_f_int[idx]);
-    double a = f_net * m_inv;
-    d_vel[idx] += dt * a;
-  }
+  // Unrolled for better vectorization; implicit float→double promotion
+  d_vel[base + 0] += dt_minv * (d_f_ext[base + 0] - d_f_int[base + 0]);
+  d_vel[base + 1] += dt_minv * (d_f_ext[base + 1] - d_f_int[base + 1]);
+  d_vel[base + 2] += dt_minv * (d_f_ext[base + 2] - d_f_int[base + 2]);
 }
 
 // Position update: x += dt * v
