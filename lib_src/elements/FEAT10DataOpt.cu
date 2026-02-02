@@ -31,13 +31,13 @@ __global__ void computeInverseJacobian_kernel(GPU_FEAT10Opt_Data* d_data) {
     return;
   }
 
-  // QP coordinates for the 4-point rule
+  // QP coordinates for the 4-point rule (canonical permutations of (b,a,a,a))
   constexpr float a = 0.1381966011250105f;
   constexpr float b = 0.5854101966249685f;
 
-  const float xi = (qp_idx == 0) ? a : b;
-  const float eta = (qp_idx < 2) ? a : b;
-  const float zeta = (qp_idx < 3) ? a : b;
+  const float xi = (qp_idx == 1) ? b : a;
+  const float eta = (qp_idx == 2) ? b : a;
+  const float zeta = (qp_idx == 3) ? b : a;
 
   // Compute barycentric coordinates
   const float L1 = 1.0f - xi - eta - zeta;
