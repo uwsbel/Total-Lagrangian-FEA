@@ -15,7 +15,7 @@
 
 #include <Eigen/Dense>
 #include <string>
-﻿#include <vector>
+#include <vector>
 
 #include "../../lib_utils/cuda_utils.h"
 
@@ -61,6 +61,9 @@ struct GPU_FEAT10Opt_Data {
   // Internal force, AoS interleaved [3 * n_nodes] floats
   float* d_internal_force;
 
+  // External force, AoS interleaved [3 * n_nodes] floats
+  float* d_external_force;
+
   // Deformation gradient F (optional), blocked SoA
   // [9 * 4 * n_elem_padded] floats
   float* d_deformation_grad_F;
@@ -96,6 +99,7 @@ struct GPU_FEAT10Opt_Data {
         d_elem_nodes_soa(nullptr),
         d_iso_map_inv(nullptr),
         d_internal_force(nullptr),
+        d_external_force(nullptr),
         d_deformation_grad_F(nullptr),
         d_piola_stress_P(nullptr),
         d_inv_mass_lumped(nullptr),
@@ -136,6 +140,12 @@ struct GPU_FEAT10Opt_Data {
   // Compute internal forces (optionally writing F and P).
   void ComputeInternalForce(bool writeOutF = false, bool writeOutP = false);
 
+  // Set external force from CPU.
+  void SetExternalForce(const Eigen::VectorXf& f_ext);
+
+  // Clear external force to zero.
+  void ClearExternalForce();
+
   // Host methods – data transfer
   // Update node positions on GPU.
   void UpdatePositions(const Eigen::MatrixXd& positions);
@@ -168,6 +178,8 @@ struct GPU_FEAT10Opt_Data {
   const float* GetInvMassDevicePtr() const { return d_inv_mass_lumped; }
   float* GetInternalForceDevicePtr() { return d_internal_force; }
   const float* GetInternalForceDevicePtr() const { return d_internal_force; }
+  float* GetExternalForceDevicePtr() { return d_external_force; }
+  const float* GetExternalForceDevicePtr() const { return d_external_force; }
   double* GetPositionDevicePtr() { return d_pos_nodes; }
   const double* GetPositionDevicePtr() const { return d_pos_nodes; }
 

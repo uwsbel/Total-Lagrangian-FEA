@@ -14,7 +14,7 @@
 #include <cuda_runtime.h>
 
 #include <Eigen/Dense>
-﻿#include <vector>
+#include <vector>
 
 #include "../../lib_utils/cuda_utils.h"
 #include "../elements/FEAT10DataOpt.cuh"
@@ -64,8 +64,8 @@ class SyncedExplicitOptSolver {
   const double* GetVelocityDevicePtr() const { return d_vel_; }
 
   // Device pointer to external force [fx0, fy0, fz0, ...] (float).
-  float* GetExternalForceDevicePtr() { return d_f_ext_; }
-  const float* GetExternalForceDevicePtr() const { return d_f_ext_; }
+  float* GetExternalForceDevicePtr() { return element_->GetExternalForceDevicePtr(); }
+  const float* GetExternalForceDevicePtr() const { return element_->GetExternalForceDevicePtr(); }
 
   // Current simulation time.
   double GetCurrentTime() const { return current_time_; }
@@ -100,7 +100,6 @@ class SyncedExplicitOptSolver {
 
   // Device memory
   double* d_vel_;      // Velocity [3 * n_nodes] (double, interleaved)
-  float* d_f_ext_;     // External force [3 * n_nodes] (float, interleaved)
   int* d_fixed_nodes_; // Fixed node indices [n_fixed]
   int n_fixed_nodes_;
 

@@ -277,6 +277,10 @@ void GPU_FEAT10Opt_Data::Initialize(int num_elements, int num_nodes) {
   // Allocate internal force (float, AoS interleaved)
   HANDLE_ERROR(cudaMalloc(&d_internal_force, 3 * n_nodes * sizeof(float)));
 
+  // Allocate external force (float, AoS interleaved)
+  HANDLE_ERROR(cudaMalloc(&d_external_force, 3 * n_nodes * sizeof(float)));
+  HANDLE_ERROR(cudaMemset(d_external_force, 0, 3 * n_nodes * sizeof(float)));
+
   // Allocate inverse lumped mass
   HANDLE_ERROR(cudaMalloc(&d_inv_mass_lumped, n_nodes * sizeof(float)));
 
@@ -371,6 +375,7 @@ void GPU_FEAT10Opt_Data::Destroy() {
   if (d_elem_nodes_soa) cudaFree(d_elem_nodes_soa);
   if (d_iso_map_inv) cudaFree(d_iso_map_inv);
   if (d_internal_force) cudaFree(d_internal_force);
+  if (d_external_force) cudaFree(d_external_force);
   if (d_deformation_grad_F) cudaFree(d_deformation_grad_F);
   if (d_piola_stress_P) cudaFree(d_piola_stress_P);
   if (d_inv_mass_lumped) cudaFree(d_inv_mass_lumped);
@@ -381,6 +386,7 @@ void GPU_FEAT10Opt_Data::Destroy() {
   d_elem_nodes_soa = nullptr;
   d_iso_map_inv = nullptr;
   d_internal_force = nullptr;
+  d_external_force = nullptr;
   d_deformation_grad_F = nullptr;
   d_piola_stress_P = nullptr;
   d_inv_mass_lumped = nullptr;
@@ -506,8 +512,27 @@ void GPU_FEAT10Opt_Data::ComputeInternalForce(bool writeOutF, bool writeOutP) {
                             cudaMemcpyHostToDevice));
   }
 
-  launchInternalForceKernel_FEAT10Opt(d_data, n_elem_padded, writeOutF,
+  launchInternalForceKernel_FEAT10Opt(this, n_elem_padded, writeOutF,
                                       writeOutP);
+}
+
+void GPU_FEAT10Opt_Data::SetExternalForce(const Eigen::VectorXf& f_ext) {
+  if (!is_initialized) return;
+
+  if (f_ext.size() != n_nodes * 3) {
+    std::cerr << "GPU_FEAT10Opt_Data: External force size mismatch. Expected "
+              << n_nodes * 3 << ", got " << f_ext.size() << std::endl;
+    return;
+  }
+
+  HANDLE_ERROR(cudaMemcpy(d_external_force, f_ext.data(),
+                          n_nodes * 3 * sizeof(float),
+                          cudaMemcpyHostToDevice));
+}
+
+void GPU_FEAT10Opt_Data::ClearExternalForce() {
+  if (!is_initialized) return;
+  HANDLE_ERROR(cudaMemset(d_external_force, 0, 3 * n_nodes * sizeof(float)));
 }
 
 void GPU_FEAT10Opt_Data::UpdatePositions(const Eigen::MatrixXd& positions) {
@@ -651,12 +676,12 @@ void GPU_FEAT10Opt_Data::RetrievePiolaToCPU(
   }
 }
 
-// Kernel launch wrapper
+// Kernel launch wrapper: pass explicit parameters from host struct to reduce
+// kernel register pressure (parameters stay in constant/parameter memory).
 
-void launchInternalForceKernel_FEAT10Opt(GPU_FEAT10Opt_Data* d_data,
-                                        int n_elem_padded, bool writeOutF,
-                                        bool writeOutP) {
-  // 64 threads per block (16 elements * 4 QPs)
+void launchInternalForceKernel_FEAT10Opt(const GPU_FEAT10Opt_Data* host_data,
+                                         int n_elem_padded, bool writeOutF,
+                                         bool writeOutP) {
   constexpr int BLOCK_SIZE = 64;
   int num_blocks = n_elem_padded / 16;
 
@@ -664,6 +689,9 @@ void launchInternalForceKernel_FEAT10Opt(GPU_FEAT10Opt_Data* d_data,
   size_t shared_mem_size = getInternalForceKernelSharedMemSize(BLOCK_SIZE);
 
   internalF_MooneyRivlin_4QP<<<num_blocks, BLOCK_SIZE, shared_mem_size>>>(
-      d_data, writeOutF, writeOutP);
-  // No sync needed - subsequent kernels on same stream will wait automatically
+      host_data->n_elem, host_data->d_pos_nodes, host_data->d_elem_nodes_soa,
+      host_data->d_iso_map_inv, host_data->d_internal_force,
+      host_data->d_deformation_grad_F, host_data->d_piola_stress_P,
+      host_data->mu10, host_data->mu01, host_data->bulkK,
+      host_data->minJthreshold, writeOutF, writeOutP);
 }

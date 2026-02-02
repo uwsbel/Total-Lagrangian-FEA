@@ -73,7 +73,6 @@ SyncedExplicitOptSolver::SyncedExplicitOptSolver(GPU_FEAT10Opt_Data* element)
     : element_(element),
       n_nodes_(element->get_n_nodes()),
       d_vel_(nullptr),
-      d_f_ext_(nullptr),
       d_fixed_nodes_(nullptr),
       n_fixed_nodes_(0),
       current_time_(0.0),
@@ -97,10 +96,6 @@ void SyncedExplicitOptSolver::AllocateMemory() {
   HANDLE_ERROR(cudaMalloc(&d_vel_, n_nodes_ * 3 * sizeof(double)));
   HANDLE_ERROR(cudaMemset(d_vel_, 0, n_nodes_ * 3 * sizeof(double)));
 
-  // Allocate external force array (float precision, interleaved)
-  HANDLE_ERROR(cudaMalloc(&d_f_ext_, n_nodes_ * 3 * sizeof(float)));
-  HANDLE_ERROR(cudaMemset(d_f_ext_, 0, n_nodes_ * 3 * sizeof(float)));
-
   // Create timing events
   HANDLE_ERROR(cudaEventCreate(&timing_start_));
   HANDLE_ERROR(cudaEventCreate(&timing_stop_));
@@ -112,10 +107,6 @@ void SyncedExplicitOptSolver::FreeMemory() {
   if (d_vel_) {
     HANDLE_ERROR(cudaFree(d_vel_));
     d_vel_ = nullptr;
-  }
-  if (d_f_ext_) {
-    HANDLE_ERROR(cudaFree(d_f_ext_));
-    d_f_ext_ = nullptr;
   }
   if (d_fixed_nodes_) {
     HANDLE_ERROR(cudaFree(d_fixed_nodes_));
@@ -155,19 +146,11 @@ void SyncedExplicitOptSolver::SetFixedNodes(const std::vector<int>& fixed_nodes)
 }
 
 void SyncedExplicitOptSolver::SetExternalForce(const Eigen::VectorXf& f_ext) {
-  if (f_ext.size() != n_nodes_ * 3) {
-    std::cerr << "SyncedExplicitOptSolver: External force size mismatch. Expected "
-              << n_nodes_ * 3 << ", got " << f_ext.size() << std::endl;
-    return;
-  }
-
-  HANDLE_ERROR(cudaMemcpy(d_f_ext_, f_ext.data(),
-                          n_nodes_ * 3 * sizeof(float),
-                          cudaMemcpyHostToDevice));
+  element_->SetExternalForce(f_ext);
 }
 
 void SyncedExplicitOptSolver::ClearExternalForce() {
-  HANDLE_ERROR(cudaMemset(d_f_ext_, 0, n_nodes_ * 3 * sizeof(float)));
+  element_->ClearExternalForce();
 }
 
 void SyncedExplicitOptSolver::Reset() {
@@ -248,7 +231,7 @@ void SyncedExplicitOptSolver::Solve() {
   syncedExplicitOpt_velocityUpdate<<<node_grid, block_size>>>(
       d_vel_,
       element_->GetInternalForceDevicePtr(),
-      d_f_ext_,
+      element_->GetExternalForceDevicePtr(),
       element_->GetInvMassDevicePtr(),
       params_.dt,
       n_nodes_);
