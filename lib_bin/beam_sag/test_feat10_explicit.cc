@@ -251,7 +251,7 @@ int main(int argc, char** argv) {
     }
   }
 
-  // External force: distribute 100000N in +Z at x == 3
+  // External force: distribute 10000N in +Z at x == 3
   Eigen::VectorXd h_f_ext(gpu_t10_data.get_n_coef() * 3);
   h_f_ext.setZero();
   std::vector<int> force_node_indices;
@@ -261,7 +261,7 @@ int main(int argc, char** argv) {
     }
   }
   if (!force_node_indices.empty()) {
-    const double force_per_node = 100000.0 / force_node_indices.size();
+    const double force_per_node = 10000.0 / force_node_indices.size();
     for (int node_idx : force_node_indices) {
       h_f_ext(3 * node_idx + 2) = force_per_node;  // Z direction
     }

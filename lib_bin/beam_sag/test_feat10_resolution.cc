@@ -331,7 +331,7 @@ int main(int argc, char** argv) {
   }
   data.SetNodalFixed(h_fixed_nodes);
 
-  // External force: distribute 100000N in +z at x == 3 (for first half of
+  // External force: distribute 10000N in +z at x == 3 (for first half of
   // simulation only)
   Eigen::VectorXd h_f_ext(data.get_n_coef() * 3);
   h_f_ext.setZero();
@@ -342,7 +342,7 @@ int main(int argc, char** argv) {
     }
   }
   if (!force_node_indices.empty()) {
-    const double force_per_node = 100000.0 / force_node_indices.size();
+    const double force_per_node = 10000.0 / force_node_indices.size();
     for (int node_idx : force_node_indices) {
       h_f_ext(3 * node_idx + 2) = force_per_node;  // Z direction
     }

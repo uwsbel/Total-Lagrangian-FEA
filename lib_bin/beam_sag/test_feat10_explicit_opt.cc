@@ -23,10 +23,11 @@
 
 namespace {
 
-// Material parameters (aluminum-like)
-constexpr double kE    = 7e8;   // Young's modulus
-constexpr double kNu   = 0.33;  // Poisson's ratio
-constexpr double kRho0 = 2700;  // Density
+// Mooney-Rivlin parameters (match non-opt MR test)
+constexpr double kMR_mu10  = 80000.0;   // Pa
+constexpr double kMR_mu01  = 20000.0;   // Pa
+constexpr double kMR_kappa = 1e6;       // Pa
+constexpr double kMR_rho   = 1100.0;    // kg/m^3
 
 struct Options {
   double dt      = 1e-5;
@@ -123,20 +124,6 @@ std::string DefaultOutputDir() {
   return ".";
 }
 
-// Convert E,nu to Mooney-Rivlin parameters
-// For near-incompressible: mu = E / (2*(1+nu)), kappa = E / (3*(1-2*nu))
-// For Mooney-Rivlin with mu01 = 0: mu10 = mu/2
-void ConvertMaterialParams(double E, double nu, float& mu10, float& mu01,
-                           float& kappa) {
-  double mu   = E / (2.0 * (1.0 + nu));
-  double bulk = E / (3.0 * (1.0 - 2.0 * nu));
-
-  // Simple conversion: put all deviatoric into mu10
-  mu10  = static_cast<float>(mu / 2.0);
-  mu01  = 0.0f;
-  kappa = static_cast<float>(bulk);
-}
-
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -200,14 +187,13 @@ int main(int argc, char** argv) {
   gpu_feat10opt.Initialize(n_elems, n_nodes);
   gpu_feat10opt.Setup(positions, elements);
 
-  // Set material parameters
-  float mu10, mu01, kappa;
-  ConvertMaterialParams(kE, kNu, mu10, mu01, kappa);
-  gpu_feat10opt.SetMooneyRivlin(mu10, mu01, kappa);
-  gpu_feat10opt.SetDensity(static_cast<float>(kRho0));
+  // Set material parameters (Mooney-Rivlin) to match non-opt driver
+  gpu_feat10opt.SetMooneyRivlin(kMR_mu10, kMR_mu01, kMR_kappa);
+  gpu_feat10opt.SetDensity(kMR_rho);
 
-  std::cout << "Material: mu10=" << mu10 << ", mu01=" << mu01
-            << ", kappa=" << kappa << ", rho=" << kRho0 << std::endl;
+  std::cout << "Material (MR matched): mu10=" << kMR_mu10
+            << ", mu01=" << kMR_mu01 << ", kappa=" << kMR_kappa
+            << ", rho=" << kMR_rho << std::endl;
 
   // Compute precomputation (inverse Jacobians)
   gpu_feat10opt.ComputePrecomputation();
@@ -236,10 +222,32 @@ int main(int argc, char** argv) {
   }
   std::cout << "Fixed nodes (x=0): " << fixed_nodes.size() << std::endl;
 
+  // External force: distribute 10 kN in +Z across nodes with x == 3
+  Eigen::VectorXf f_ext(n_nodes * 3);
+  f_ext.setZero();
+  std::vector<int> force_nodes;
+  force_nodes.reserve(n_nodes);
+  for (int i = 0; i < n_nodes; ++i) {
+    if (std::abs(positions(i, 0) - 3.0) < 1e-8) {
+      force_nodes.push_back(i);
+    }
+  }
+  if (!force_nodes.empty()) {
+    const float force_per_node = 10000.0f / static_cast<float>(force_nodes.size());
+    for (int idx : force_nodes) {
+      f_ext(3 * idx + 2) = force_per_node;  // +Z direction
+    }
+  }
+  std::cout << "Load nodes (x=3): " << force_nodes.size()
+            << " total load = 10000 N in +Z" << std::endl;
+
   // Create SyncedExplicitOpt solver
   SyncedExplicitOptSolver solver(&gpu_feat10opt);
   solver.SetTimeStep(opt.dt);
   solver.SetFixedNodes(fixed_nodes);
+  if (!force_nodes.empty()) {
+    solver.SetExternalForce(f_ext);
+  }
 
   // Storage for tracking
   std::vector<double> target_node_x;
@@ -254,7 +262,26 @@ int main(int argc, char** argv) {
   std::cout << "Running SyncedExplicitOpt solver: dt=" << opt.dt
             << ", steps=" << opt.steps << std::endl;
 
+  // Debug: at step 0 (initial config), compute F and P for element 0 to check F == I
+  {
+    gpu_feat10opt.ClearInternalForce();
+    gpu_feat10opt.ComputeInternalForce(true, true);
+    std::vector<std::vector<Eigen::Matrix3f>> F_per_elem;
+    gpu_feat10opt.RetrieveDeformationGradientToCPU(F_per_elem);
+    if (!F_per_elem.empty() && !F_per_elem[0].empty()) {
+      std::cout << "Step 0 (initial) element 0 QP 0 F =\n"
+                << F_per_elem[0][0] << std::endl;
+    }
+  }
+
   for (int step = 0; step < opt.steps; ++step) {
+    // Remove the applied load halfway through the simulation to mirror
+    // the non-optimized explicit test driver.
+    if (step == opt.steps / 2) {
+      f_ext.setZero();
+      solver.SetExternalForce(f_ext);
+    }
+
     solver.Solve();
 
     float kernel_time = solver.GetLastStepTimeMs();
