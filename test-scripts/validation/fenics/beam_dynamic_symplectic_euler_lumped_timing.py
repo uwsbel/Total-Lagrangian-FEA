@@ -1,6 +1,6 @@
 """
-Timing analysis script for nonlinear 3D beam dynamic analysis using Forward Euler.
-Matches beam_dynamic_forward_euler_lumped.py: HRZ lumped mass, symplectic Euler,
+Timing analysis script for nonlinear 3D beam dynamic analysis using Symplectic Euler.
+Matches beam_dynamic_symplectic_euler_lumped.py: HRZ lumped mass, symplectic Euler,
 explicit velocity zeroing at fixed nodes. Minimal version with only solver execution and timing.
 """
 import os
@@ -113,7 +113,7 @@ lambda_factor = lmbda_svk * (0.5 * trFtF - 1.5)
 P = lambda_factor * F + mu_svk * (FFtF - F)
 
 # ============================================================================
-# TIME INTEGRATION SETUP (Forward Euler with lumped mass - matching lumped script)
+# TIME INTEGRATION SETUP (Symplectic Euler with lumped mass - matching lumped script)
 # ============================================================================
 dt = 1e-5
 n_steps = 200000

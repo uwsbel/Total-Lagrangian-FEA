@@ -1,7 +1,4 @@
-"""
-Nonlinear 3D beam dynamic analysis using Forward Euler (explicit) time integration.
-Matches C++ explicit implementation: uses nodal forces and explicit time stepping.
-"""
+"""Nonlinear 3D beam dynamic analysis using Symplectic Euler (explicit) time integration."""
 import os
 import numpy as np
 import ufl
@@ -349,7 +346,7 @@ else:
 
 
 # ============================================================================
-# TIME INTEGRATION SETUP (Forward Euler method)
+# TIME INTEGRATION SETUP (Symplectic Euler method)
 # ============================================================================
 dt = 1e-5  # Time step (matching C++ GPU explicit)
 n_steps = 200000  # Number of time steps (2 seconds total to match C++ GPU solvers)
@@ -357,7 +354,7 @@ t_final = n_steps * dt
 
 if rank == 0:
     print("\nTIME INTEGRATION SETUP")
-    print(f"Method: Forward Euler (Explicit)")
+    print(f"Method: Symplectic Euler (Explicit)")
     print(f"Time step (dt): {dt} s")
     print(f"Number of steps: {n_steps}")
     print(f"Total simulation time: {t_final} s")
@@ -400,7 +397,34 @@ if rank == 0:
 
 
 # ============================================================================
-# TIME STEPPING LOOP (Forward Euler - Explicit)
+# NOTE: ACCELERATION VS VELOCITY FORMULATION
+# ============================================================================
+# There are two equivalent ways to formulate explicit time integration:
+#
+# 1. ACCELERATION FORMULATION (current approach):
+#    - Solve:  M · a = f_ext - f_int
+#    - Update: v_new = v_old + dt · a
+#    - Update: u_new = u_old + dt · v_new
+#
+# 2. VELOCITY FORMULATION (typical GPU approach):
+#    - Rearranging: M · v_new = M · v_old + dt · (f_ext - f_int)
+#    - For LUMPED mass, this becomes a fused update:
+#        v_new = v_old + dt · M_inv · (f_ext - f_int)
+#      No separate acceleration variable needed.
+#
+# ANALYSIS:
+# - For LUMPED mass: Both are equivalent. Velocity formulation eliminates
+#   the intermediate 'a' array (GPU codes typically use this fused form).
+# - For CONSISTENT mass: Acceleration formulation is preferred because
+#   velocity formulation requires an extra matrix-vector product (M · v_old).
+#
+# This script uses the ACCELERATION formulation which is optimal for
+# consistent mass and equivalent for lumped mass.
+# ============================================================================
+
+
+# ============================================================================
+# TIME STEPPING LOOP (Symplectic Euler - Explicit)
 # ============================================================================
 if rank == 0:
     print("\nSTARTING DYNAMIC ANALYSIS")
@@ -426,6 +450,9 @@ f_int_form = fem.form(ufl.inner(ufl.grad(v_test), P) * dx)
 force_off_step = int(1.0 / dt)
 if rank == 0:
     print(f"Force will be turned off at step {force_off_step} (t = 1.0s)")
+
+# Progress tracking
+progress_interval = 1000  # Print progress every N steps
 
 # Time stepping loop
 for n in range(n_steps):
@@ -464,7 +491,7 @@ for n in range(n_steps):
     # Apply boundary conditions to acceleration
     fem.petsc.set_bc(a.x.petsc_vec, [bc_fixed])
     
-    # Explicit updates (Forward Euler)
+    # Explicit updates (Symplectic Euler)
     # v_new = v_old + dt * a
     v_new = v_old.x.array[:] + dt * a.x.array[:]
     
@@ -498,14 +525,25 @@ for n in range(n_steps):
     v_old.x.array[:] = v_new[:]
     v_old.x.scatter_forward()
     
-    # Print progress (every 10000 steps to avoid flooding output)
-    if rank == 0 and (n % 10000 == 0 or n < 5):
+    # Print progress
+    if rank == 0 and (n % progress_interval == 0 or n < 5 or n == n_steps - 1):
+        progress_pct = 100.0 * (n + 1) / n_steps
         max_disp = np.max(np.linalg.norm(u_old.x.array.reshape(-1, 3), axis=1))
         max_vel = np.max(np.linalg.norm(v_old.x.array.reshape(-1, 3), axis=1))
+        
+        print(f"[{progress_pct:5.1f}%] Step {n+1}/{n_steps} | t={t:.6f}s")
+        
         if len(node_xyz_history) > 0:
             x_pos, y_pos, z_pos = node_xyz_history[-1]
-            print(f"Step {n}/{n_steps}: t={t:.4f}s, tracked node position = ({x_pos:.17f}, {y_pos:.17f}, {z_pos:.17f})")
-            print(f"  Max displacement: {max_disp:.6e}, Max velocity: {max_vel:.6e}")
+            print(f"  Tracked node: ({x_pos:.10f}, {y_pos:.10f}, {z_pos:.10f})")
+        
+        print(f"  Max displacement: {max_disp:.6e} m | Max velocity: {max_vel:.6e} m/s")
+        
+        # Print force status
+        if n < force_off_step:
+            print(f"  Force: ON ({force_per_node:.1f} N/node)")
+        else:
+            print(f"  Force: OFF")
 
 if rank == 0:
     print("\nDYNAMIC ANALYSIS COMPLETE")

@@ -1,7 +1,5 @@
-"""
-Nonlinear 3D beam dynamic analysis using Forward Euler (explicit) time integration.
-Uses LUMPED MASS MATRIX (HRZ lumping: diagonal scaled to preserve total mass).
-"""
+"""Nonlinear 3D beam dynamics with Symplectic Euler and HRZ lumped mass."""
+import argparse
 import os
 import numpy as np
 import ufl
@@ -12,16 +10,54 @@ from dolfinx.fem.petsc import assemble_vector, assemble_matrix
 from petsc4py import PETSc
 from tetgen_mesh_loader import load_tetgen_mesh_from_files
 
+
+def _parse_cli():
+    parser = argparse.ArgumentParser(
+        description="Nonlinear 3D beam dynamics with Symplectic Euler and HRZ lumped mass."
+    )
+    parser.add_argument(
+        "--mat",
+        type=str,
+        default="svk",
+        help="svk | mr (default: svk)",
+    )
+    parser.add_argument(
+        "--res",
+        type=int,
+        default=0,
+        help="0 | 2 | 4 | 8 | 16 | 32 (default: 0)",
+    )
+    parser.add_argument(
+        "--dt",
+        type=float,
+        default=1e-5,
+        help="Time step (default: 1e-5)",
+    )
+    parser.add_argument(
+        "--steps",
+        type=int,
+        default=5000,
+        help="Number of time steps (default: 5000)",
+    )
+    parser.add_argument(
+        "--csv",
+        nargs="?",
+        const="",
+        default=None,
+        metavar="PATH",
+        help="Write CSV of tracked node history (optional PATH, default name if omitted)",
+    )
+    return parser.parse_args()
+
+
+_args = _parse_cli()
+
 rank = MPI.COMM_WORLD.rank
 
 if rank == 0:
     print(f"Running with {MPI.COMM_WORLD.size} MPI ranks")
-# ============================================================================
-# GEOMETRY AND MESH SETUP
-# ============================================================================
-# Resolution selection: 0, 2, 4, 8, 16
-RES = 0
-# Debug flag: Set to True to enable detailed debug output
+
+RES = _args.res
 DEBUG = False
 
 # Construct mesh file paths
@@ -103,8 +139,8 @@ for i, coord in enumerate(dof_coords):
 local_num_force_nodes = len(force_dofs)
 global_num_force_nodes = domain.comm.allreduce(local_num_force_nodes, op=MPI.SUM)
 
-# Calculate Force Per Node (Matching C++ Logic: +100000 N in +z for 1 second)
-total_force = 100000.0
+# Calculate Force Per Node (Matching C++ explicit: +10000 N in +z)
+total_force = 10000.0
 force_per_node = total_force / global_num_force_nodes if global_num_force_nodes > 0 else 0.0
 
 if rank == 0:
@@ -167,8 +203,8 @@ if rank == 0:
 # ============================================================================
 # MATERIAL MODEL AND KINEMATICS
 # ============================================================================
-# Select material model: "SVK" or "MOONEY_RIVLIN"
-MATERIAL_MODEL = "SVK"
+# Select material model from CLI: "SVK" or "MOONEY_RIVLIN"
+MATERIAL_MODEL = "SVK" if _args.mat.lower() == "svk" else "MOONEY_RIVLIN"
 
 # Material properties - choose based on material model
 if MATERIAL_MODEL == "MOONEY_RIVLIN":
@@ -256,19 +292,19 @@ else:
 
 
 # ============================================================================
-# TIME INTEGRATION SETUP (Forward Euler method)
+# TIME INTEGRATION SETUP (Symplectic Euler method)
 # ============================================================================
-dt = 1e-5  # Time step (matching C++ GPU explicit)
-n_steps = 200000  # Number of time steps (2 seconds total)
+dt = _args.dt  # Time step (matching C++ GPU explicit default)
+n_steps = _args.steps  # Number of time steps (default 5000, matches C++)
 t_final = n_steps * dt 
 
 if rank == 0:
     print("\nTIME INTEGRATION SETUP")
-    print(f"Method: Forward Euler (Explicit) with LUMPED MASS")
+    print(f"Method: Symplectic Euler (Explicit) with LUMPED MASS")
     print(f"Time step (dt): {dt} s")
     print(f"Number of steps: {n_steps}")
     print(f"Total simulation time: {t_final} s")
-    print(f"Force will be applied for 1 second (steps 0-99999), then turned off")
+    print(f"Force will be applied for the first half of the steps, then turned off")
 
 
 # ============================================================================
@@ -382,7 +418,22 @@ if rank == 0:
 
 
 # ============================================================================
-# TIME STEPPING LOOP (Forward Euler - Explicit with Lumped Mass)
+# NOTE: VELOCITY VS ACCELERATION FORMULATION
+# ============================================================================
+# For lumped mass, the update:
+#    a = M_inv · (f_ext - f_int)
+#    v_new = v_old + dt · a
+#
+# Could be fused into a single operation (typical GPU approach):
+#    v_new = v_old + dt · M_inv · (f_ext - f_int)
+#
+# Both are mathematically equivalent. Current code keeps 'a' explicit
+# for clarity and debugging. GPU implementations typically fuse this.
+# ============================================================================
+
+
+# ============================================================================
+# TIME STEPPING LOOP (Symplectic Euler - Explicit with Lumped Mass)
 # ============================================================================
 if rank == 0:
     print("\nSTARTING DYNAMIC ANALYSIS (LUMPED MASS)")
@@ -404,10 +455,10 @@ f_int = f_ext_vector.copy()
 # Internal force form: f_int = ∫ ∇φ : P(u) dx
 f_int_form = fem.form(ufl.inner(ufl.grad(v_test), P) * dx)
 
-# Calculate step at which to turn off force (1 second)
-force_off_step = int(1.0 / dt)
+# Calculate step at which to turn off force (half the simulation, like C++)
+force_off_step = n_steps // 2
 if rank == 0:
-    print(f"Force will be turned off at step {force_off_step} (t = 1.0s)")
+    print(f"Force will be turned off at step {force_off_step} (t = {force_off_step * dt:.4f}s)")
 
 # Time stepping loop
 for n in range(n_steps):
@@ -502,24 +553,33 @@ if rank == 0:
 # SAVE CSV OUTPUT (Matching C++ format)
 # ============================================================================
 # Only rank 0 writes the CSV file (it has gathered all the data)
-if rank == 0 and len(node_xyz_history) > 0:
-    output_dir = os.path.join(script_dir, "output")
-    os.makedirs(output_dir, exist_ok=True)
+write_csv = _args.csv is not None
+if rank == 0 and write_csv and len(node_xyz_history) > 0:
+    # Default output directory/path if user did not pass an explicit path
+    if _args.csv == "":
+        output_dir = os.path.join(script_dir, "output")
+        os.makedirs(output_dir, exist_ok=True)
 
-    # Material suffix for file naming
-    mat_suffix = "svk" if MATERIAL_MODEL == "SVK" else "mr"
+        # Material suffix for file naming
+        mat_suffix = "svk" if MATERIAL_MODEL == "SVK" else "mr"
 
-    csv_path = os.path.join(
-        output_dir, f"node_xyz_history_fenics_res{RES}_{mat_suffix}_fe_lumped.csv"
-    )
-    
-    with open(csv_path, 'w') as f:
+        csv_path = os.path.join(
+            output_dir,
+            f"node_xyz_history_fenics_res{RES}_{mat_suffix}_fe_lumped.csv",
+        )
+    else:
+        # Use user-provided path directly
+        csv_path = _args.csv
+
+    with open(csv_path, "w") as f:
         f.write("step,x_position,y_position,z_position\n")
         for i, (x_val, y_val, z_val) in enumerate(node_xyz_history):
             f.write(f"{i},{x_val:.17f},{y_val:.17f},{z_val:.17f}\n")
-    
+
     print(f"Wrote tracked node x,y,z position history to {csv_path}")
-    print(f"  Node position: ({tracked_node_position[0]:.1f}, {tracked_node_position[1]:.1f}, {tracked_node_position[2]:.1f})")
+    print(
+        f"  Node position: ({tracked_node_position[0]:.1f}, {tracked_node_position[1]:.1f}, {tracked_node_position[2]:.1f})"
+    )
     print(f"  Total steps: {len(node_xyz_history)}\n")
 
 # Clean up PETSc objects

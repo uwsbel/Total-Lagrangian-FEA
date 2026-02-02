@@ -35,13 +35,15 @@ constexpr double kMR_rho   = 1100.0;    // kg/m^3
 struct Options {
   double dt      = 1e-5;
   int steps      = 5000;
+  int res        = 0;  // 0/2/4/8/16/32 beam resolutions
   bool write_csv = false;
   std::string csv_path;
 };
 
 void PrintUsage(const char* argv0) {
   std::cout << "Usage: " << argv0
-            << " [--dt=DT] [--steps=N] [--csv[=PATH]] [--help]\n";
+            << " [--res=R] [--dt=DT] [--steps=N] [--csv[=PATH]] [--help]\n"
+            << "  --res=R     0 | 2 | 4 | 8 | 16 | 32 (default: 0)\n";
 }
 
 bool StartsWith(const std::string& s, const std::string& prefix) {
@@ -87,6 +89,17 @@ bool ParseArgs(int argc, char** argv, Options& opt) {
         std::cerr << "Invalid --dt: " << v << "\n";
         return false;
       }
+      continue;
+    }
+    if (StartsWith(arg, "--res=")) {
+      const std::string v = arg.substr(std::string("--res=").size());
+      int r               = 0;
+      if (!ParseInt(v, r) ||
+          !(r == 0 || r == 2 || r == 4 || r == 8 || r == 16 || r == 32)) {
+        std::cerr << "Invalid --res: " << v << "\n";
+        return false;
+      }
+      opt.res = r;
       continue;
     }
     if (StartsWith(arg, "--steps=")) {
@@ -160,17 +173,39 @@ int main(int argc, char** argv) {
   // Read mesh data
   Eigen::MatrixXd nodes;
   Eigen::MatrixXi elements;
-  const std::string node_file = mesh_path("data/meshes/T10/beam_3x2x1.1.node");
-  const std::string elem_file = mesh_path("data/meshes/T10/beam_3x2x1.1.ele");
+  int plot_target_node = 0;
+  int n_nodes          = 0;
+  int n_elems          = 0;
 
-  int n_nodes = ANCFCPUUtils::FEAT10_read_nodes(node_file.c_str(), nodes);
-  int n_elems = ANCFCPUUtils::FEAT10_read_elements(elem_file.c_str(), elements);
+  const std::string res_str =
+      std::to_string(opt.res);  // mirror resolution study driver
+  const std::string node_file =
+      mesh_path("data/meshes/T10/resolution/beam_3x2x1_res" + res_str +
+                ".1.node");
+  const std::string elem_file =
+      mesh_path("data/meshes/T10/resolution/beam_3x2x1_res" + res_str +
+                ".1.ele");
+
+  n_nodes = ANCFCPUUtils::FEAT10_read_nodes(node_file.c_str(), nodes);
+  n_elems = ANCFCPUUtils::FEAT10_read_elements(elem_file.c_str(), elements);
+
+  // Target node for tracking (mirror resolution driver mapping)
+  if (opt.res == 0) {
+    plot_target_node = 23;
+  } else if (opt.res == 2) {
+    plot_target_node = 89;
+  } else if (opt.res == 4) {
+    plot_target_node = 353;
+  } else if (opt.res == 8) {
+    plot_target_node = 1408;
+  } else if (opt.res == 16) {
+    plot_target_node = 5630;
+  } else if (opt.res == 32) {
+    plot_target_node = 22529;
+  }
 
   std::cout << "Mesh loaded: " << n_nodes << " nodes, " << n_elems
-            << " elements" << std::endl;
-
-  // Target node for tracking (matches resolution test res=0)
-  const int plot_target_node = 23;
+            << " elements, res=" << opt.res << std::endl;
   if (n_nodes <= plot_target_node) {
     std::cerr << "Mesh too small for node " << plot_target_node << " tracking."
               << std::endl;
