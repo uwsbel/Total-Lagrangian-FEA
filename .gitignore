@@ -12,3 +12,7 @@ node_x_history*.csv
 tip_z_history*.csv
 .~lock.*
 output/
+
+*csv
+*md
+future_work/*
