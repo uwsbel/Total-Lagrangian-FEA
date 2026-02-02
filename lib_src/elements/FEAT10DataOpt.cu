@@ -1,9 +1,11 @@
 /*==============================================================
  *==============================================================
- * Project: TL-FEA
+ * Project: RoboDyna
+ * Author:  Ganesh Arivoli
+ * Email:   arivoli@wisc.edu
  * File:    FEAT10DataOpt.cu
- * Brief:   Implementation of GPU_FEAT10Opt_Data for fast explicit dynamics
- *          with T10 elements and Mooney-Rivlin material.
+ * Brief:   Implements GPU_FEAT10Opt_Data for fast explicit
+ *          dynamics with T10 elements and Mooney-Rivlin material.
  *==============================================================
  *==============================================================*/
 

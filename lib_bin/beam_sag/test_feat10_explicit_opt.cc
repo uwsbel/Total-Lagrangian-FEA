@@ -1,10 +1,13 @@
-/**
- * FEAT10Opt Explicit Test
- *
- * This driver tests the FEAT10Opt element with SyncedExplicitOpt solver.
- * It loads the T10 beam mesh, clamps nodes at x == 0, and advances the
- * system with the SyncedExplicitOptSolver using symplectic Euler.
- */
+/*==============================================================
+ *==============================================================
+ * Project: RoboDyna
+ * Author:  Ganesh Arivoli
+ * Email:   arivoli@wisc.edu
+ * File:    test_feat10_explicit_opt.cc
+ * Brief:   FEAT10Opt beam explicit test using SyncedExplicitOptSolver
+ *          (symplectic Euler, clamped x=0, T10 beam mesh).
+ *==============================================================
+ *==============================================================*/
 
 #include <cuda_runtime.h>
 

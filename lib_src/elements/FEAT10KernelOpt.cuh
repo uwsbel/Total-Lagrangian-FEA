@@ -1,22 +1,15 @@
+#pragma once
+
 /*==============================================================
  *==============================================================
- * Project: TL-FEA
+ * Project: RoboDyna
+ * Author:  Dan Negrut, Ganesh Arivoli
+ * Email:   negrut@wisc.edu, arivoli@wisc.edu
  * File:    FEAT10KernelOpt.cuh
  * Brief:   Fused internal force kernel for T10 elements with
  *          Mooney-Rivlin material and 4-point quadrature.
- *
- * Adapted from: future_work/internalF-MR-smem.cu
- *
- * Key features:
- * - 4 threads per element (one per quadrature point)
- * - 64 threads per block (16 elements)
- * - Cooperative groups with warp shuffle reduction
- * - Shared memory for F, invJacobian, and PK1
- * - Float compute, double positions
  *==============================================================
  *==============================================================*/
-
-#pragma once
 
 #include <cooperative_groups.h>
 #include <cuda_runtime.h>

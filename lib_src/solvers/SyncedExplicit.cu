@@ -1,9 +1,11 @@
 /*==============================================================
  *==============================================================
- * Project: TL-FEA
+ * Project: RoboDyna
+ * Author:  Ganesh Arivoli
+ * Email:   arivoli@wisc.edu
  * File:    SyncedExplicit.cu
- * Brief:   Implements the SyncedExplicitSolver class with GPU kernels
- *          for symplectic Euler time integration.
+ * Brief:   Implements SyncedExplicitSolver with GPU kernels for
+ *          symplectic Euler explicit time integration.
  *==============================================================
  *==============================================================*/
 

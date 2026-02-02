@@ -1,16 +1,13 @@
-/**
- * FEAT10 Beam Explicit Test
- *
- * Author: Ganesh Arivoli
- * Email:  arivoli@wisc.edu
- *
- * This driver mirrors test-scripts/T10-tets/f-form-T10-beam-explicit.py:
- * loads the FEAT10 beam mesh, clamps nodes at x == 0, applies a point load,
- * and advances the system with the SyncedExplicit solver using symplectic
- * Euler.
- *
- * TODO: Integrate this with beam resolution study by adding explicit solver.
- */
+/*==============================================================
+ *==============================================================
+ * Project: RoboDyna
+ * Author:  Ganesh Arivoli
+ * Email:   arivoli@wisc.edu
+ * File:    test_feat10_explicit.cc
+ * Brief:   FEAT10 beam explicit test mirroring
+ *          f-form-T10-beam-explicit.py with SyncedExplicitSolver.
+ *==============================================================
+ *==============================================================*/
 
 #include <cuda_runtime.h>
 

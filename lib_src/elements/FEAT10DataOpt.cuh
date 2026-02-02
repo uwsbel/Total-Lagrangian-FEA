@@ -1,111 +1,87 @@
+#pragma once
+
 /*==============================================================
  *==============================================================
- * Project: TL-FEA
+ * Project: RoboDyna
+ * Author:  Ganesh Arivoli
+ * Email:   arivoli@wisc.edu
  * File:    FEAT10DataOpt.cuh
- * Brief:   Defines GPU_FEAT10Opt_Data struct optimized for fused internal
- *          force computation with 4 QPs per element, SoA memory layout,
- *          and float compute with double precision positions.
+ * Brief:   Declares GPU_FEAT10Opt_Data optimized for fused
+ *          FEAT10 internal force and mass kernels.
  *==============================================================
  *==============================================================*/
-
-#pragma once
 
 #include <cuda_runtime.h>
 
 #include <Eigen/Dense>
 #include <string>
-#include <vector>
+﻿#include <vector>
 
 #include "../../lib_utils/cuda_utils.h"
 
-/**
- * GPU-optimized data structure for 10-node tetrahedral (T10) elements.
- *
- * Key design features:
- * - 4 quadrature points per element (vs 5 in FEAT10)
- * - Blocked SoA memory layout for coalesced access
- * - Float compute with double precision positions/velocities
- * - Designed for 64-thread blocks (16 elements × 4 QPs)
- * - Mooney-Rivlin material model only
- */
+// GPU data layout for 10-node tetrahedral (T10) elements.
+// Uses 4 QPs/elem, blocked SoA, float compute, double positions,
+// and Mooney–Rivlin material, tuned for 64-thread blocks.
 struct GPU_FEAT10Opt_Data {
-  // ============================================================
   // Constants
-  // ============================================================
   static constexpr int BLOCK_SIZE = 64;       // Threads per block
-  static constexpr int TILE_SIZE = 4;         // Threads per element (= QPs)
+  static constexpr int TILE_SIZE = 4;         // Threads per element / QPs
   static constexpr int ELEMS_PER_BLOCK = 16;  // Elements per block
-  static constexpr int NODES_PER_ELEM = 10;   // Nodes per T10 element
+  static constexpr int NODES_PER_ELEM = 10;   // T10 nodes per element
   static constexpr int QPS_PER_ELEM = 4;      // Quadrature points per element
 
-  // ============================================================
   // Sizes
-  // ============================================================
-  int n_elem;         // Actual number of elements
-  int n_nodes;        // Number of nodes
-  int n_elem_padded;  // Padded to multiple of ELEMS_PER_BLOCK
+  int n_elem;         // Elements
+  int n_nodes;        // Nodes
+  int n_elem_padded;  // Elements padded to ELEMS_PER_BLOCK
 
-  // ============================================================
-  // Material Parameters (Mooney-Rivlin)
-  // ============================================================
-  float mu10;          // First Mooney-Rivlin coefficient
-  float mu01;          // Second Mooney-Rivlin coefficient
-  float bulkK;         // Bulk modulus (volumetric penalty)
-  float minJthreshold; // Minimum J threshold to avoid singularity
-  float rho;           // Density for mass computation
+  // Material parameters (Mooney–Rivlin)
+  float mu10;
+  float mu01;
+  float bulkK;         // Bulk modulus
+  float minJthreshold; // Min J to avoid singularity
+  float rho;           // Density
 
-  // ============================================================
-  // Device Pointers (Host-side storage of device addresses)
-  // ============================================================
+  // Device pointers (device memory owned here)
 
-  // Positions - double precision, AoS interleaved [3 * n_nodes]
-  // Layout: [x0, y0, z0, x1, y1, z1, ...]
+  // Positions, AoS interleaved [3 * n_nodes]:
+  // [x0, y0, z0, x1, y1, z1, ...]
   double* d_pos_nodes;
 
-  // Reference positions - for precomputation (double) [3 * n_nodes]
+  // Reference positions [3 * n_nodes]
   double* d_pos_nodes_ref;
 
-  // Element connectivity - Blocked SoA layout [10 * n_elem_padded]
-  // Within each 16-element block: all node0s, then all node1s, etc.
-  // For block b, element e (0-15), node n: index = b*160 + n*16 + e
+  // Element connectivity, blocked SoA [10 * n_elem_padded]
   int* d_elem_nodes_soa;
 
-  // Inverse Jacobian (parent-to-reference) - Blocked SoA layout
+  // Inverse Jacobian (parent → reference), blocked SoA
   // [9 * 4 * n_elem_padded] floats
-  // Within each 64-QP block: all Jac00s, then all Jac01s, etc.
-  // For block b, thread t (0-63), component c (0-8): index = b*576 + c*64 + t
   float* d_iso_map_inv;
 
-  // Internal force output - AoS interleaved [3 * n_nodes] floats
-  // Layout: [fx0, fy0, fz0, fx1, fy1, fz1, ...]
+  // Internal force, AoS interleaved [3 * n_nodes] floats
   float* d_internal_force;
 
-  // Deformation gradient F output (optional) - Blocked SoA layout
-  // [9 * 4 * n_elem_padded] floats (same layout as d_iso_map_inv)
+  // Deformation gradient F (optional), blocked SoA
+  // [9 * 4 * n_elem_padded] floats
   float* d_deformation_grad_F;
 
-  // First Piola-Kirchhoff stress P output (optional) - Blocked SoA layout
-  // [9 * 4 * n_elem_padded] floats (same layout as d_iso_map_inv)
+  // First Piola–Kirchhoff stress P (optional), blocked SoA
+  // [9 * 4 * n_elem_padded] floats
   float* d_piola_stress_P;
 
-  // Inverse lumped mass - [n_nodes] floats
-  // Stores 1/m for direct multiplication in time integration
+  // Inverse lumped mass [n_nodes] (1 / m_i)
   float* d_inv_mass_lumped;
 
-  // Device copy of this struct for kernel access
+  // Device copy of this struct
   GPU_FEAT10Opt_Data* d_data;
 
-  // ============================================================
-  // State Flags
-  // ============================================================
+  // State flags
   bool is_initialized;
   bool is_setup;
   bool is_precomputed;
   bool is_mass_computed;
 
-  // ============================================================
   // Constructor
-  // ============================================================
   GPU_FEAT10Opt_Data()
       : n_elem(0),
         n_nodes(0),
@@ -129,130 +105,62 @@ struct GPU_FEAT10Opt_Data {
         is_precomputed(false),
         is_mass_computed(false) {}
 
-  // ============================================================
-  // Host Methods - Lifecycle
-  // ============================================================
-
-  /**
-   * Allocate all device memory.
-   * @param num_elements Number of elements
-   * @param num_nodes Number of nodes
-   */
+  // Host methods – lifecycle
+  // Allocate device memory.
   void Initialize(int num_elements, int num_nodes);
 
-  /**
-   * Setup element data from host arrays.
-   * @param positions Node positions [n_nodes x 3] (row-major: x,y,z per node)
-   * @param connectivity Element connectivity [n_elem x 10]
-   */
+  // Upload element data from host arrays.
   void Setup(const Eigen::MatrixXd& positions,
              const Eigen::MatrixXi& connectivity);
 
-  /**
-   * Free all device memory.
-   */
+  // Free device memory.
   void Destroy();
 
-  // ============================================================
-  // Host Methods - Material
-  // ============================================================
-
-  /**
-   * Set Mooney-Rivlin material parameters.
-   * @param mu10_val First coefficient
-   * @param mu01_val Second coefficient
-   * @param kappa Bulk modulus
-   */
+  // Host methods – material
+  // Set Mooney–Rivlin parameters.
   void SetMooneyRivlin(float mu10_val, float mu01_val, float kappa);
 
-  /**
-   * Set material density.
-   * @param density Density value
-   */
+  // Set material density.
   void SetDensity(float density);
 
-  // ============================================================
-  // Host Methods - Computation
-  // ============================================================
-
-  /**
-   * Compute inverse Jacobian at each quadrature point from reference config.
-   * Must be called after Setup() and before any force computation.
-   */
+  // Host methods – computation
+  // Precompute inverse Jacobians per quadrature point.
   void ComputePrecomputation();
 
-  /**
-   * Compute HRZ lumped mass using 4-point quadrature.
-   * Stores inverse mass (1/m) for efficient time integration.
-   */
+  // Compute HRZ lumped mass (stores 1 / m_i).
   void ComputeLumpedMassHRZ();
 
-  /**
-   * Zero out the internal force buffer.
-   */
+  // Zero internal force buffer.
   void ClearInternalForce();
 
-  /**
-   * Compute internal forces using the fused kernel.
-   * @param writeOutF If true, also write deformation gradient F to device
-   * @param writeOutP If true, also write Piola stress P to device
-   */
+  // Compute internal forces (optionally writing F and P).
   void ComputeInternalForce(bool writeOutF = false, bool writeOutP = false);
 
-  // ============================================================
-  // Host Methods - Data Transfer
-  // ============================================================
-
-  /**
-   * Update node positions on GPU.
-   * @param positions New positions [n_nodes x 3]
-   */
+  // Host methods – data transfer
+  // Update node positions on GPU.
   void UpdatePositions(const Eigen::MatrixXd& positions);
 
-  /**
-   * Retrieve positions from GPU to CPU.
-   * @param x Output x coordinates
-   * @param y Output y coordinates
-   * @param z Output z coordinates
-   */
+  // Download positions to CPU.
   void RetrievePositionToCPU(Eigen::VectorXd& x, Eigen::VectorXd& y,
                              Eigen::VectorXd& z);
 
-  /**
-   * Retrieve internal forces from GPU to CPU.
-   * @param forces Output force vector [3 * n_nodes]
-   */
+  // Download internal forces to CPU (double).
   void RetrieveInternalForceToCPU(Eigen::VectorXd& forces);
 
-  /**
-   * Retrieve internal forces from GPU to CPU (float version).
-   * @param forces Output force vector [3 * n_nodes]
-   */
+  // Download internal forces to CPU (float).
   void RetrieveInternalForceToCPU(Eigen::VectorXf& forces);
 
-  /**
-   * Retrieve inverse lumped mass from GPU to CPU.
-   * @param inv_mass Output inverse mass vector [n_nodes]
-   */
+  // Download inverse lumped mass to CPU.
   void RetrieveInvLumpedMassToCPU(Eigen::VectorXf& inv_mass);
 
-  /**
-   * Retrieve deformation gradient F from GPU to CPU.
-   * @param F Output: F[elem][qp] is 3x3 matrix
-   */
+  // Download deformation gradient F to CPU.
   void RetrieveDeformationGradientToCPU(
       std::vector<std::vector<Eigen::Matrix3f>>& F);
 
-  /**
-   * Retrieve first Piola-Kirchhoff stress P from GPU to CPU.
-   * @param P Output: P[elem][qp] is 3x3 matrix
-   */
+  // Download first Piola–Kirchhoff stress P to CPU.
   void RetrievePiolaToCPU(std::vector<std::vector<Eigen::Matrix3f>>& P);
 
-  // ============================================================
-  // Host Methods - Accessors
-  // ============================================================
-
+  // Host methods – accessors
   int get_n_elem() const { return n_elem; }
   int get_n_nodes() const { return n_nodes; }
   int get_n_elem_padded() const { return n_elem_padded; }
@@ -266,14 +174,10 @@ struct GPU_FEAT10Opt_Data {
   bool IsPrecomputed() const { return is_precomputed; }
   bool IsMassComputed() const { return is_mass_computed; }
 
-  // ============================================================
-  // Device Methods (only available in CUDA code)
-  // ============================================================
+  // Device methods (CUDA only)
 #if defined(__CUDACC__)
 
-  /**
-   * Get position of a node (device-side).
-   */
+  // Get node position.
   __device__ void getNodePosition(int node_idx, double& x, double& y,
                                   double& z) const {
     x = d_pos_nodes[3 * node_idx + 0];
@@ -281,9 +185,7 @@ struct GPU_FEAT10Opt_Data {
     z = d_pos_nodes[3 * node_idx + 2];
   }
 
-  /**
-   * Get reference position of a node (device-side).
-   */
+  // Get reference node position.
   __device__ void getNodePositionRef(int node_idx, double& x, double& y,
                                      double& z) const {
     x = d_pos_nodes_ref[3 * node_idx + 0];
@@ -294,17 +196,8 @@ struct GPU_FEAT10Opt_Data {
 #endif
 };
 
-// ============================================================
-// Kernel Launch Wrapper (declared here, defined in FEAT10DataOpt.cu)
-// ============================================================
-
-/**
- * Launch the fused internal force kernel.
- * @param d_data Device pointer to GPU_FEAT10Opt_Data
- * @param n_elem_padded Padded element count (must be multiple of 16)
- * @param writeOutF Whether to write deformation gradient F
- * @param writeOutP Whether to write Piola stress P
- */
-void launchInternalForceKernel_FEAT10Opt(GPU_FEAT10Opt_Data* d_data,
+// Kernel launch wrapper (declared here, defined in FEAT10DataOpt.cu).
+// Launch fused internal force kernel using host-side struct.
+void launchInternalForceKernel_FEAT10Opt(const GPU_FEAT10Opt_Data* host_data,
                                          int n_elem_padded, bool writeOutF,
                                          bool writeOutP);

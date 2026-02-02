@@ -1,9 +1,11 @@
 /*==============================================================
  *==============================================================
- * Project: TL-FEA
+ * Project: RoboDyna
+ * Author:  Ganesh Arivoli
+ * Email:   arivoli@wisc.edu
  * File:    SyncedExplicitOpt.cu
- * Brief:   Implements the SyncedExplicitOptSolver class with GPU kernels
- *          for symplectic Euler time integration with FEAT10Opt elements.
+ * Brief:   Implements SyncedExplicitOptSolver with GPU kernels for
+ *          symplectic Euler explicit time integration (FEAT10Opt).
  *==============================================================
  *==============================================================*/
 
