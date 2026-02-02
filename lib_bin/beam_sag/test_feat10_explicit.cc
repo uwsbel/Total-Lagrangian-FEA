@@ -6,8 +6,9 @@
  *
  * This driver mirrors test-scripts/T10-tets/f-form-T10-beam-explicit.py:
  * loads the FEAT10 beam mesh, clamps nodes at x == 0, applies a point load,
- * and advances the system with the SyncedExplicit solver using symplectic Euler.
- * 
+ * and advances the system with the SyncedExplicit solver using symplectic
+ * Euler.
+ *
  * TODO: Integrate this with beam resolution study by adding explicit solver.
  */
 
@@ -29,20 +30,31 @@
 
 namespace {
 
-constexpr double kE    = 7e8;
-constexpr double kNu   = 0.33;
-constexpr double kRho0 = 2700;
+// SVK material properties (aluminum-like, matching FEniCS)
+constexpr double kE    = 7.0e8;   // Young's modulus (Pa)
+constexpr double kNu   = 0.33;    // Poisson's ratio
+constexpr double kRho0 = 2700.0;  // Density (kg/m³)
+
+// Mooney-Rivlin (rubber-like), used when --material=mr
+constexpr double kMR_mu10  = 80000.0;  // Pa
+constexpr double kMR_mu01  = 20000.0;  // Pa
+constexpr double kMR_kappa = 1e6;      // Pa (bulk modulus)
+constexpr double kMR_rho   = 1100.0;   // kg/m³
+
+enum class MaterialKind { kSVK, kMR };
 
 struct Options {
-  double dt      = 1e-5;
-  int steps      = 5000;
-  bool write_csv = false;
+  MaterialKind material = MaterialKind::kSVK;
+  double dt             = 1e-5;
+  int steps             = 5000;
+  bool write_csv        = false;
   std::string csv_path;
 };
 
 void PrintUsage(const char* argv0) {
   std::cout << "Usage: " << argv0
-            << " [--dt=DT] [--steps=N] [--csv[=PATH]] [--help]\n";
+            << " [--mat=MAT] [--dt=DT] [--steps=N] [--csv[=PATH]] [--help]\n"
+            << "  --mat=MAT   svk | mr (default: svk)\n";
 }
 
 bool StartsWith(const std::string& s, const std::string& prefix) {
@@ -75,12 +87,36 @@ bool ParseDouble(const std::string& s, double& out) {
   }
 }
 
+bool ParseMaterial(const std::string& s, MaterialKind& out) {
+  if (s == "svk") {
+    out = MaterialKind::kSVK;
+    return true;
+  }
+  if (s == "mr") {
+    out = MaterialKind::kMR;
+    return true;
+  }
+  return false;
+}
+
+std::string MaterialName(MaterialKind m) {
+  return m == MaterialKind::kSVK ? "svk" : "mr";
+}
+
 bool ParseArgs(int argc, char** argv, Options& opt) {
   for (int i = 1; i < argc; ++i) {
     const std::string arg(argv[i]);
     if (arg == "--help" || arg == "-h") {
       PrintUsage(argv[0]);
       return false;
+    }
+    if (StartsWith(arg, "--mat=")) {
+      const std::string v = arg.substr(std::string("--mat=").size());
+      if (!ParseMaterial(v, opt.material)) {
+        std::cerr << "Unknown material: " << v << "\n";
+        return false;
+      }
+      continue;
     }
     if (StartsWith(arg, "--dt=")) {
       const std::string v = arg.substr(std::string("--dt=").size());
@@ -164,10 +200,8 @@ int main(int argc, char** argv) {
   const std::string node_file = mesh_path("data/meshes/T10/beam_3x2x1.1.node");
   const std::string elem_file = mesh_path("data/meshes/T10/beam_3x2x1.1.ele");
 
-  int n_nodes =
-      ANCFCPUUtils::FEAT10_read_nodes(node_file.c_str(), nodes);
-  int n_elems =
-      ANCFCPUUtils::FEAT10_read_elements(elem_file.c_str(), elements);
+  int n_nodes = ANCFCPUUtils::FEAT10_read_nodes(node_file.c_str(), nodes);
+  int n_elems = ANCFCPUUtils::FEAT10_read_elements(elem_file.c_str(), elements);
 
   std::cout << "mesh read nodes: " << n_nodes << std::endl;
   std::cout << "mesh read elements: " << n_elems << std::endl;
@@ -197,9 +231,14 @@ int main(int argc, char** argv) {
 
   gpu_t10_data.Setup(tet5pt_x_host, tet5pt_y_host, tet5pt_z_host,
                      tet5pt_weights_host, h_x12, h_y12, h_z12, elements);
-  gpu_t10_data.SetDensity(kRho0);
+  if (opt.material == MaterialKind::kSVK) {
+    gpu_t10_data.SetDensity(kRho0);
+    gpu_t10_data.SetSVK(kE, kNu);
+  } else {
+    gpu_t10_data.SetDensity(kMR_rho);
+    gpu_t10_data.SetMooneyRivlin(kMR_mu10, kMR_mu01, kMR_kappa);
+  }
   gpu_t10_data.SetDamping(0.0, 0.0);
-  gpu_t10_data.SetSVK(kE, kNu);
   gpu_t10_data.CalcDnDuPre();
   gpu_t10_data.CalcLumpedMassHRZ();
 
@@ -212,7 +251,7 @@ int main(int argc, char** argv) {
     }
   }
 
-  // External force: distribute 5000N in +x at x == 3
+  // External force: distribute 100000N in +Z at x == 3
   Eigen::VectorXd h_f_ext(gpu_t10_data.get_n_coef() * 3);
   h_f_ext.setZero();
   std::vector<int> force_node_indices;
@@ -222,9 +261,9 @@ int main(int argc, char** argv) {
     }
   }
   if (!force_node_indices.empty()) {
-    const double force_per_node = 5000.0 / force_node_indices.size();
+    const double force_per_node = 100000.0 / force_node_indices.size();
     for (int node_idx : force_node_indices) {
-      h_f_ext(3 * node_idx + 0) = force_per_node;
+      h_f_ext(3 * node_idx + 2) = force_per_node;  // Z direction
     }
   }
   gpu_t10_data.SetExternalForce(h_f_ext);
@@ -241,15 +280,22 @@ int main(int argc, char** argv) {
   target_node_y.reserve(opt.steps);
   target_node_z.reserve(opt.steps);
 
-  std::cout << "Running explicit solver: dt=" << opt.dt
+  std::cout << "Running explicit solver: material="
+            << MaterialName(opt.material) << " dt=" << opt.dt
             << ", steps=" << opt.steps << std::endl;
 
   for (int step = 0; step < opt.steps; ++step) {
+    // Turn off force at halfway point
+    if (step == opt.steps / 2) {
+      h_f_ext.setZero();
+      gpu_t10_data.SetExternalForce(h_f_ext);
+    }
     solver.Solve();
 
     // Print timing for this step
-    std::cout << "Step " << step << ": SyncedExplicit kernel time: "
-              << solver.GetLastStepTime() << " ms" << std::endl;
+    std::cout << "Step " << step
+              << ": SyncedExplicit kernel time: " << solver.GetLastStepTime()
+              << " ms" << std::endl;
 
     double x_target = 0.0, y_target = 0.0, z_target = 0.0;
     HANDLE_ERROR(cudaMemcpy(&x_target,
@@ -276,14 +322,16 @@ int main(int argc, char** argv) {
   if (opt.write_csv) {
     std::string out_path = opt.csv_path;
     if (out_path.empty()) {
-      out_path = JoinPath(DefaultOutputDir(), "feat10_gpu_explicit.csv");
+      out_path =
+          JoinPath(DefaultOutputDir(), "feat10_gpu_explicit_" +
+                                           MaterialName(opt.material) + ".csv");
     }
     std::ofstream csv_file(out_path);
     csv_file << std::fixed << std::setprecision(17);
     csv_file << "step,x_position,y_position,z_position\n";
     for (int i = 0; i < static_cast<int>(target_node_x.size()); ++i) {
-      csv_file << i << "," << target_node_x[i] << "," << target_node_y[i]
-               << "," << target_node_z[i] << "\n";
+      csv_file << i << "," << target_node_x[i] << "," << target_node_y[i] << ","
+               << target_node_z[i] << "\n";
     }
     std::cout << "Wrote CSV: " << out_path << std::endl;
   }

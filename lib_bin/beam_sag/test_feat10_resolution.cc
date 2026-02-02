@@ -37,33 +37,44 @@
 
 namespace {
 
-constexpr double kE    = 7e8;
-constexpr double kNu   = 0.33;
-constexpr double kRho0 = 2700;
+// SVK material properties (aluminum-like, matching FEniCS)
+constexpr double kE    = 7.0e8;   // Young's modulus (Pa)
+constexpr double kNu   = 0.33;    // Poisson's ratio
+constexpr double kRho0 = 2700.0;  // Density (kg/m³)
+
+// Mooney-Rivlin (rubber-like), used when --material=mr
+constexpr double kMR_mu10  = 80000.0;  // Pa
+constexpr double kMR_mu01  = 20000.0;  // Pa
+constexpr double kMR_kappa = 1e6;      // Pa (bulk modulus)
+constexpr double kMR_rho   = 1100.0;   // kg/m³
 
 enum class SolverKind { kNewton, kVbd, kAdamW };
+enum class MaterialKind { kSVK, kMR };
 
 struct Options {
-  SolverKind solver = SolverKind::kAdamW;
-  int steps         = 50;
-  double dt         = 1e-3;
-  double omega      = std::numeric_limits<double>::quiet_NaN();  // VBD only
-  int res           = 8;  // 0/2/4/8/16/32
-  bool write_csv    = false;
+  SolverKind solver     = SolverKind::kAdamW;
+  MaterialKind material = MaterialKind::kSVK;
+  int steps             = 50;
+  double dt             = 1e-3;
+  double omega          = std::numeric_limits<double>::quiet_NaN();  // VBD only
+  int res               = 8;  // 0/2/4/8/16/32
+  bool write_csv        = false;
   std::string csv_path;
 };
 
 void PrintUsage(const char* argv0) {
-  std::cout << "Usage: " << argv0
-            << " [--solver=SOLVER] [--res=R] [--steps=N] [--dt=DT]\n"
-            << "                 [--omega=W] [--csv[=PATH]] [--help]\n\n"
-            << "  --solver=SOLVER   newton | vbd | adamw (default: adamw)\n"
-            << "                   (adamw uses SyncedAdamWNocoopSolver)\n"
-            << "  --res=R            0 | 2 | 4 | 8 | 16 | 32 (default: 8)\n"
-            << "  --steps=N          number of Solve() calls (default: 50)\n"
-            << "  --dt=DT            time step (default: 1e-3)\n"
-            << "  --omega=W          VBD relaxation factor (default: 1.8)\n"
-            << "  --csv[=PATH]       write target-node x history CSV\n";
+  std::cout
+      << "Usage: " << argv0
+      << " [--solver=SOLVER] [--mat=MAT] [--res=R] [--steps=N] [--dt=DT]\n"
+      << "                 [--omega=W] [--csv[=PATH]] [--help]\n\n"
+      << "  --solver=SOLVER   newton | vbd | adamw (default: adamw)\n"
+      << "                   (adamw uses SyncedAdamWNocoopSolver)\n"
+      << "  --mat=MAT         svk | mr (default: svk)\n"
+      << "  --res=R            0 | 2 | 4 | 8 | 16 | 32 (default: 8)\n"
+      << "  --steps=N          number of Solve() calls (default: 50)\n"
+      << "  --dt=DT            time step (default: 1e-3)\n"
+      << "  --omega=W          VBD relaxation factor (default: 1.8)\n"
+      << "  --csv[=PATH]       write target-node x history CSV\n";
 }
 
 bool StartsWith(const std::string& s, const std::string& prefix) {
@@ -124,6 +135,22 @@ std::string SolverName(SolverKind solver) {
   return "unknown";
 }
 
+bool ParseMaterial(const std::string& s, MaterialKind& out) {
+  if (s == "svk") {
+    out = MaterialKind::kSVK;
+    return true;
+  }
+  if (s == "mr") {
+    out = MaterialKind::kMR;
+    return true;
+  }
+  return false;
+}
+
+std::string MaterialName(MaterialKind m) {
+  return m == MaterialKind::kSVK ? "svk" : "mr";
+}
+
 bool ParseArgs(int argc, char** argv, Options& opt) {
   for (int i = 1; i < argc; ++i) {
     const std::string arg(argv[i]);
@@ -135,6 +162,14 @@ bool ParseArgs(int argc, char** argv, Options& opt) {
       const std::string v = arg.substr(std::string("--solver=").size());
       if (!ParseSolver(v, opt.solver)) {
         std::cerr << "Unknown solver: " << v << "\n";
+        return false;
+      }
+      continue;
+    }
+    if (StartsWith(arg, "--mat=")) {
+      const std::string v = arg.substr(std::string("--mat=").size());
+      if (!ParseMaterial(v, opt.material)) {
+        std::cerr << "Unknown material: " << v << "\n";
         return false;
       }
       continue;
@@ -267,7 +302,8 @@ int main(int argc, char** argv) {
 
   std::cout << "mesh read nodes: " << n_nodes << std::endl;
   std::cout << "mesh read elements: " << n_elems << std::endl;
-  std::cout << "solver=" << SolverName(opt.solver) << " res=" << opt.res
+  std::cout << "solver=" << SolverName(opt.solver)
+            << " material=" << MaterialName(opt.material) << " res=" << opt.res
             << " steps=" << opt.steps << " dt=" << opt.dt << std::endl;
 
   GPU_FEAT10_Data data(n_elems, n_nodes);
@@ -295,7 +331,8 @@ int main(int argc, char** argv) {
   }
   data.SetNodalFixed(h_fixed_nodes);
 
-  // External force: distribute 5000N in +x at x == 3
+  // External force: distribute 100000N in +z at x == 3 (for first half of
+  // simulation only)
   Eigen::VectorXd h_f_ext(data.get_n_coef() * 3);
   h_f_ext.setZero();
   std::vector<int> force_node_indices;
@@ -305,9 +342,9 @@ int main(int argc, char** argv) {
     }
   }
   if (!force_node_indices.empty()) {
-    const double force_per_node = 5000.0 / force_node_indices.size();
+    const double force_per_node = 100000.0 / force_node_indices.size();
     for (int node_idx : force_node_indices) {
-      h_f_ext(3 * node_idx + 0) = force_per_node;
+      h_f_ext(3 * node_idx + 2) = force_per_node;  // Z direction
     }
   }
   data.SetExternalForce(h_f_ext);
@@ -316,9 +353,14 @@ int main(int argc, char** argv) {
   data.Setup(Quadrature::tet5pt_x, Quadrature::tet5pt_y, Quadrature::tet5pt_z,
              Quadrature::tet5pt_weights, h_x12, h_y12, h_z12, elements);
 
-  data.SetDensity(kRho0);
+  if (opt.material == MaterialKind::kSVK) {
+    data.SetDensity(kRho0);
+    data.SetSVK(kE, kNu);
+  } else {
+    data.SetDensity(kMR_rho);
+    data.SetMooneyRivlin(kMR_mu10, kMR_mu01, kMR_kappa);
+  }
   data.SetDamping(0.0, 0.0);
-  data.SetSVK(kE, kNu);
 
   // Common precomputations
   data.CalcDnDuPre();
@@ -337,12 +379,13 @@ int main(int argc, char** argv) {
     std::string out_path = opt.csv_path;
     if (out_path.empty()) {
       const std::string filename = "node_x_history_feat10_res" + res_str + "_" +
-                                   SolverName(opt.solver) + ".csv";
+                                   SolverName(opt.solver) + "_" +
+                                   MaterialName(opt.material) + ".csv";
       out_path = JoinPath(DefaultOutputDir(), filename);
     }
     csv_file.open(out_path);
     csv_file << std::fixed << std::setprecision(17);
-    csv_file << "step,x_position\n";
+    csv_file << "step,x_position,y_position,z_position\n";
     std::cout << "Writing CSV: " << out_path << std::endl;
   }
 
@@ -351,10 +394,13 @@ int main(int argc, char** argv) {
     data.RetrievePositionToCPU(x12_current, y12_current, z12_current);
     if (plot_target_node < x12_current.size()) {
       const double x = x12_current(plot_target_node);
+      const double y = y12_current(plot_target_node);
+      const double z = z12_current(plot_target_node);
       std::cout << "Step " << step << ": node " << plot_target_node
-                << " x = " << std::setprecision(17) << x << std::endl;
+                << " x = " << std::setprecision(17) << x << " y = " << y
+                << " z = " << z << std::endl;
       if (opt.write_csv) {
-        csv_file << step << "," << x << "\n";
+        csv_file << step << "," << x << "," << y << "," << z << "\n";
         csv_file.flush();
       }
     }
@@ -369,6 +415,10 @@ int main(int argc, char** argv) {
       solver.AnalyzeHessianSparsity();
       solver.SetFixedSparsityPattern(true);
       for (int step = 0; step < opt.steps; ++step) {
+        if (step == opt.steps / 2) {
+          h_f_ext.setZero();
+          data.SetExternalForce(h_f_ext);
+        }
         solver.Solve();
         record_step(step);
       }
@@ -385,6 +435,10 @@ int main(int argc, char** argv) {
       solver.InitializeMassDiagBlocks();
       solver.InitializeFixedMap();
       for (int step = 0; step < opt.steps; ++step) {
+        if (step == opt.steps / 2) {
+          h_f_ext.setZero();
+          data.SetExternalForce(h_f_ext);
+        }
         solver.Solve();
         record_step(step);
       }
@@ -415,6 +469,10 @@ int main(int argc, char** argv) {
       solver.Setup();
       solver.SetParameters(&params);
       for (int step = 0; step < opt.steps; ++step) {
+        if (step == opt.steps / 2) {
+          h_f_ext.setZero();
+          data.SetExternalForce(h_f_ext);
+        }
         solver.Solve();
         record_step(step);
       }
