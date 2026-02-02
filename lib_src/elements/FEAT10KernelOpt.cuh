@@ -94,17 +94,18 @@ __global__ void internalF_MooneyRivlin_4QP(const GPU_FEAT10Opt_Data* __restrict_
   float* __restrict__ pPiolaStressP = d_data->d_piola_stress_P;
 
   // QP coordinates for the 4-point rule on the T10 tet element
-  // Lane mapping:
+  // Lane mapping (canonical 4-point tet rule: permutations of (b, a, a, a)):
   //  lane 0: (a,a,a)
   //  lane 1: (b,a,a)
-  //  lane 2: (b,b,a)
-  //  lane 3: (b,b,b)
+  //  lane 2: (a,b,a)
+  //  lane 3: (a,a,b)
   constexpr float a = 0.1381966011250105f;
   constexpr float b = 0.5854101966249685f;
 
-  const float xi = (lane_in_tile == 0) ? a : b;
-  const float eta = (lane_in_tile < 2) ? a : b;
-  const float zeta = (lane_in_tile < 3) ? a : b;
+  // Canonical 4-point tet rule: permutations of (b, a, a, a)
+  const float xi = (lane_in_tile == 1) ? b : a;
+  const float eta = (lane_in_tile == 2) ? b : a;
+  const float zeta = (lane_in_tile == 3) ? b : a;
 
   // Index arithmetic for coalesced memory access
   // Blocked SoA layout: within each block, components are grouped
@@ -181,9 +182,10 @@ __global__ void internalF_MooneyRivlin_4QP(const GPU_FEAT10Opt_Data* __restrict_
       const float NUz = tile.shfl(value, 2);
 
       const float h0 = 4.f * eta + 4.f * xi + 4.f * zeta - 3.f;
-      const float dummy0 = h0 * (isoJacInv00 + isoJacInv01 + isoJacInv02);
-      const float dummy1 = h0 * (isoJacInv10 + isoJacInv11 + isoJacInv12);
-      const float dummy2 = h0 * (isoJacInv20 + isoJacInv21 + isoJacInv22);
+      // (dN/dX)_j = (dN/dxi)_i * Jinv_ij: use columns of Jinv
+      const float dummy0 = h0 * (isoJacInv00 + isoJacInv10 + isoJacInv20);
+      const float dummy1 = h0 * (isoJacInv01 + isoJacInv11 + isoJacInv21);
+      const float dummy2 = h0 * (isoJacInv02 + isoJacInv12 + isoJacInv22);
 
       F00 = NUx * dummy0;
       F01 = NUx * dummy1;
@@ -209,8 +211,8 @@ __global__ void internalF_MooneyRivlin_4QP(const GPU_FEAT10Opt_Data* __restrict_
 
       const float h0 = 4.f * xi - 1.f;
       const float dummy0 = h0 * isoJacInv00;
-      const float dummy1 = h0 * isoJacInv10;
-      const float dummy2 = h0 * isoJacInv20;
+      const float dummy1 = h0 * isoJacInv01;
+      const float dummy2 = h0 * isoJacInv02;
 
       F00 += NUx * dummy0;
       F01 += NUx * dummy1;
@@ -235,9 +237,9 @@ __global__ void internalF_MooneyRivlin_4QP(const GPU_FEAT10Opt_Data* __restrict_
       const float NUz = tile.shfl(value, 2);
 
       const float h1 = 4.f * eta - 1.f;
-      const float dummy0 = h1 * isoJacInv01;
+      const float dummy0 = h1 * isoJacInv10;
       const float dummy1 = h1 * isoJacInv11;
-      const float dummy2 = h1 * isoJacInv21;
+      const float dummy2 = h1 * isoJacInv12;
 
       F00 += NUx * dummy0;
       F01 += NUx * dummy1;
@@ -262,8 +264,8 @@ __global__ void internalF_MooneyRivlin_4QP(const GPU_FEAT10Opt_Data* __restrict_
       const float NUz = tile.shfl(value, 2);
 
       const float h2 = 4.f * zeta - 1.f;
-      const float dummy0 = h2 * isoJacInv02;
-      const float dummy1 = h2 * isoJacInv12;
+      const float dummy0 = h2 * isoJacInv20;
+      const float dummy1 = h2 * isoJacInv21;
       const float dummy2 = h2 * isoJacInv22;
 
       F00 += NUx * dummy0;
@@ -290,9 +292,10 @@ __global__ void internalF_MooneyRivlin_4QP(const GPU_FEAT10Opt_Data* __restrict_
 
       const float h0 = -4.f * eta - 8.f * xi - 4.f * zeta + 4.f;
       const float h1 = -4.f * xi;
-      const float dummy0 = h0 * isoJacInv00 + h1 * (isoJacInv01 + isoJacInv02);
-      const float dummy1 = h0 * isoJacInv10 + h1 * (isoJacInv11 + isoJacInv12);
-      const float dummy2 = h0 * isoJacInv20 + h1 * (isoJacInv21 + isoJacInv22);
+      const float h2 = -4.f * xi;
+      const float dummy0 = h0 * isoJacInv00 + h1 * isoJacInv10 + h2 * isoJacInv20;
+      const float dummy1 = h0 * isoJacInv01 + h1 * isoJacInv11 + h2 * isoJacInv21;
+      const float dummy2 = h0 * isoJacInv02 + h1 * isoJacInv12 + h2 * isoJacInv22;
 
       F00 += NUx * dummy0;
       F01 += NUx * dummy1;
@@ -318,9 +321,9 @@ __global__ void internalF_MooneyRivlin_4QP(const GPU_FEAT10Opt_Data* __restrict_
 
       const float h0 = 4.f * eta;
       const float h1 = 4.f * xi;
-      const float dummy0 = h0 * isoJacInv00 + h1 * isoJacInv01;
-      const float dummy1 = h0 * isoJacInv10 + h1 * isoJacInv11;
-      const float dummy2 = h0 * isoJacInv20 + h1 * isoJacInv21;
+      const float dummy0 = h0 * isoJacInv00 + h1 * isoJacInv10;
+      const float dummy1 = h0 * isoJacInv01 + h1 * isoJacInv11;
+      const float dummy2 = h0 * isoJacInv02 + h1 * isoJacInv12;
 
       F00 += NUx * dummy0;
       F01 += NUx * dummy1;
@@ -348,11 +351,11 @@ __global__ void internalF_MooneyRivlin_4QP(const GPU_FEAT10Opt_Data* __restrict_
       const float h1 = -8.f * eta - 4.f * xi - 4.f * zeta + 4.f;
       const float h2 = -4.f * eta;
       const float dummy0 =
-          h0 * isoJacInv00 + h1 * isoJacInv01 + h2 * isoJacInv02;
+          h0 * isoJacInv00 + h1 * isoJacInv10 + h2 * isoJacInv20;
       const float dummy1 =
-          h0 * isoJacInv10 + h1 * isoJacInv11 + h2 * isoJacInv12;
+          h0 * isoJacInv01 + h1 * isoJacInv11 + h2 * isoJacInv21;
       const float dummy2 =
-          h0 * isoJacInv20 + h1 * isoJacInv21 + h2 * isoJacInv22;
+          h0 * isoJacInv02 + h1 * isoJacInv12 + h2 * isoJacInv22;
 
       F00 += NUx * dummy0;
       F01 += NUx * dummy1;
@@ -377,10 +380,11 @@ __global__ void internalF_MooneyRivlin_4QP(const GPU_FEAT10Opt_Data* __restrict_
       const float NUz = tile.shfl(value, 2);
 
       const float h0 = -4.f * zeta;
+      const float h1 = -4.f * zeta;
       const float h2 = -4.f * eta - 4.f * xi - 8.f * zeta + 4.f;
-      const float dummy0 = h0 * (isoJacInv00 + isoJacInv01) + h2 * isoJacInv02;
-      const float dummy1 = h0 * (isoJacInv10 + isoJacInv11) + h2 * isoJacInv12;
-      const float dummy2 = h0 * (isoJacInv20 + isoJacInv21) + h2 * isoJacInv22;
+      const float dummy0 = h0 * isoJacInv00 + h1 * isoJacInv10 + h2 * isoJacInv20;
+      const float dummy1 = h0 * isoJacInv01 + h1 * isoJacInv11 + h2 * isoJacInv21;
+      const float dummy2 = h0 * isoJacInv02 + h1 * isoJacInv12 + h2 * isoJacInv22;
 
       F00 += NUx * dummy0;
       F01 += NUx * dummy1;
@@ -406,9 +410,9 @@ __global__ void internalF_MooneyRivlin_4QP(const GPU_FEAT10Opt_Data* __restrict_
 
       const float h0 = 4.f * zeta;
       const float h2 = 4.f * xi;
-      const float dummy0 = h0 * isoJacInv00 + h2 * isoJacInv02;
-      const float dummy1 = h0 * isoJacInv10 + h2 * isoJacInv12;
-      const float dummy2 = h0 * isoJacInv20 + h2 * isoJacInv22;
+      const float dummy0 = h0 * isoJacInv00 + h2 * isoJacInv20;
+      const float dummy1 = h0 * isoJacInv01 + h2 * isoJacInv21;
+      const float dummy2 = h0 * isoJacInv02 + h2 * isoJacInv22;
 
       F00 += NUx * dummy0;
       F01 += NUx * dummy1;
@@ -434,9 +438,9 @@ __global__ void internalF_MooneyRivlin_4QP(const GPU_FEAT10Opt_Data* __restrict_
 
       const float h1 = 4.f * zeta;
       const float h2 = 4.f * eta;
-      const float dummy0 = h1 * isoJacInv01 + h2 * isoJacInv02;
-      const float dummy1 = h1 * isoJacInv11 + h2 * isoJacInv12;
-      const float dummy2 = h1 * isoJacInv21 + h2 * isoJacInv22;
+      const float dummy0 = h1 * isoJacInv10 + h2 * isoJacInv20;
+      const float dummy1 = h1 * isoJacInv11 + h2 * isoJacInv21;
+      const float dummy2 = h1 * isoJacInv12 + h2 * isoJacInv22;
 
       F00 += NUx * dummy0;
       F01 += NUx * dummy1;
@@ -614,9 +618,9 @@ __global__ void internalF_MooneyRivlin_4QP(const GPU_FEAT10Opt_Data* __restrict_
       const int whichGlobalNode = pElementNodes[0 * elements_per_block];
       const float h0 = 4.f * eta + 4.f * xi + 4.f * zeta - 3.f;
 
-      const float hx = h0 * (isoJacInv00 + isoJacInv01 + isoJacInv02);
-      const float hy = h0 * (isoJacInv10 + isoJacInv11 + isoJacInv12);
-      const float hz = h0 * (isoJacInv20 + isoJacInv21 + isoJacInv22);
+      const float hx = h0 * (isoJacInv00 + isoJacInv10 + isoJacInv20);
+      const float hy = h0 * (isoJacInv01 + isoJacInv11 + isoJacInv21);
+      const float hz = h0 * (isoJacInv02 + isoJacInv12 + isoJacInv22);
 
       float internalForce;
 
@@ -644,22 +648,22 @@ __global__ void internalF_MooneyRivlin_4QP(const GPU_FEAT10Opt_Data* __restrict_
       float internalForce;
 
       internalForce =
-          h0 * (PKone_00 * isoJacInv00 + PKone_01 * isoJacInv10 +
-                PKone_02 * isoJacInv20);
+          h0 * (PKone_00 * isoJacInv00 + PKone_01 * isoJacInv01 +
+                PKone_02 * isoJacInv02);
       reduce_scale_and_atomicAdd(tile, lane_in_tile, pInternalForceNodes,
                                  whichGlobalNode, 0, internalForce,
                                  forceScalingFactor);
 
       internalForce =
-          h0 * (PKone_10 * isoJacInv00 + PKone_11 * isoJacInv10 +
-                PKone_12 * isoJacInv20);
+          h0 * (PKone_10 * isoJacInv00 + PKone_11 * isoJacInv01 +
+                PKone_12 * isoJacInv02);
       reduce_scale_and_atomicAdd(tile, lane_in_tile, pInternalForceNodes,
                                  whichGlobalNode, 1, internalForce,
                                  forceScalingFactor);
 
       internalForce =
-          h0 * (PKone_20 * isoJacInv00 + PKone_21 * isoJacInv10 +
-                PKone_22 * isoJacInv20);
+          h0 * (PKone_20 * isoJacInv00 + PKone_21 * isoJacInv01 +
+                PKone_22 * isoJacInv02);
       reduce_scale_and_atomicAdd(tile, lane_in_tile, pInternalForceNodes,
                                  whichGlobalNode, 2, internalForce,
                                  forceScalingFactor);
@@ -673,22 +677,22 @@ __global__ void internalF_MooneyRivlin_4QP(const GPU_FEAT10Opt_Data* __restrict_
       float internalForce;
 
       internalForce =
-          h1 * (PKone_00 * isoJacInv01 + PKone_01 * isoJacInv11 +
-                PKone_02 * isoJacInv21);
+          h1 * (PKone_00 * isoJacInv10 + PKone_01 * isoJacInv11 +
+                PKone_02 * isoJacInv12);
       reduce_scale_and_atomicAdd(tile, lane_in_tile, pInternalForceNodes,
                                  whichGlobalNode, 0, internalForce,
                                  forceScalingFactor);
 
       internalForce =
-          h1 * (PKone_10 * isoJacInv01 + PKone_11 * isoJacInv11 +
-                PKone_12 * isoJacInv21);
+          h1 * (PKone_10 * isoJacInv10 + PKone_11 * isoJacInv11 +
+                PKone_12 * isoJacInv12);
       reduce_scale_and_atomicAdd(tile, lane_in_tile, pInternalForceNodes,
                                  whichGlobalNode, 1, internalForce,
                                  forceScalingFactor);
 
       internalForce =
-          h1 * (PKone_20 * isoJacInv01 + PKone_21 * isoJacInv11 +
-                PKone_22 * isoJacInv21);
+          h1 * (PKone_20 * isoJacInv10 + PKone_21 * isoJacInv11 +
+                PKone_22 * isoJacInv12);
       reduce_scale_and_atomicAdd(tile, lane_in_tile, pInternalForceNodes,
                                  whichGlobalNode, 2, internalForce,
                                  forceScalingFactor);
@@ -702,21 +706,21 @@ __global__ void internalF_MooneyRivlin_4QP(const GPU_FEAT10Opt_Data* __restrict_
       float internalForce;
 
       internalForce =
-          h2 * (PKone_00 * isoJacInv02 + PKone_01 * isoJacInv12 +
+          h2 * (PKone_00 * isoJacInv20 + PKone_01 * isoJacInv21 +
                 PKone_02 * isoJacInv22);
       reduce_scale_and_atomicAdd(tile, lane_in_tile, pInternalForceNodes,
                                  whichGlobalNode, 0, internalForce,
                                  forceScalingFactor);
 
       internalForce =
-          h2 * (PKone_10 * isoJacInv02 + PKone_11 * isoJacInv12 +
+          h2 * (PKone_10 * isoJacInv20 + PKone_11 * isoJacInv21 +
                 PKone_12 * isoJacInv22);
       reduce_scale_and_atomicAdd(tile, lane_in_tile, pInternalForceNodes,
                                  whichGlobalNode, 1, internalForce,
                                  forceScalingFactor);
 
       internalForce =
-          h2 * (PKone_20 * isoJacInv02 + PKone_21 * isoJacInv12 +
+          h2 * (PKone_20 * isoJacInv20 + PKone_21 * isoJacInv21 +
                 PKone_22 * isoJacInv22);
       reduce_scale_and_atomicAdd(tile, lane_in_tile, pInternalForceNodes,
                                  whichGlobalNode, 2, internalForce,
@@ -729,10 +733,11 @@ __global__ void internalF_MooneyRivlin_4QP(const GPU_FEAT10Opt_Data* __restrict_
 
       const float h0 = -4.f * eta - 8.f * xi - 4.f * zeta + 4.f;
       const float h1 = -4.f * xi;
+      const float h2 = -4.f * xi;
 
-      const float hx = h0 * isoJacInv00 + h1 * (isoJacInv01 + isoJacInv02);
-      const float hy = h0 * isoJacInv10 + h1 * (isoJacInv11 + isoJacInv12);
-      const float hz = h0 * isoJacInv20 + h1 * (isoJacInv21 + isoJacInv22);
+      const float hx = h0 * isoJacInv00 + h1 * isoJacInv10 + h2 * isoJacInv20;
+      const float hy = h0 * isoJacInv01 + h1 * isoJacInv11 + h2 * isoJacInv21;
+      const float hz = h0 * isoJacInv02 + h1 * isoJacInv12 + h2 * isoJacInv22;
 
       float internalForce;
 
@@ -757,9 +762,9 @@ __global__ void internalF_MooneyRivlin_4QP(const GPU_FEAT10Opt_Data* __restrict_
       const int whichGlobalNode = pElementNodes[5 * elements_per_block];
       const float h0 = 4.f * eta;
       const float h1 = 4.f * xi;
-      const float hx = h0 * isoJacInv00 + h1 * isoJacInv01;
-      const float hy = h0 * isoJacInv10 + h1 * isoJacInv11;
-      const float hz = h0 * isoJacInv20 + h1 * isoJacInv21;
+      const float hx = h0 * isoJacInv00 + h1 * isoJacInv10;
+      const float hy = h0 * isoJacInv01 + h1 * isoJacInv11;
+      const float hz = h0 * isoJacInv02 + h1 * isoJacInv12;
 
       float internalForce;
 
@@ -786,11 +791,11 @@ __global__ void internalF_MooneyRivlin_4QP(const GPU_FEAT10Opt_Data* __restrict_
       const float h1 = -8.f * eta - 4.f * xi - 4.f * zeta + 4.f;
       const float h2 = -4.f * eta;
       const float hx =
-          h0 * isoJacInv00 + h1 * isoJacInv01 + h2 * isoJacInv02;
+          h0 * isoJacInv00 + h1 * isoJacInv10 + h2 * isoJacInv20;
       const float hy =
-          h0 * isoJacInv10 + h1 * isoJacInv11 + h2 * isoJacInv12;
+          h0 * isoJacInv01 + h1 * isoJacInv11 + h2 * isoJacInv21;
       const float hz =
-          h0 * isoJacInv20 + h1 * isoJacInv21 + h2 * isoJacInv22;
+          h0 * isoJacInv02 + h1 * isoJacInv12 + h2 * isoJacInv22;
 
       float internalForce;
 
@@ -814,10 +819,11 @@ __global__ void internalF_MooneyRivlin_4QP(const GPU_FEAT10Opt_Data* __restrict_
     {
       const int whichGlobalNode = pElementNodes[7 * elements_per_block];
       const float h0 = -4.f * zeta;
+      const float h1 = -4.f * zeta;
       const float h2 = -4.f * eta - 4.f * xi - 8.f * zeta + 4.f;
-      const float hx = h0 * (isoJacInv00 + isoJacInv01) + h2 * isoJacInv02;
-      const float hy = h0 * (isoJacInv10 + isoJacInv11) + h2 * isoJacInv12;
-      const float hz = h0 * (isoJacInv20 + isoJacInv21) + h2 * isoJacInv22;
+      const float hx = h0 * isoJacInv00 + h1 * isoJacInv10 + h2 * isoJacInv20;
+      const float hy = h0 * isoJacInv01 + h1 * isoJacInv11 + h2 * isoJacInv21;
+      const float hz = h0 * isoJacInv02 + h1 * isoJacInv12 + h2 * isoJacInv22;
 
       float internalForce;
 
@@ -842,9 +848,9 @@ __global__ void internalF_MooneyRivlin_4QP(const GPU_FEAT10Opt_Data* __restrict_
       const int whichGlobalNode = pElementNodes[8 * elements_per_block];
       const float h0 = 4.f * zeta;
       const float h2 = 4.f * xi;
-      const float hx = h0 * isoJacInv00 + h2 * isoJacInv02;
-      const float hy = h0 * isoJacInv10 + h2 * isoJacInv12;
-      const float hz = h0 * isoJacInv20 + h2 * isoJacInv22;
+      const float hx = h0 * isoJacInv00 + h2 * isoJacInv20;
+      const float hy = h0 * isoJacInv01 + h2 * isoJacInv21;
+      const float hz = h0 * isoJacInv02 + h2 * isoJacInv22;
 
       float internalForce;
 
@@ -869,9 +875,9 @@ __global__ void internalF_MooneyRivlin_4QP(const GPU_FEAT10Opt_Data* __restrict_
       const int whichGlobalNode = pElementNodes[9 * elements_per_block];
       const float h1 = 4.f * zeta;
       const float h2 = 4.f * eta;
-      const float hx = h1 * isoJacInv01 + h2 * isoJacInv02;
-      const float hy = h1 * isoJacInv11 + h2 * isoJacInv12;
-      const float hz = h1 * isoJacInv21 + h2 * isoJacInv22;
+      const float hx = h1 * isoJacInv10 + h2 * isoJacInv20;
+      const float hy = h1 * isoJacInv11 + h2 * isoJacInv21;
+      const float hz = h1 * isoJacInv12 + h2 * isoJacInv22;
 
       float internalForce;
 

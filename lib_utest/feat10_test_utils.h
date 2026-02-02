@@ -575,11 +575,11 @@ inline void Setup4PointQuadrature(Eigen::VectorXd& qp_x, Eigen::VectorXd& qp_y,
   qp_x(1) = b;
   qp_y(1) = a;
   qp_z(1) = a;
-  qp_x(2) = b;
+  qp_x(2) = a;
   qp_y(2) = b;
   qp_z(2) = a;
-  qp_x(3) = b;
-  qp_y(3) = b;
+  qp_x(3) = a;
+  qp_y(3) = a;
   qp_z(3) = b;
 
   for (int i = 0; i < 4; i++) {

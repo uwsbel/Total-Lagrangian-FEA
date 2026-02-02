@@ -161,9 +161,10 @@ __global__ void computeHRZLumpedMass_kernel(GPU_FEAT10Opt_Data* d_data,
 
   // Loop over 4 quadrature points
   for (int qp = 0; qp < 4; qp++) {
-    const float xi = (qp == 0) ? a : b;
-    const float eta = (qp < 2) ? a : b;
-    const float zeta = (qp < 3) ? a : b;
+    // Canonical 4-point tet rule: permutations of (b, a, a, a)
+    const float xi = (qp == 1) ? b : a;
+    const float eta = (qp == 2) ? b : a;
+    const float zeta = (qp == 3) ? b : a;
 
     // Barycentric coordinates
     const float L1 = 1.0f - xi - eta - zeta;
