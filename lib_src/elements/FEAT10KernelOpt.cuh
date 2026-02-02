@@ -46,9 +46,16 @@ __device__ __forceinline__ void reduce_scale_and_atomicAdd(
  * Internal force kernel for T10 elements with Mooney-Rivlin, 4-point quadrature.
  * 4 threads per element (one per QP), 64 threads per block. Uses warp shuffle reduction.
  */
-__global__ void internalF_MooneyRivlin_4QP(const GPU_FEAT10Opt_Data* __restrict__ d_data,
-                                           bool writeOutDefGradientF,
-                                           bool writeOutPiolaP) {
+__global__ void internalF_MooneyRivlin_4QP(
+    int n_elem,
+    const double* __restrict__ pPosNodes,
+    const int* __restrict__ pElement_NodeIndexes,
+    const float* __restrict__ pIsoMapInverse,
+    float* __restrict__ pInternalForceNodes,
+    float* __restrict__ pDeformationGradientF,
+    float* __restrict__ pPiolaStressP,
+    float mu10, float mu01, float bulkK, float minJthreshold,
+    bool writeOutDefGradientF, bool writeOutPiolaP) {
   // Define a tile of four threads; each thread handles one quadrature point
   constexpr int TILE = 4;
   namespace cg = cooperative_groups;
@@ -68,23 +75,9 @@ __global__ void internalF_MooneyRivlin_4QP(const GPU_FEAT10Opt_Data* __restrict_
   float* s_PK1 = s_invJacobian + 9 * blockDim.x;
 
   // Early exit for padded elements (they have degenerate geometry)
-  if (element_idx >= d_data->n_elem) {
+  if (element_idx >= n_elem) {
     return;
   }
-
-  // Load material parameters from the data struct
-  const float mu10 = d_data->mu10;
-  const float mu01 = d_data->mu01;
-  const float bulkK = d_data->bulkK;
-  const float minJthreshold = d_data->minJthreshold;
-
-  // Load device pointers
-  const double* __restrict__ pPosNodes = d_data->d_pos_nodes;
-  const int* __restrict__ pElement_NodeIndexes = d_data->d_elem_nodes_soa;
-  const float* __restrict__ pIsoMapInverse = d_data->d_iso_map_inv;
-  float* __restrict__ pInternalForceNodes = d_data->d_internal_force;
-  float* __restrict__ pDeformationGradientF = d_data->d_deformation_grad_F;
-  float* __restrict__ pPiolaStressP = d_data->d_piola_stress_P;
 
   // QP coordinates for the 4-point rule on the T10 tet element
   // Lane mapping (canonical 4-point tet rule: permutations of (b, a, a, a)):
