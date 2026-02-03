@@ -78,7 +78,7 @@ class SyncedExplicitOptSolver {
 
   // Timing
   // Time in ms for last Solve() call.
-  float GetLastStepTimeMs() const { return last_step_time_ms_; }
+  double GetLastStepTimeMs() const { return last_step_time_ms_; }
 
   // Data transfer
   // Download velocity to CPU.
@@ -114,7 +114,7 @@ class SyncedExplicitOptSolver {
   // Timing
   cudaEvent_t timing_start_;
   cudaEvent_t timing_stop_;
-  float last_step_time_ms_;
+  double last_step_time_ms_;
 
   // Internal methods
   void AllocateMemory();

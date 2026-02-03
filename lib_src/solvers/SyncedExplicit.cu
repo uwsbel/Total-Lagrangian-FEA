@@ -143,7 +143,7 @@ SyncedExplicitSolver::SyncedExplicitSolver(GPU_FEAT10_Data* element)
       inv_mass_ready_(false),
       timing_start_(nullptr),
       timing_stop_(nullptr),
-      last_step_time_ms_(0.0f) {
+      last_step_time_ms_(0.0) {
   // Set default parameters
   params_.dt = 1e-6;
 
@@ -288,7 +288,9 @@ void SyncedExplicitSolver::Solve() {
   // Record timing
   HANDLE_ERROR(cudaEventRecord(timing_stop_));
   HANDLE_ERROR(cudaEventSynchronize(timing_stop_));
-  HANDLE_ERROR(cudaEventElapsedTime(&last_step_time_ms_, timing_start_, timing_stop_));
+  float elapsed_ms;
+  HANDLE_ERROR(cudaEventElapsedTime(&elapsed_ms, timing_start_, timing_stop_));
+  last_step_time_ms_ = elapsed_ms;
 
   // Update time tracking
   current_time_ += params_.dt;

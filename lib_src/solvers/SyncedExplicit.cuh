@@ -39,7 +39,7 @@ class SyncedExplicitSolver : public SolverBase {
   int n_nodes() const { return n_nodes_; }
   
   // Timing accessor
-  float GetLastStepTime() const { return last_step_time_ms_; }
+  double GetLastStepTime() const { return last_step_time_ms_; }
 
   // Boundary conditions
   void SetFixedNodes(const std::vector<int>& fixed_nodes);
@@ -73,7 +73,7 @@ class SyncedExplicitSolver : public SolverBase {
   // Timing (member events for zero-overhead per step)
   cudaEvent_t timing_start_;
   cudaEvent_t timing_stop_;
-  float last_step_time_ms_;
+  double last_step_time_ms_;
 
   // Internal methods
   void AllocateMemory();

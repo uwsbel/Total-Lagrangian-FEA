@@ -291,7 +291,7 @@ int main(int argc, char** argv) {
   std::vector<double> target_node_x;
   std::vector<double> target_node_y;
   std::vector<double> target_node_z;
-  std::vector<float> step_times_ms;
+  std::vector<double> step_times_ms;
   target_node_x.reserve(opt.steps);
   target_node_y.reserve(opt.steps);
   target_node_z.reserve(opt.steps);
@@ -322,7 +322,7 @@ int main(int argc, char** argv) {
 
     solver.Solve();
 
-    float kernel_time = solver.GetLastStepTimeMs();
+    double kernel_time = solver.GetLastStepTimeMs();
     step_times_ms.push_back(kernel_time);
 
     // Get target node position from GPU
@@ -343,11 +343,11 @@ int main(int argc, char** argv) {
   }
 
   // Print timing statistics
-  float total_time = 0.0f;
-  for (float t : step_times_ms) {
+  double total_time = 0.0;
+  for (double t : step_times_ms) {
     total_time += t;
   }
-  float avg_time = total_time / opt.steps;
+  const double avg_time = total_time / static_cast<double>(opt.steps);
   std::cout << "\nTiming summary:" << std::endl;
   std::cout << "  Total simulation time: " << total_time << " ms" << std::endl;
   std::cout << "  Average step time: " << avg_time << " ms" << std::endl;

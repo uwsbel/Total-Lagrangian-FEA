@@ -328,8 +328,9 @@ int main(int argc, char** argv) {
     solver.Solve();
 
     // Print timing for this step
+    const double kernel_time_ms = solver.GetLastStepTime();
     std::cout << "Step " << step
-              << ": SyncedExplicit kernel time: " << solver.GetLastStepTime()
+              << ": SyncedExplicit kernel time: " << kernel_time_ms
               << " ms" << std::endl;
 
     double x_target = 0.0, y_target = 0.0, z_target = 0.0;
