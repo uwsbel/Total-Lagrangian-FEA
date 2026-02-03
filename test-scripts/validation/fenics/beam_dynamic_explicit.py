@@ -1,4 +1,4 @@
-"""Nonlinear 3D beam dynamics with Symplectic Euler and HRZ lumped mass."""
+"""Nonlinear 3D beam dynamics with Symplectic Euler (unified consistent/lumped mass)."""
 import argparse
 import os
 import numpy as np
@@ -13,7 +13,7 @@ from tetgen_mesh_loader import load_tetgen_mesh_from_files
 
 def _parse_cli():
     parser = argparse.ArgumentParser(
-        description="Nonlinear 3D beam dynamics with Symplectic Euler and HRZ lumped mass."
+        description="Nonlinear 3D beam dynamics with Symplectic Euler (unified mass matrix options)."
     )
     parser.add_argument(
         "--mat",
@@ -40,6 +40,13 @@ def _parse_cli():
         help="Number of time steps (default: 5000)",
     )
     parser.add_argument(
+        "--mass",
+        type=str,
+        default="lumped",
+        choices=["consistent", "lumped"],
+        help="Mass matrix type: consistent | lumped (default: lumped)",
+    )
+    parser.add_argument(
         "--csv",
         nargs="?",
         const="",
@@ -58,6 +65,7 @@ if rank == 0:
     print(f"Running with {MPI.COMM_WORLD.size} MPI ranks")
 
 RES = _args.res
+MASS_TYPE = _args.mass.lower()
 DEBUG = False
 
 # Construct mesh file paths
@@ -76,6 +84,7 @@ V = fem.functionspace(domain, ("Lagrange", 2, (domain.geometry.dim, )))
 L = 3.0   # Length (x)
 W = 2.0   # Width (y)
 H = 1.0   # Height (z)
+
 
 # Print total nodes and elements
 topology_vertices = domain.topology.index_map(0).size_local + domain.topology.index_map(0).num_ghosts
@@ -181,8 +190,8 @@ tracked_node_rank = -1  # Which rank owns the tracked node
 
 # Only search in owned DOFs, not ghosts
 for i, coord in enumerate(dof_coords):
-    if i < num_owned_dofs and (abs(coord[0] - tracked_node_position[0]) < 1e-6 and 
-        abs(coord[1] - tracked_node_position[1]) < 1e-6 and 
+    if i < num_owned_dofs and (abs(coord[0] - tracked_node_position[0]) < 1e-6 and
+        abs(coord[1] - tracked_node_position[1]) < 1e-6 and
         abs(coord[2] - tracked_node_position[2]) < 1e-6):
         tracked_node_dof = i
         tracked_node_coord = coord
@@ -291,16 +300,17 @@ else:
     P = ufl.diff(psi, F)
 
 
+
 # ============================================================================
 # TIME INTEGRATION SETUP (Symplectic Euler method)
 # ============================================================================
 dt = _args.dt  # Time step (matching C++ GPU explicit default)
 n_steps = _args.steps  # Number of time steps (default 5000, matches C++)
-t_final = n_steps * dt 
+t_final = n_steps * dt
 
 if rank == 0:
     print("\nTIME INTEGRATION SETUP")
-    print(f"Method: Symplectic Euler (Explicit) with LUMPED MASS")
+    print(f"Method: Symplectic Euler (Explicit) with {MASS_TYPE.upper()} MASS")
     print(f"Time step (dt): {dt} s")
     print(f"Number of steps: {n_steps}")
     print(f"Total simulation time: {t_final} s")
@@ -308,10 +318,10 @@ if rank == 0:
 
 
 # ============================================================================
-# ASSEMBLE AND LUMP MASS MATRIX (HRZ Lumping)
+# ASSEMBLE MASS MATRIX (Consistent or Lumped based on --mass flag)
 # ============================================================================
 if rank == 0:
-    print("\nASSEMBLING AND LUMPING MASS MATRIX (HRZ Method)")
+    print(f"\nASSEMBLING {MASS_TYPE.upper()} MASS MATRIX")
 
 # Quadrature degree reduced to 5 (matching C++ more closely)
 metadata = {"quadrature_degree": 5}
@@ -322,121 +332,117 @@ u_trial = ufl.TrialFunction(V)
 v_test = ufl.TestFunction(V)
 M_form = fem.form(rho * ufl.inner(u_trial, v_test) * dx)
 
-# Assemble consistent mass matrix (without BC modification for lumping)
-M_matrix_no_bc = assemble_matrix(M_form)
-M_matrix_no_bc.assemble()
+# Branch based on mass type
+ksp = None
+M_lumped_inv_array = None
 
-if rank == 0:
-    print(f"Consistent mass matrix assembled: {M_matrix_no_bc.size[0]} x {M_matrix_no_bc.size[1]}")
+if MASS_TYPE == "consistent":
+    # ========================================================================
+    # CONSISTENT MASS: Assemble full matrix and set up direct solver
+    # ========================================================================
+    M_matrix = assemble_matrix(M_form, bcs=[bc_fixed])
+    M_matrix.assemble()
 
-# ============================================================================
-# HRZ LUMPING: Scale diagonal to preserve total mass
-# ============================================================================
-# HRZ (Hinton-Rock-Zienkiewicz) lumping:
-# 1. Extract diagonal of consistent mass matrix
-# 2. Compute row sums (total mass per row)
-# 3. Scale diagonal: M_lumped[i] = M_diag[i] * (row_sum[i] / M_diag[i]) = row_sum[i]
-#    BUT only for positive diagonals, preserving the ratio
-#
-# For quadratic elements, this avoids negative masses that row-sum gives.
-# The key insight: HRZ uses M_lumped[i] = M_diag[i] * (sum_j M_ij) / (sum of diagonals in element)
+    if rank == 0:
+        print(f"Consistent mass matrix assembled: {M_matrix.size[0]} x {M_matrix.size[1]}")
 
-# Method: Use diagonal scaling approach
-# M_lumped[i] = M_ii * (total_row_mass / sum_of_diagonals)
+    # Set up linear solver for M * a = residual (one solve per time step)
+    ksp = PETSc.KSP().create(domain.comm)
+    ksp.setOperators(M_matrix)
+    ksp.setType("preonly")
+    pc = ksp.getPC()
+    pc.setType("lu")
+    pc.setFactorSolverType("mumps")
+    ksp.setUp()
 
-# Step 1: Get diagonal of mass matrix
-M_diag = M_matrix_no_bc.createVecLeft()
-M_matrix_no_bc.getDiagonal(M_diag)
-M_diag_array = M_diag.getArray().copy()
+    if rank == 0:
+        print(f"Linear solver setup: Direct LU (MUMPS) for M*a = f_ext - f_int")
 
-# Step 2: Get row sums
-ones = M_matrix_no_bc.createVecRight()
-ones.set(1.0)
-M_rowsum = M_matrix_no_bc.createVecLeft()
-M_matrix_no_bc.mult(ones, M_rowsum)
-M_rowsum_array = M_rowsum.getArray().copy()
-ones.destroy()
+else:  # "lumped"
+    # ========================================================================
+    # HRZ LUMPED MASS: Assemble, lump, and compute inverse
+    # ========================================================================
+    # Assemble consistent mass matrix (without BC modification for lumping)
+    M_matrix_no_bc = assemble_matrix(M_form)
+    M_matrix_no_bc.assemble()
 
-# Step 3: Compute total mass
-total_mass_consistent = M_rowsum.sum()
+    if rank == 0:
+        print(f"Consistent mass matrix assembled: {M_matrix_no_bc.size[0]} x {M_matrix_no_bc.size[1]}")
 
-# Step 4: HRZ lumping - scale diagonal to match row sums while keeping positive
-# Simple approach: use the row sum but ensure positivity by using abs of diagonal contribution
-# More robust: M_lumped = M_diag * (row_sum / diag_sum) per element
-# Simplest stable approach for FEniCS: just use diagonal with scaling
+    # ========================================================================
+    # HRZ LUMPING: Scale diagonal to preserve total mass
+    # ========================================================================
+    # HRZ (Hinton-Rock-Zienkiewicz) lumping:
+    # 1. Extract diagonal of consistent mass matrix
+    # 2. Compute row sums (total mass per row)
+    # 3. Scale diagonal: M_lumped[i] = M_diag[i] * (total_mass / sum_diag)
+    #
+    # For quadratic elements, this avoids negative masses that row-sum gives.
 
-# Compute sum of diagonals
-diag_sum = M_diag.sum()
+    # Step 1: Get diagonal of mass matrix
+    M_diag = M_matrix_no_bc.createVecLeft()
+    M_matrix_no_bc.getDiagonal(M_diag)
+    M_diag_array = M_diag.getArray().copy()
 
-# Scale factor to preserve total mass
-if abs(diag_sum) > 1e-30:
-    scale_factor = total_mass_consistent / diag_sum
-else:
-    scale_factor = 1.0
+    # Step 2: Get row sums
+    ones = M_matrix_no_bc.createVecRight()
+    ones.set(1.0)
+    M_rowsum = M_matrix_no_bc.createVecLeft()
+    M_matrix_no_bc.mult(ones, M_rowsum)
+    M_rowsum_array = M_rowsum.getArray().copy()
+    ones.destroy()
 
-# HRZ lumped mass = scaled diagonal (all positive since M_ii > 0 for mass matrix)
-M_lumped_array = M_diag_array * scale_factor
+    # Step 3: Compute total mass
+    total_mass_consistent = M_rowsum.sum()
 
-# Handle boundary condition DOFs - set their mass to a large value (or handle specially)
-# For constrained DOFs, we'll set inverse mass to 0 later
-for dof in boundary_dofs:
-    for c in range(block_size):
-        idx = dof * block_size + c
-        if idx < len(M_lumped_array):
-            # Keep the mass but we'll zero the inverse for BCs
-            pass
+    # Step 4: Compute sum of diagonals
+    diag_sum = M_diag.sum()
 
-# Compute inverse lumped mass
-M_lumped_inv_array = np.zeros_like(M_lumped_array)
-for i in range(len(M_lumped_array)):
-    if M_lumped_array[i] > 1e-30:
-        M_lumped_inv_array[i] = 1.0 / M_lumped_array[i]
+    # Scale factor to preserve total mass
+    if abs(diag_sum) > 1e-30:
+        scale_factor = total_mass_consistent / diag_sum
     else:
-        M_lumped_inv_array[i] = 0.0
+        scale_factor = 1.0
 
-# Zero out inverse mass for boundary DOFs (they should have zero acceleration)
-for dof in boundary_dofs:
-    for c in range(block_size):
-        idx = dof * block_size + c
-        if idx < len(M_lumped_inv_array):
-            M_lumped_inv_array[idx] = 0.0
+    # HRZ lumped mass = scaled diagonal (all positive since M_ii > 0 for mass matrix)
+    M_lumped_array = M_diag_array * scale_factor
 
-# Clean up PETSc vectors
-M_diag.destroy()
-M_rowsum.destroy()
-M_matrix_no_bc.destroy()
+    # Compute inverse lumped mass
+    M_lumped_inv_array = np.zeros_like(M_lumped_array)
+    for i in range(len(M_lumped_array)):
+        if M_lumped_array[i] > 1e-30:
+            M_lumped_inv_array[i] = 1.0 / M_lumped_array[i]
+        else:
+            M_lumped_inv_array[i] = 0.0
 
-if rank == 0:
-    print(f"HRZ lumped mass vector created")
-    print(f"  Total mass (consistent): {total_mass_consistent:.6f} kg")
-    print(f"  Scale factor: {scale_factor:.6f}")
-    positive_masses = M_lumped_array[M_lumped_array > 0]
-    if len(positive_masses) > 0:
-        print(f"  Min lumped mass: {positive_masses.min():.6e}")
-        print(f"  Max lumped mass: {M_lumped_array.max():.6e}")
-    print(f"  Any negative masses: {np.any(M_lumped_array < 0)}")
+    # Zero out inverse mass for boundary DOFs (they should have zero acceleration)
+    for dof in boundary_dofs:
+        for c in range(block_size):
+            idx = dof * block_size + c
+            if idx < len(M_lumped_inv_array):
+                M_lumped_inv_array[idx] = 0.0
 
+    # Clean up PETSc vectors
+    M_diag.destroy()
+    M_rowsum.destroy()
+    M_matrix_no_bc.destroy()
 
-# ============================================================================
-# NOTE: VELOCITY VS ACCELERATION FORMULATION
-# ============================================================================
-# For lumped mass, the update:
-#    a = M_inv · (f_ext - f_int)
-#    v_new = v_old + dt · a
-#
-# Could be fused into a single operation (typical GPU approach):
-#    v_new = v_old + dt · M_inv · (f_ext - f_int)
-#
-# Both are mathematically equivalent. Current code keeps 'a' explicit
-# for clarity and debugging. GPU implementations typically fuse this.
-# ============================================================================
+    if rank == 0:
+        print(f"HRZ lumped mass vector created")
+        print(f"  Total mass (consistent): {total_mass_consistent:.6f} kg")
+        print(f"  Scale factor: {scale_factor:.6f}")
+        positive_masses = M_lumped_array[M_lumped_array > 0]
+        if len(positive_masses) > 0:
+            print(f"  Min lumped mass: {positive_masses.min():.6e}")
+            print(f"  Max lumped mass: {M_lumped_array.max():.6e}")
+        print(f"  Any negative masses: {np.any(M_lumped_array < 0)}")
 
 
 # ============================================================================
-# TIME STEPPING LOOP (Symplectic Euler - Explicit with Lumped Mass)
+# TIME STEPPING LOOP (Symplectic Euler - Explicit)
 # ============================================================================
 if rank == 0:
-    print("\nSTARTING DYNAMIC ANALYSIS (LUMPED MASS)")
+    print(f"\nSTARTING DYNAMIC ANALYSIS ({MASS_TYPE.upper()} MASS)")
 
 # Initialize state variables (beam starts from rest)
 u_old.x.array[:] = 0.0
@@ -444,9 +450,6 @@ u_old.x.scatter_forward()
 
 v_old.x.array[:] = 0.0
 v_old.x.scatter_forward()
-
-# History for tracked node (x, y, z positions)
-node_xyz_history = []
 
 # Create work vectors for explicit time stepping
 residual = f_ext_vector.copy()
@@ -460,55 +463,102 @@ force_off_step = n_steps // 2
 if rank == 0:
     print(f"Force will be turned off at step {force_off_step} (t = {force_off_step * dt:.4f}s)")
 
+# ============================================================================
+# CSV OUTPUT SETUP (Streaming to file during time loop)
+# ============================================================================
+write_csv = _args.csv is not None
+csv_file = None
+
+if write_csv and rank == 0:
+    # Determine output path
+    if _args.csv == "":
+        output_dir = os.path.join(script_dir, "output")
+        os.makedirs(output_dir, exist_ok=True)
+        mat_suffix = "svk" if MATERIAL_MODEL == "SVK" else "mr"
+        csv_path = os.path.join(
+            output_dir,
+            f"node_xyz_history_fenics_res{RES}_{mat_suffix}_{MASS_TYPE}.csv",
+        )
+    else:
+        csv_path = _args.csv
+
+    # Open CSV file and write header
+    csv_file = open(csv_path, "w")
+    csv_file.write("step,x_position,y_position,z_position,internal_force_l2\n")
+    print(f"Writing CSV to {csv_path}")
+
 # Time stepping loop
 for n in range(n_steps):
     t = n * dt
-    
-    # Turn off force after 1 second
+
+    # Turn off force after first half of steps
     if n == force_off_step:
         f_ext_vector.zeroEntries()
         f_ext_vector.ghostUpdate(addv=PETSc.InsertMode.INSERT, mode=PETSc.ScatterMode.FORWARD)
         if rank == 0:
             print(f"Force turned off at step {n} (t = {t:.4f}s)")
-    
+
     # Compute internal force based on current displacement u_old
     u.x.array[:] = u_old.x.array[:]
     u.x.scatter_forward()
-    
+
     # Assemble internal force vector
     with f_int.localForm() as f_int_local:
         f_int_local.set(0.0)
     assemble_vector(f_int, f_int_form)
     f_int.ghostUpdate(addv=PETSc.InsertMode.ADD, mode=PETSc.ScatterMode.REVERSE)
-    
+
     # Apply boundary conditions to internal force
     fem.petsc.set_bc(f_int, [bc_fixed])
-    
+
+    # Compute L2 norm of internal force for CSV output
+    internal_force_l2 = 0.0
+    if write_csv:
+        # Get local owned portion of internal force vector
+        local_owned_size = dofmap.index_map.size_local * block_size
+        with f_int.localForm() as f_int_local:
+            local_f_int_array = f_int_local.array[:local_owned_size]
+            # Compute local squared sum over owned DOFs
+            local_sq = np.sum(local_f_int_array ** 2)
+
+        # Reduce to get global squared sum
+        global_sq = domain.comm.allreduce(local_sq, op=MPI.SUM)
+        internal_force_l2 = np.sqrt(global_sq)
+
     # Compute residual: f_ext - f_int
     residual.zeroEntries()
     residual.axpy(1.0, f_ext_vector)  # residual = f_ext
     residual.axpy(-1.0, f_int)        # residual = f_ext - f_int
-    
-    # Compute acceleration using lumped mass (element-wise division)
-    # a = M^{-1} * (f_ext - f_int)
-    residual_array = residual.getArray()
-    a.x.array[:] = residual_array * M_lumped_inv_array
-    a.x.scatter_forward()
-    
-    # Explicit updates (Symplectic Euler - matching GPU)
+
+    # ========================================================================
+    # SOLVE FOR ACCELERATION (branched by mass type)
+    # ========================================================================
+    if MASS_TYPE == "consistent":
+        # Consistent mass: Solve M * a = residual using direct solver
+        ksp.solve(residual, a.x.petsc_vec)
+        a.x.scatter_forward()
+    else:  # lumped
+        # Lumped mass: a = M^{-1} * residual (element-wise multiplication)
+        residual_array = residual.getArray()
+        a.x.array[:] = residual_array * M_lumped_inv_array
+        a.x.scatter_forward()
+
+    # ========================================================================
+    # SYMPLECTIC EULER UPDATES (same for both mass types)
+    # ========================================================================
     # Step 1: v_new = v_old + dt * a
     v_new = v_old.x.array[:] + dt * a.x.array[:]
-    
-    # Step 2: Apply BC - zero velocity at fixed nodes (matching GPU explicit_apply_fixed_node_bc)
+
+    # Step 2: Apply BC - zero velocity at fixed nodes
     for dof in boundary_dofs:
         for c in range(block_size):
             idx = dof * block_size + c
             if idx < len(v_new):
                 v_new[idx] = 0.0
-    
+
     # Step 3: u_new = u_old + dt * v_new
     u_new = u_old.x.array[:] + dt * v_new[:]
-    
+
     # Track node x, y, z positions (absolute position = initial + displacement)
     local_position = None
     if tracked_node_dof is not None:
@@ -520,69 +570,53 @@ for n in range(n_steps):
         y_position = tracked_node_coord[1] + u_y_at_node
         z_position = tracked_node_coord[2] + u_z_at_node
         local_position = [float(x_position), float(y_position), float(z_position)]
-    
+
     # Gather tracked node data from all ranks to rank 0
     all_positions = domain.comm.gather(local_position, root=0)
+
+    # Process gathered data on rank 0
+    node_position = None
     if rank == 0:
         # Find the non-None position (from the rank that owns the node)
         node_position = next((pos for pos in all_positions if pos is not None), None)
-        if node_position is not None:
-            node_xyz_history.append(node_position)
-    
-    # Update old values for next time step
-    u_old.x.array[:] = u_new[:]
-    u_old.x.scatter_forward()
-    
-    v_old.x.array[:] = v_new[:]
-    v_old.x.scatter_forward()
-    
-    # Print progress (every 10000 steps to avoid flooding output)
-    if rank == 0 and (n % 10000 == 0 or n < 5):
-        max_disp = np.max(np.linalg.norm(u_old.x.array.reshape(-1, 3), axis=1))
-        max_vel = np.max(np.linalg.norm(v_old.x.array.reshape(-1, 3), axis=1))
-        if len(node_xyz_history) > 0:
-            x_pos, y_pos, z_pos = node_xyz_history[-1]
+
+        # Write CSV row (streaming during loop)
+        if write_csv and node_position is not None:
+            x_pos, y_pos, z_pos = node_position
+            csv_file.write(f"{n},{x_pos:.17f},{y_pos:.17f},{z_pos:.17f},{internal_force_l2:.17e}\n")
+
+        # Print progress (every 10000 steps to avoid flooding output)
+        if (n % 10000 == 0 or n < 5) and node_position is not None:
+            x_pos, y_pos, z_pos = node_position
+            max_disp = np.max(np.linalg.norm(u_old.x.array.reshape(-1, 3), axis=1))
+            max_vel = np.max(np.linalg.norm(v_old.x.array.reshape(-1, 3), axis=1))
             print(f"Step {n}/{n_steps}: t={t:.4f}s, tracked node position = ({x_pos:.17f}, {y_pos:.17f}, {z_pos:.17f})")
             print(f"  Max displacement: {max_disp:.6e}, Max velocity: {max_vel:.6e}")
 
-if rank == 0:
-    print("\nDYNAMIC ANALYSIS COMPLETE")
+    # Update old values for next time step
+    u_old.x.array[:] = u_new[:]
+    u_old.x.scatter_forward()
 
+    v_old.x.array[:] = v_new[:]
+    v_old.x.scatter_forward()
 
-# ============================================================================
-# SAVE CSV OUTPUT (Matching C++ format)
-# ============================================================================
-# Only rank 0 writes the CSV file (it has gathered all the data)
-write_csv = _args.csv is not None
-if rank == 0 and write_csv and len(node_xyz_history) > 0:
-    # Default output directory/path if user did not pass an explicit path
-    if _args.csv == "":
-        output_dir = os.path.join(script_dir, "output")
-        os.makedirs(output_dir, exist_ok=True)
-
-        # Material suffix for file naming
-        mat_suffix = "svk" if MATERIAL_MODEL == "SVK" else "mr"
-
-        csv_path = os.path.join(
-            output_dir,
-            f"node_xyz_history_fenics_res{RES}_{mat_suffix}_fe_lumped.csv",
-        )
-    else:
-        # Use user-provided path directly
-        csv_path = _args.csv
-
-    with open(csv_path, "w") as f:
-        f.write("step,x_position,y_position,z_position\n")
-        for i, (x_val, y_val, z_val) in enumerate(node_xyz_history):
-            f.write(f"{i},{x_val:.17f},{y_val:.17f},{z_val:.17f}\n")
-
-    print(f"Wrote tracked node x,y,z position history to {csv_path}")
+# Close CSV file if opened
+if rank == 0 and write_csv and csv_file is not None:
+    csv_file.close()
+    print(f"\nCSV output complete. Wrote {n_steps} steps to CSV file.")
     print(
         f"  Node position: ({tracked_node_position[0]:.1f}, {tracked_node_position[1]:.1f}, {tracked_node_position[2]:.1f})"
     )
-    print(f"  Total steps: {len(node_xyz_history)}\n")
+    print(f"  Columns: step, x_position, y_position, z_position, internal_force_l2")
+
+if rank == 0:
+    print("\nDYNAMIC ANALYSIS COMPLETE")
 
 # Clean up PETSc objects
 residual.destroy()
 f_int.destroy()
 f_ext_vector.destroy()
+
+if MASS_TYPE == "consistent" and ksp is not None:
+    ksp.destroy()
+    M_matrix.destroy()

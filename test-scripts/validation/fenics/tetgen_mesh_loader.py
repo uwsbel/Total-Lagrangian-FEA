@@ -116,3 +116,32 @@ def load_tetgen_mesh_from_files(node_file, ele_file):
     
     return msh, x_nodes
 
+
+def load_tetgen_mesh_from_files_serial(node_file, ele_file):
+    """Load TetGen mesh on a single process (no MPI parallelism).
+
+    Uses MPI.COMM_SELF so the script can be run as `python script.py`
+    without mpirun. All mesh data stays on one process.
+
+    Args:
+        node_file: Path to .node file
+        ele_file: Path to .ele file
+
+    Returns:
+        tuple: (mesh, x_nodes) - DOLFINx mesh and node coordinate array
+    """
+    comm = MPI.COMM_SELF
+    if not os.path.exists(node_file):
+        raise FileNotFoundError(f"Node file not found: {node_file}")
+    if not os.path.exists(ele_file):
+        raise FileNotFoundError(f"Element file not found: {ele_file}")
+
+    x_nodes, index_offset = read_tetgen_node_file(node_file, return_offset=True)
+    cells = read_tetgen_ele_file(ele_file, node_index_offset=index_offset)
+
+    element = basix.ufl.element(
+        "Lagrange", "tetrahedron", 2, shape=(3,), dtype=np.float64
+    )
+    msh = mesh.create_mesh(comm, cells, element, x_nodes)
+    return msh, x_nodes
+
