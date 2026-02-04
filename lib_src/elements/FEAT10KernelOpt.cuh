@@ -16,6 +16,12 @@
 
 #include "FEAT10DataOpt.cuh"
 
+// Material parameters for Mooney-Rivlin
+constexpr float kMu10 = 80000.0f;
+constexpr float kMu01 = 20000.0f;
+constexpr float kBulkK = 1.0e6f;
+constexpr float kMinJthreshold = 1e-6f;
+
 /**
  * Warp shuffle reduction and atomic add helper.
  *
@@ -54,7 +60,6 @@ __global__ void internalF_MooneyRivlin_4QP(
     float* __restrict__ pInternalForceNodes,
     float* __restrict__ pDeformationGradientF,
     float* __restrict__ pPiolaStressP,
-    float mu10, float mu01, float bulkK, float minJthreshold,
     bool writeOutDefGradientF, bool writeOutPiolaP) {
   // Define a tile of four threads; each thread handles one quadrature point
   constexpr int TILE = 4;

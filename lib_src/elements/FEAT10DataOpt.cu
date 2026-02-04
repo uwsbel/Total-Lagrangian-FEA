@@ -692,6 +692,5 @@ void launchInternalForceKernel_FEAT10Opt(const GPU_FEAT10Opt_Data* host_data,
       host_data->n_elem, host_data->d_pos_nodes, host_data->d_elem_nodes_soa,
       host_data->d_iso_map_inv, host_data->d_internal_force,
       host_data->d_deformation_grad_F, host_data->d_piola_stress_P,
-      host_data->mu10, host_data->mu01, host_data->bulkK,
-      host_data->minJthreshold, writeOutF, writeOutP);
+      writeOutF, writeOutP);
 }
