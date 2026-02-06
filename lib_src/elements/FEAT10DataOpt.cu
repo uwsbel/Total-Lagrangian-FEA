@@ -13,6 +13,7 @@
 
 #include "FEAT10KernelOpt.cuh"
 
+#include <cassert>
 #include <iostream>
 #include <vector>
 
@@ -368,8 +369,6 @@ void GPU_FEAT10Opt_Data::Setup(const Eigen::MatrixXd& positions,
 }
 
 void GPU_FEAT10Opt_Data::Destroy() {
-  if (!is_initialized) return;
-
   if (d_pos_nodes) cudaFree(d_pos_nodes);
   if (d_pos_nodes_ref) cudaFree(d_pos_nodes_ref);
   if (d_elem_nodes_soa) cudaFree(d_elem_nodes_soa);
@@ -483,16 +482,11 @@ void GPU_FEAT10Opt_Data::ComputeLumpedMassHRZ() {
 }
 
 void GPU_FEAT10Opt_Data::ClearInternalForce() {
-  if (!is_initialized) return;
   HANDLE_ERROR(cudaMemset(d_internal_force, 0, 3 * n_nodes * sizeof(float)));
 }
 
 void GPU_FEAT10Opt_Data::ComputeInternalForce(bool writeOutF, bool writeOutP) {
-  if (!is_precomputed) {
-    std::cerr << "GPU_FEAT10Opt_Data: Must call ComputePrecomputation() first."
-              << std::endl;
-    return;
-  }
+  assert(is_precomputed && "Must call ComputePrecomputation() first");
 
   // Allocate F buffer if needed and requested
   if (writeOutF && d_deformation_grad_F == nullptr) {
@@ -517,31 +511,20 @@ void GPU_FEAT10Opt_Data::ComputeInternalForce(bool writeOutF, bool writeOutP) {
 }
 
 void GPU_FEAT10Opt_Data::SetExternalForce(const Eigen::VectorXf& f_ext) {
-  if (!is_initialized) return;
-
-  if (f_ext.size() != n_nodes * 3) {
-    std::cerr << "GPU_FEAT10Opt_Data: External force size mismatch. Expected "
-              << n_nodes * 3 << ", got " << f_ext.size() << std::endl;
-    return;
-  }
-
+  assert(f_ext.size() == n_nodes * 3 && "External force size mismatch");
+  
   HANDLE_ERROR(cudaMemcpy(d_external_force, f_ext.data(),
                           n_nodes * 3 * sizeof(float),
                           cudaMemcpyHostToDevice));
 }
 
 void GPU_FEAT10Opt_Data::ClearExternalForce() {
-  if (!is_initialized) return;
   HANDLE_ERROR(cudaMemset(d_external_force, 0, 3 * n_nodes * sizeof(float)));
 }
 
 void GPU_FEAT10Opt_Data::UpdatePositions(const Eigen::MatrixXd& positions) {
-  if (!is_initialized) return;
-
-  if (positions.rows() != n_nodes || positions.cols() != 3) {
-    std::cerr << "GPU_FEAT10Opt_Data: Position matrix size mismatch." << std::endl;
-    return;
-  }
+  assert(positions.rows() == n_nodes && positions.cols() == 3 && 
+         "Position matrix size mismatch");
 
   // Convert to AoS interleaved
   std::vector<double> pos_interleaved(3 * n_nodes);
