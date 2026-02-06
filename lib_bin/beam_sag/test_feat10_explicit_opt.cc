@@ -300,6 +300,18 @@ int main(int argc, char** argv) {
   std::cout << "Running SyncedExplicitOpt solver: dt=" << opt.dt
             << ", steps=" << opt.steps << std::endl;
 
+  // Verify prerequisites before starting time integration
+  if (!gpu_feat10opt.IsPrecomputed()) {
+    std::cerr << "ERROR: Element not precomputed. "
+              << "Call ComputePrecomputation() first." << std::endl;
+    return 1;
+  }
+  if (!gpu_feat10opt.IsMassComputed()) {
+    std::cerr << "ERROR: Lumped mass not computed. "
+              << "Call ComputeLumpedMassHRZ() first." << std::endl;
+    return 1;
+  }
+
   // Debug: at step 0 (initial config), compute F and P for element 0 to check F == I
   {
     gpu_feat10opt.ClearInternalForce();
