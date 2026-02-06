@@ -16,3 +16,12 @@ output/
 *csv
 *md
 future_work/*
+
+# Profiling outputs
+*.ncu-rep
+*.nsys-rep
+profile_*.txt
+
+# IntelliSense database
+compile_commands.json
+external/
