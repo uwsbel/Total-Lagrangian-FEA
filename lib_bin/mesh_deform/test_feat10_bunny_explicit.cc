@@ -3,9 +3,11 @@
  * Project: RoboDyna
  * Author:  Ganesh Arivoli
  * Email:   arivoli@wisc.edu
- * File:    test_feat10_explicit.cc
- * Brief:   FEAT10 beam explicit test mirroring
- *          f-form-T10-beam-explicit.py with SyncedExplicitSolver.
+ * File:    test_feat10_bunny_explicit.cc
+ * Brief:   FEAT10 bunny explicit dynamics demo. Supports both
+ *          standard (FEAT10 + SyncedExplicit) and optimized
+ *          (FEAT10Opt + SyncedExplicitOpt) solver paths via
+ *          --opt flag. Clamps base, loads ears, releases halfway.
  *==============================================================
  *==============================================================*/
 
@@ -29,40 +31,35 @@
 
 namespace {
 
-// SVK material properties (aluminum-like, matching FEniCS)
-constexpr double kE    = 7.0e8;   // Young's modulus (Pa)
-constexpr double kNu   = 0.33;    // Poisson's ratio
-constexpr double kRho0 = 2700.0;  // Density (kg/m³)
+// Material properties
+constexpr double kE    = 3.0e8;   // Young's modulus (Pa)
+constexpr double kNu   = 0.40;    // Poisson's ratio
+constexpr double kRho0 = 920.0;   // Density (kg/m^3)
 
-// Mooney-Rivlin (rubber-like), used when --material=mr
-constexpr double kMR_mu10  = 80000.0;  // Pa
-constexpr double kMR_mu01  = 20000.0;  // Pa
-constexpr double kMR_kappa = 1e6;      // Pa (bulk modulus)
-constexpr double kMR_rho   = 1100.0;   // kg/m³
+// Mooney-Rivlin derived from SVK params
+constexpr double kMu       = kE / (2.0 * (1.0 + kNu));      // shear modulus
+constexpr double kBulk     = kE / (3.0 * (1.0 - 2.0 * kNu)); // bulk modulus
+constexpr double kMR_mu10  = 0.30 * kMu;
+constexpr double kMR_mu01  = 0.20 * kMu;
+constexpr double kMR_kappa = 1.5 * kBulk;
+
+// Boundary conditions
+constexpr double kFixedZThreshold = -4.0;   // fix nodes with z < this
+constexpr double kForceZThreshold = 4.0;    // apply force to nodes with z > this
+constexpr double kForceZ          = -35000.0; // N, downward on ears
 
 enum class MaterialKind { kSVK, kMR };
 
 struct Options {
   bool use_opt          = false;
   MaterialKind material = MaterialKind::kSVK;
-  double dt             = 1e-5;
+  double dt             = 1e-6;
   int steps             = 5000;
-  int res               = 0;  // 0/2/4/8/16/32 beam resolutions
   bool write_csv        = false;
   std::string csv_path;
+  int vtk_interval      = 0;  // 0 = disabled
+  std::string vtk_dir   = "output";  // VTK output directory
 };
-
-void PrintUsage(const char* argv0) {
-  std::cout << "Usage: " << argv0
-            << " [--opt] [--mat=MAT] [--res=R] [--dt=DT] [--steps=N] [--csv[=PATH]] [--help]\n"
-            << "  --opt       Use FEAT10Opt + SyncedExplicitOpt (default: standard)\n"
-            << "  --mat=MAT   svk | mr (default: svk; ignored with --opt, forces MR)\n"
-            << "  --res=R     0 | 2 | 4 | 8 | 16 | 32 (default: 0)\n"
-            << "  --dt=DT     Time step size (default: 1e-5)\n"
-            << "  --steps=N   Number of steps (default: 5000)\n"
-            << "  --csv[=PATH] Write CSV output (default path if not specified)\n"
-            << "  --help      Show this message\n";
-}
 
 bool StartsWith(const std::string& s, const std::string& prefix) {
   return s.rfind(prefix, 0) == 0;
@@ -110,6 +107,20 @@ std::string MaterialName(MaterialKind m) {
   return m == MaterialKind::kSVK ? "svk" : "mr";
 }
 
+void PrintUsage(const char* argv0) {
+  std::cout
+      << "Usage: " << argv0
+      << " [--opt] [--mat=MAT] [--dt=DT] [--steps=N] [--csv[=PATH]] "
+         "[--vtk=N] [--vtk-dir=PATH] [--help]\n"
+      << "  --opt          Use FEAT10Opt + SyncedExplicitOpt (default: standard)\n"
+      << "  --mat=MAT      svk | mr (default: svk; ignored with --opt)\n"
+      << "  --dt=DT        Time step (default: 1e-6)\n"
+      << "  --steps=N      Number of steps (default: 5000)\n"
+      << "  --csv[=P]      Write CSV output (optional path)\n"
+      << "  --vtk=N        VTK output every N steps (standard path only)\n"
+      << "  --vtk-dir=PATH VTK output directory (default: output)\n";
+}
+
 bool ParseArgs(int argc, char** argv, Options& opt) {
   for (int i = 1; i < argc; ++i) {
     const std::string arg(argv[i]);
@@ -127,17 +138,6 @@ bool ParseArgs(int argc, char** argv, Options& opt) {
         std::cerr << "Unknown material: " << v << "\n";
         return false;
       }
-      continue;
-    }
-    if (StartsWith(arg, "--res=")) {
-      const std::string v = arg.substr(std::string("--res=").size());
-      int r               = 0;
-      if (!ParseInt(v, r) ||
-          !(r == 0 || r == 2 || r == 4 || r == 8 || r == 16 || r == 32)) {
-        std::cerr << "Invalid --res: " << v << "\n";
-        return false;
-      }
-      opt.res = r;
       continue;
     }
     if (StartsWith(arg, "--dt=")) {
@@ -163,6 +163,18 @@ bool ParseArgs(int argc, char** argv, Options& opt) {
     if (StartsWith(arg, "--csv=")) {
       opt.write_csv = true;
       opt.csv_path  = arg.substr(std::string("--csv=").size());
+      continue;
+    }
+    if (StartsWith(arg, "--vtk=")) {
+      const std::string v = arg.substr(std::string("--vtk=").size());
+      if (!ParseInt(v, opt.vtk_interval) || opt.vtk_interval < 0) {
+        std::cerr << "Invalid --vtk: " << v << "\n";
+        return false;
+      }
+      continue;
+    }
+    if (StartsWith(arg, "--vtk-dir=")) {
+      opt.vtk_dir = arg.substr(std::string("--vtk-dir=").size());
       continue;
     }
     std::cerr << "Unknown argument: " << arg << "\n";
@@ -194,6 +206,7 @@ int main(int argc, char** argv) {
     return 1;
   }
 
+  // CUDA device init
   int device_count          = 0;
   const cudaError_t dev_err = cudaGetDeviceCount(&device_count);
   if (dev_err != cudaSuccess || device_count <= 0) {
@@ -208,6 +221,7 @@ int main(int argc, char** argv) {
   std::cout << "CUDA device 0: " << props.name << " (cc " << props.major << "."
             << props.minor << ")" << std::endl;
 
+  // Workspace directory for mesh paths (Bazel runfiles support)
   std::string workspace_dir = ".";
   if (const char* d = std::getenv("BUILD_WORKSPACE_DIRECTORY")) {
     workspace_dir = d;
@@ -219,51 +233,20 @@ int main(int argc, char** argv) {
   // Read mesh data
   Eigen::MatrixXd nodes;
   Eigen::MatrixXi elements;
-  int plot_target_node = 0;
-  int n_nodes          = 0;
-  int n_elems          = 0;
 
-  const std::string res_str =
-      std::to_string(opt.res);  // mirror resolution study driver
   const std::string node_file =
-      mesh_path("data/meshes/T10/resolution/beam_3x2x1_res" + res_str +
-                ".1.node");
+      mesh_path("data/meshes/T10/bunny_ascii_26.1.node");
   const std::string elem_file =
-      mesh_path("data/meshes/T10/resolution/beam_3x2x1_res" + res_str +
-                ".1.ele");
+      mesh_path("data/meshes/T10/bunny_ascii_26.1.ele");
 
-  n_nodes = ANCFCPUUtils::FEAT10_read_nodes(node_file.c_str(), nodes);
-  n_elems = ANCFCPUUtils::FEAT10_read_elements(elem_file.c_str(), elements);
+  const int n_nodes = ANCFCPUUtils::FEAT10_read_nodes(node_file.c_str(), nodes);
+  const int n_elems =
+      ANCFCPUUtils::FEAT10_read_elements(elem_file.c_str(), elements);
 
-  // Target node for tracking (mirror resolution driver mapping)
-  if (opt.res == 0) {
-    plot_target_node = 23;
-  } else if (opt.res == 2) {
-    plot_target_node = 89;
-  } else if (opt.res == 4) {
-    plot_target_node = 353;
-  } else if (opt.res == 8) {
-    plot_target_node = 1408;
-  } else if (opt.res == 16) {
-    plot_target_node = 5630;
-  } else if (opt.res == 32) {
-    plot_target_node = 22529;
-  }
+  std::cout << "Mesh loaded: " << n_nodes << " nodes, " << n_elems
+            << " elements" << std::endl;
 
-  std::cout << "mesh read nodes: " << n_nodes << std::endl;
-  std::cout << "mesh read elements: " << n_elems << std::endl;
-  std::cout << "Config: solver=" << (opt.use_opt ? "opt" : "standard")
-            << " mat=" << (opt.use_opt ? "mr(forced)" : MaterialName(opt.material))
-            << " res=" << opt.res << " dt=" << opt.dt
-            << " steps=" << opt.steps << std::endl;
-
-  if (n_nodes <= plot_target_node) {
-    std::cerr << "Mesh too small for node " << plot_target_node << " tracking."
-              << std::endl;
-    return 1;
-  }
-
-  // Coordinate vectors (used by both paths)
+  // Extract coordinate vectors
   Eigen::VectorXd h_x12(n_nodes), h_y12(n_nodes), h_z12(n_nodes);
   for (int i = 0; i < n_nodes; i++) {
     h_x12(i) = nodes(i, 0);
@@ -271,25 +254,51 @@ int main(int argc, char** argv) {
     h_z12(i) = nodes(i, 2);
   }
 
-  // Fixed nodes: x == 0 (common setup)
+  // Fixed nodes: z < -4.0 (base clamping, same as Newton demo)
   std::vector<int> fixed_nodes;
   fixed_nodes.reserve(n_nodes);
   for (int i = 0; i < n_nodes; ++i) {
-    if (std::abs(h_x12(i)) < 1e-8) {
+    if (h_z12(i) < kFixedZThreshold) {
       fixed_nodes.push_back(i);
     }
   }
+  std::cout << "Fixed nodes (z < " << kFixedZThreshold
+            << "): " << fixed_nodes.size() << std::endl;
 
-  // Force nodes: x == 3.0 (common setup)
+  // Force nodes: z > 4.0 (ear loading, same as Newton demo)
   std::vector<int> force_node_indices;
-  for (int i = 0; i < h_x12.size(); ++i) {
-    if (std::abs(h_x12(i) - 3.0) < 1e-8) {
+  for (int i = 0; i < n_nodes; ++i) {
+    if (h_z12(i) > kForceZThreshold) {
       force_node_indices.push_back(i);
     }
   }
-  const double kForceZ = 10000.0;  // 10 kN total in +Z direction
+  std::cout << "Force nodes (z > " << kForceZThreshold
+            << "): " << force_node_indices.size() << std::endl;
 
-  // Open CSV file if requested (common setup)
+  // Track node: highest initial z (bunny ear tip)
+  int track_node = 0;
+  double max_z   = h_z12(0);
+  for (int i = 1; i < n_nodes; ++i) {
+    if (h_z12(i) > max_z) {
+      max_z      = h_z12(i);
+      track_node = i;
+    }
+  }
+  std::cout << "Tracking node " << track_node << " (initial z = " << max_z
+            << ")" << std::endl;
+
+  // Print run configuration
+  std::cout << "Config: solver=" << (opt.use_opt ? "opt" : "standard")
+            << " mat=" << (opt.use_opt ? "mr(forced)" : MaterialName(opt.material))
+            << " dt=" << opt.dt << " steps=" << opt.steps << std::endl;
+
+  if (opt.use_opt && opt.vtk_interval > 0) {
+    std::cout << "Warning: VTK output not supported with --opt, ignoring --vtk"
+              << std::endl;
+    opt.vtk_interval = 0;
+  }
+
+  // Open CSV file if requested
   std::ofstream csv_file;
   std::string csv_out_path;
   if (opt.write_csv) {
@@ -297,7 +306,7 @@ int main(int argc, char** argv) {
     if (csv_out_path.empty()) {
       csv_out_path = JoinPath(
           DefaultOutputDir(),
-          "beam_explicit_" +
+          "bunny_explicit_" +
               std::string(opt.use_opt ? "opt" : MaterialName(opt.material)) +
               ".csv");
     }
@@ -323,8 +332,9 @@ int main(int argc, char** argv) {
     GPU_FEAT10Opt_Data gpu_feat10opt;
     gpu_feat10opt.Initialize(n_elems, n_nodes);
     gpu_feat10opt.Setup(positions, elements);
+
     gpu_feat10opt.SetMooneyRivlin(kMR_mu10, kMR_mu01, kMR_kappa);
-    gpu_feat10opt.SetDensity(kMR_rho);
+    gpu_feat10opt.SetDensity(kRho0);
 
     std::cout << "Material (MR): mu10=" << kMR_mu10 << ", mu01=" << kMR_mu01
               << ", kappa=" << kMR_kappa << std::endl;
@@ -335,12 +345,8 @@ int main(int argc, char** argv) {
     // External force (float for Opt path)
     Eigen::VectorXf f_ext(n_nodes * 3);
     f_ext.setZero();
-    if (!force_node_indices.empty()) {
-      const float force_per_node =
-          static_cast<float>(kForceZ) / static_cast<float>(force_node_indices.size());
-      for (int idx : force_node_indices) {
-        f_ext(3 * idx + 2) = force_per_node;  // +Z direction
-      }
+    for (int idx : force_node_indices) {
+      f_ext(3 * idx + 2) = static_cast<float>(kForceZ);
     }
 
     SyncedExplicitOptSolver solver(&gpu_feat10opt);
@@ -357,28 +363,29 @@ int main(int argc, char** argv) {
       }
 
       solver.Solve();
+
       const double kernel_time = solver.GetLastStepTimeMs();
       step_times_ms.push_back(kernel_time);
 
-      // Periodic output and CSV
+      // Periodic console output and CSV
       if (step % 500 == 0 || step == opt.steps - 1 || opt.write_csv) {
         Eigen::VectorXd pos_x, pos_y, pos_z;
         gpu_feat10opt.RetrievePositionToCPU(pos_x, pos_y, pos_z);
 
         if (step % 500 == 0 || step == opt.steps - 1) {
           std::cout << "Step " << step << "/" << opt.steps << ": node "
-                    << plot_target_node << " pos = (" << std::setprecision(6)
-                    << pos_x(plot_target_node) << ", " << pos_y(plot_target_node) << ", "
-                    << pos_z(plot_target_node) << ")" << std::endl;
+                    << track_node << " pos = (" << std::setprecision(6)
+                    << pos_x(track_node) << ", " << pos_y(track_node) << ", "
+                    << pos_z(track_node) << ")" << std::endl;
         }
 
         if (opt.write_csv) {
           Eigen::VectorXf f_int;
           gpu_feat10opt.RetrieveInternalForceToCPU(f_int);
           const double l2 = static_cast<double>(f_int.norm());
-          csv_file << step << "," << pos_x(plot_target_node) << ","
-                   << pos_y(plot_target_node) << "," << pos_z(plot_target_node) << ","
-                   << l2 << "\n";
+          csv_file << step << "," << pos_x(track_node) << ","
+                   << pos_y(track_node) << "," << pos_z(track_node) << "," << l2
+                   << "\n";
         }
       }
     }
@@ -397,32 +404,29 @@ int main(int argc, char** argv) {
     const Eigen::VectorXd& tet5pt_z = Quadrature::tet5pt_z;
     const Eigen::VectorXd& tet5pt_w = Quadrature::tet5pt_weights;
 
-    gpu_t10_data.Setup(tet5pt_x, tet5pt_y, tet5pt_z, tet5pt_w,
-                       h_x12, h_y12, h_z12, elements);
+    gpu_t10_data.Setup(tet5pt_x, tet5pt_y, tet5pt_z, tet5pt_w, h_x12, h_y12,
+                       h_z12, elements);
+    gpu_t10_data.SetDensity(kRho0);
+    gpu_t10_data.SetDamping(0.0, 0.0);
 
     if (opt.material == MaterialKind::kSVK) {
-      gpu_t10_data.SetDensity(kRho0);
       gpu_t10_data.SetSVK(kE, kNu);
-      std::cout << "Material: SVK (E=" << kE << ", nu=" << kNu << ")" << std::endl;
+      std::cout << "Material: SVK (E=" << kE << ", nu=" << kNu << ")"
+                << std::endl;
     } else {
-      gpu_t10_data.SetDensity(kMR_rho);
       gpu_t10_data.SetMooneyRivlin(kMR_mu10, kMR_mu01, kMR_kappa);
       std::cout << "Material (MR): mu10=" << kMR_mu10 << ", mu01=" << kMR_mu01
                 << ", kappa=" << kMR_kappa << std::endl;
     }
 
-    gpu_t10_data.SetDamping(0.0, 0.0);
     gpu_t10_data.CalcDnDuPre();
     gpu_t10_data.CalcLumpedMassHRZ();
 
     // External force (double for standard path)
     Eigen::VectorXd h_f_ext(gpu_t10_data.get_n_coef() * 3);
     h_f_ext.setZero();
-    if (!force_node_indices.empty()) {
-      const double force_per_node = kForceZ / force_node_indices.size();
-      for (int idx : force_node_indices) {
-        h_f_ext(3 * idx + 2) = force_per_node;  // +Z direction
-      }
+    for (int idx : force_node_indices) {
+      h_f_ext(3 * idx + 2) = kForceZ;
     }
     gpu_t10_data.SetExternalForce(h_f_ext);
 
@@ -430,6 +434,8 @@ int main(int argc, char** argv) {
     SyncedExplicitSolver solver(&gpu_t10_data);
     solver.SetParameters(&params);
     solver.SetFixedNodes(fixed_nodes);
+
+    int vtk_frame = 0;
 
     for (int step = 0; step < opt.steps; ++step) {
       // Remove force at halfway point
@@ -440,26 +446,34 @@ int main(int argc, char** argv) {
       }
 
       solver.Solve();
+
       const double kernel_time = solver.GetLastStepTime();
       step_times_ms.push_back(kernel_time);
 
-      // Periodic output and CSV
+      // VTK output
+      if (opt.vtk_interval > 0 && step % opt.vtk_interval == 0) {
+        gpu_t10_data.WriteOutputVTK(JoinPath(opt.vtk_dir, "bunny_explicit_step_" +
+                                    std::to_string(vtk_frame) + ".vtk"));
+        vtk_frame++;
+      }
+
+      // Periodic console output and CSV
       if (step % 500 == 0 || step == opt.steps - 1 || opt.write_csv) {
-        double x_target = 0.0, y_target = 0.0, z_target = 0.0;
-        HANDLE_ERROR(cudaMemcpy(&x_target,
-                                gpu_t10_data.GetX12DevicePtr() + plot_target_node,
+        double x_track = 0.0, y_track = 0.0, z_track = 0.0;
+        HANDLE_ERROR(cudaMemcpy(&x_track,
+                                gpu_t10_data.GetX12DevicePtr() + track_node,
                                 sizeof(double), cudaMemcpyDeviceToHost));
-        HANDLE_ERROR(cudaMemcpy(&y_target,
-                                gpu_t10_data.GetY12DevicePtr() + plot_target_node,
+        HANDLE_ERROR(cudaMemcpy(&y_track,
+                                gpu_t10_data.GetY12DevicePtr() + track_node,
                                 sizeof(double), cudaMemcpyDeviceToHost));
-        HANDLE_ERROR(cudaMemcpy(&z_target,
-                                gpu_t10_data.GetZ12DevicePtr() + plot_target_node,
+        HANDLE_ERROR(cudaMemcpy(&z_track,
+                                gpu_t10_data.GetZ12DevicePtr() + track_node,
                                 sizeof(double), cudaMemcpyDeviceToHost));
 
         if (step % 500 == 0 || step == opt.steps - 1) {
           std::cout << "Step " << step << "/" << opt.steps << ": node "
-                    << plot_target_node << " pos = (" << std::setprecision(6)
-                    << x_target << ", " << y_target << ", " << z_target << ")"
+                    << track_node << " pos = (" << std::setprecision(6)
+                    << x_track << ", " << y_track << ", " << z_track << ")"
                     << std::endl;
         }
 
@@ -467,8 +481,8 @@ int main(int argc, char** argv) {
           Eigen::VectorXd f_int;
           gpu_t10_data.RetrieveInternalForceToCPU(f_int);
           const double l2 = f_int.norm();
-          csv_file << step << "," << x_target << "," << y_target << ","
-                   << z_target << "," << l2 << "\n";
+          csv_file << step << "," << x_track << "," << y_track << ","
+                   << z_track << "," << l2 << "\n";
         }
       }
     }
@@ -496,5 +510,6 @@ int main(int argc, char** argv) {
     csv_file.close();
     std::cout << "Wrote CSV: " << csv_out_path << std::endl;
   }
+
   return 0;
 }

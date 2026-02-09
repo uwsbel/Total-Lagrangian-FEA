@@ -76,7 +76,9 @@ cc_binary(
     ],
     deps = [
         "//lib_src/elements:FEAT10Data",
+        "//lib_src/elements:FEAT10DataOpt",
         "//lib_src/solvers:solvers_syncedexplicit",
+        "//lib_src/solvers:solvers_syncedexplicitopt",
         "//lib_utils:cpu_utils",
         "@eigen//:eigen",
     ],
@@ -122,18 +124,6 @@ cc_binary(
     ],
 )
 
-cc_binary(
-    name = "test_feat10_explicit_opt",
-    srcs = ["test_feat10_explicit_opt.cc"],
-    copts = ["--std=c++17"],
-    linkopts = [
-        "-L/usr/local/cuda/lib64",
-        "-lcudart",
-    ],
-    deps = [
-        "//lib_src/elements:FEAT10DataOpt",
-        "//lib_src/solvers:solvers_syncedexplicitopt",
-        "//lib_utils:cpu_utils",
-        "@eigen//:eigen",
-    ],
-)
+# Note: test_feat10_explicit_opt has been merged into test_feat10_explicit
+# Use: bazel run //lib_bin/beam_sag:test_feat10_explicit -- --opt
+# The old separate binary has been deprecated in favor of the unified binary.
