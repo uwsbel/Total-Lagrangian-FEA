@@ -1,9 +1,12 @@
 """
 Timing analysis script for nonlinear 3D beam dynamic analysis using Symplectic Euler.
-Matches beam_dynamic_symplectic_euler_lumped.py: HRZ lumped mass, symplectic Euler,
-explicit velocity zeroing at fixed nodes. Minimal version with only solver execution and timing.
+Matches test_feat10_explicit_opt.cc: Mooney-Rivlin material, HRZ lumped mass,
+symplectic Euler, explicit velocity zeroing at fixed nodes.
+Minimal version with only solver execution and timing.
 """
+import argparse
 import os
+import sys
 import time
 import numpy as np
 import ufl
@@ -16,15 +19,36 @@ from tetgen_mesh_loader import load_tetgen_mesh_from_files
 
 rank = MPI.COMM_WORLD.rank
 
+# ============================================================================
+# COMMAND LINE ARGUMENT PARSING
+# ============================================================================
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description='Beam dynamic explicit dynamics with lumped mass (timing version)'
+    )
+    parser.add_argument('--res', type=int, default=0,
+                        choices=[0, 2, 4, 8, 16, 32],
+                        help='Mesh resolution (0, 2, 4, 8, 16, 32)')
+    parser.add_argument('--dt', type=float, default=1e-5,
+                        help='Time step size (default: 1e-5)')
+    parser.add_argument('--steps', type=int, default=5000,
+                        help='Number of time steps (default: 5000)')
+    parser.add_argument('--mat', type=str, default='mr',
+                        choices=['svk', 'mr'],
+                        help='Material model: svk or mr (default: mr)')
+    return parser.parse_args()
+
+args = parse_args()
+
 if rank == 0:
     print(f"Running with {MPI.COMM_WORLD.size} MPI ranks")
+    print(f"Parameters: res={args.res}, mat={args.mat}, dt={args.dt}, steps={args.steps}")
 
 # ============================================================================
 # GEOMETRY AND MESH SETUP
 # ============================================================================
-# Resolution selection: 0, 2, 4, 8, 16
-RES = 0
-MAT = "svk"   # svk | mr
+RES = args.res
+MAT = args.mat
 
 # Construct mesh file paths
 script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -54,7 +78,7 @@ u_zero = np.array([0.0, 0.0, 0.0], dtype=default_scalar_type)
 bc_fixed = fem.dirichletbc(u_zero, boundary_dofs, V)
 
 # ============================================================================
-# APPLIED LOADS - Distribute 100000 N at x=3 face in +z direction
+# APPLIED LOADS - Distribute 10000 N at x=3 face in +z direction
 # ============================================================================
 dof_coords = V.tabulate_dof_coordinates()
 num_owned_dofs = dofmap.index_map.size_local
@@ -67,7 +91,7 @@ for i, coord in enumerate(dof_coords):
 local_num_force_nodes = len(force_dofs)
 global_num_force_nodes = domain.comm.allreduce(local_num_force_nodes, op=MPI.SUM)
 
-total_force = 100000.0
+total_force = 10000.0
 force_per_node = total_force / global_num_force_nodes if global_num_force_nodes > 0 else 0.0
 
 f_temp = fem.Function(V)
@@ -82,16 +106,8 @@ if rank == 0:
     print(f"Load applied at x=3: {total_force} N (+z direction)")
 
 # ============================================================================
-# MATERIAL MODEL AND KINEMATICS (SVK - matching lumped script)
+# MATERIAL MODEL AND KINEMATICS
 # ============================================================================
-E_val = 7.0e8
-nu_val = 0.33
-rho_val = 2700.0
-rho = fem.Constant(domain, rho_val)
-
-E = default_scalar_type(E_val)
-nu = default_scalar_type(nu_val)
-
 u = fem.Function(V)
 u_old = fem.Function(V)
 v_old = fem.Function(V)
@@ -102,21 +118,63 @@ I = ufl.Identity(d)
 F = ufl.variable(I + ufl.grad(u))
 C = F.T * F
 
-# SVK (St. Venant-Kirchhoff)
-mu_svk = fem.Constant(domain, E / (2 * (1 + nu)))
-lmbda_svk = fem.Constant(domain, E * nu / ((1 + nu) * (1 - 2 * nu)))
+if MAT == "mr":
+    # Mooney-Rivlin parameters (match C++ FEAT10Opt test)
+    mu10_val = 80000.0   # Pa
+    mu01_val = 20000.0   # Pa
+    kappa_val = 1e6      # Pa
+    rho_val = 1100.0     # kg/m^3
 
-trFtF = ufl.tr(C)
-FFt = F * F.T
-FFtF = FFt * F
-lambda_factor = lmbda_svk * (0.5 * trFtF - 1.5)
-P = lambda_factor * F + mu_svk * (FFtF - F)
+    rho = fem.Constant(domain, rho_val)
+    mu10 = fem.Constant(domain, default_scalar_type(mu10_val))
+    mu01 = fem.Constant(domain, default_scalar_type(mu01_val))
+    kappa = fem.Constant(domain, default_scalar_type(kappa_val))
+
+    J = ufl.det(F)
+    I1 = ufl.tr(C)
+    I2 = 0.5 * (I1**2 - ufl.tr(C * C))
+
+    # Strain energy function
+    psi = mu10 * (I1 - 3) + mu01 * (I2 - 3) + 0.5 * kappa * (J - 1)**2
+
+    # First Piola-Kirchhoff stress (automatic differentiation)
+    P = ufl.diff(psi, F)
+
+    if rank == 0:
+        print(f"Material: Mooney-Rivlin (mu10={mu10_val}, mu01={mu01_val}, kappa={kappa_val}, rho={rho_val})")
+
+elif MAT == "svk":
+    # St. Venant-Kirchhoff parameters
+    E_val = 7.0e8        # Pa
+    nu_val = 0.33
+    rho_val = 2700.0     # kg/m^3
+
+    rho = fem.Constant(domain, rho_val)
+    E = default_scalar_type(E_val)
+    nu = default_scalar_type(nu_val)
+
+    mu_svk = fem.Constant(domain, E / (2 * (1 + nu)))
+    lmbda_svk = fem.Constant(domain, E * nu / ((1 + nu) * (1 - 2 * nu)))
+
+    trFtF = ufl.tr(C)
+    FFt = F * F.T
+    FFtF = FFt * F
+    lambda_factor = lmbda_svk * (0.5 * trFtF - 1.5)
+    P = lambda_factor * F + mu_svk * (FFtF - F)
+
+    if rank == 0:
+        print(f"Material: St. Venant-Kirchhoff (E={E_val}, nu={nu_val}, rho={rho_val})")
+
+else:
+    if rank == 0:
+        print(f"Unknown material: {MAT}")
+    sys.exit(1)
 
 # ============================================================================
-# TIME INTEGRATION SETUP (Symplectic Euler with lumped mass - matching lumped script)
+# TIME INTEGRATION SETUP (Symplectic Euler with lumped mass - matching C++ test)
 # ============================================================================
-dt = 1e-5
-n_steps = 200000
+dt = args.dt
+n_steps = args.steps
 t_final = n_steps * dt
 
 # ============================================================================
@@ -183,7 +241,7 @@ v_old.x.scatter_forward()
 residual = f_ext_vector.copy()
 f_int = f_ext_vector.copy()
 
-force_off_step = int(1.0 / dt)
+force_off_step = n_steps // 2
 
 # Start timing
 start_time = time.perf_counter()
@@ -237,8 +295,12 @@ end_time = time.perf_counter()
 elapsed_time = end_time - start_time
 
 if rank == 0:
-    print(f"Solver execution time (s): {elapsed_time:.6f}")
-    print(f"Average time per step (ms): {(elapsed_time / n_steps) * 1000:.3f}")
+    avg_step_time_ms = (elapsed_time / n_steps) * 1000.0
+    throughput = 1000.0 / avg_step_time_ms
+    print(f"\nTiming summary:")
+    print(f"  Solver execution time: {elapsed_time:.6f} s")
+    print(f"  Average step time: {avg_step_time_ms:.3f} ms")
+    print(f"  Throughput: {throughput:.2f} steps/sec")
 
 residual.destroy()
 f_int.destroy()
