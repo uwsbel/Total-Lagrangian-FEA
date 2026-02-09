@@ -467,7 +467,7 @@ __global__ void internalF_MooneyRivlin_4QP(
     // Compute determinant of F, pad with minJthreshold to avoid singularity
     float dummy = F00 * (F11 * F22 - F12 * F21) - F01 * (F10 * F22 - F12 * F20) +
                   F02 * (F10 * F21 - F11 * F20);
-    const float J = (dummy < minJthreshold ? minJthreshold : dummy);
+    const float J = (dummy < kMinJthreshold ? kMinJthreshold : dummy);
     float invJ = 1.0f / J;
 
     dummy = cbrtf(J);
@@ -494,12 +494,12 @@ __global__ void internalF_MooneyRivlin_4QP(
     bibi = 0.5f * (dummy * dummy - bibi);       // I2
     float I1 = dummy;
     float I2 = bibi;
-    float alpha = mu10 + mu01 * I1 * hatJ;
-    float beta = bulkK * (J - 1.0f) * J -
-                 (2.0f / 3.0f) * hatJ * (mu10 * I1 + 2.0f * mu01 * I2 * hatJ);
+    float alpha = kMu10 + kMu01 * I1 * hatJ;
+    float beta = kBulkK * (J - 1.0f) * J -
+                 (2.0f / 3.0f) * hatJ * (kMu10 * I1 + 2.0f * kMu01 * I2 * hatJ);
 
     // Update PK1 to hold the matrix that multiplies F from the left
-    bibi = -mu01 * hatJ;
+    bibi = -kMu01 * hatJ;
     bibi *= (2.0f * hatJ);
     alpha *= (2.0f * hatJ);
     PKone_00 = alpha + bibi * PKone_00;

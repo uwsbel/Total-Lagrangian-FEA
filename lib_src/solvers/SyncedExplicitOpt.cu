@@ -202,19 +202,6 @@ void SyncedExplicitOptSolver::SetVelocityFromCPU(const Eigen::VectorXd& vel_x,
 }
 
 void SyncedExplicitOptSolver::Solve() {
-  // Verify prerequisites
-  if (!element_->IsPrecomputed()) {
-    std::cerr << "SyncedExplicitOptSolver: Element not precomputed. "
-              << "Call element->ComputePrecomputation() first." << std::endl;
-    return;
-  }
-
-  if (!element_->IsMassComputed()) {
-    std::cerr << "SyncedExplicitOptSolver: Lumped mass not computed. "
-              << "Call element->ComputeLumpedMassHRZ() first." << std::endl;
-    return;
-  }
-
   const int block_size = 256;
   int node_grid = (n_nodes_ + block_size - 1) / block_size;
 
