@@ -287,14 +287,16 @@ int main(int argc, char** argv) {
     solver.SetExternalForce(f_ext);
   }
 
-  // Storage for tracking
+  // Storage for tracking (only allocate if writing CSV)
   std::vector<double> target_node_x;
   std::vector<double> target_node_y;
   std::vector<double> target_node_z;
   std::vector<double> step_times_ms;
-  target_node_x.reserve(opt.steps);
-  target_node_y.reserve(opt.steps);
-  target_node_z.reserve(opt.steps);
+  if (opt.write_csv) {
+    target_node_x.reserve(opt.steps);
+    target_node_y.reserve(opt.steps);
+    target_node_z.reserve(opt.steps);
+  }
   step_times_ms.reserve(opt.steps);
 
   std::cout << "Running SyncedExplicitOpt solver: dt=" << opt.dt
@@ -339,20 +341,26 @@ int main(int argc, char** argv) {
     double kernel_time = solver.GetLastStepTimeMs();
     step_times_ms.push_back(kernel_time);
 
-    // Get target node position from GPU
-    Eigen::VectorXd pos_x, pos_y, pos_z;
-    gpu_feat10opt.RetrievePositionToCPU(pos_x, pos_y, pos_z);
+    // Only retrieve positions when needed: for CSV output or periodic printing
+    const bool need_retrieve = opt.write_csv || (step % 500 == 0) || (step == opt.steps - 1);
+    
+    if (need_retrieve) {
+      Eigen::VectorXd pos_x, pos_y, pos_z;
+      gpu_feat10opt.RetrievePositionToCPU(pos_x, pos_y, pos_z);
 
-    target_node_x.push_back(pos_x(plot_target_node));
-    target_node_y.push_back(pos_y(plot_target_node));
-    target_node_z.push_back(pos_z(plot_target_node));
+      if (opt.write_csv) {
+        target_node_x.push_back(pos_x(plot_target_node));
+        target_node_y.push_back(pos_y(plot_target_node));
+        target_node_z.push_back(pos_z(plot_target_node));
+      }
 
-    if (step % 500 == 0 || step == opt.steps - 1) {
-      std::cout << "Step " << step << "/" << opt.steps << ": node "
-                << plot_target_node << " pos = (" << std::setprecision(6)
-                << pos_x(plot_target_node) << ", " << pos_y(plot_target_node)
-                << ", " << pos_z(plot_target_node)
-                << "), kernel time = " << kernel_time << " ms" << std::endl;
+      if (step % 500 == 0 || step == opt.steps - 1) {
+        std::cout << "Step " << step << "/" << opt.steps << ": node "
+                  << plot_target_node << " pos = (" << std::setprecision(6)
+                  << pos_x(plot_target_node) << ", " << pos_y(plot_target_node)
+                  << ", " << pos_z(plot_target_node)
+                  << "), kernel time = " << kernel_time << " ms" << std::endl;
+      }
     }
   }
 
@@ -369,7 +377,7 @@ int main(int argc, char** argv) {
             << std::endl;
 
   // Write CSV if requested
-  if (opt.write_csv) {
+  if (opt.write_csv && !target_node_x.empty()) {
     std::string out_path = opt.csv_path;
     if (out_path.empty()) {
       out_path = JoinPath(DefaultOutputDir(), "feat10_opt.csv");
