@@ -14,10 +14,23 @@ struct RigidEquivalentResult {
   double total_mass = 0.0;
   Eigen::Vector3d com = Eigen::Vector3d::Zero();
   Eigen::Vector3d v_com = Eigen::Vector3d::Zero();
+
+  // Rigid-equivalent angular velocity in the *world frame* (right-hand rule).
+  // Units: 1/time (e.g. rad/s if positions are meters and velocities are m/s).
   Eigen::Vector3d omega = Eigen::Vector3d::Zero();
 
+  // Angular momentum and inertia about the CoM, both expressed in the world
+  // frame. Units: L ~ mass * length^2 / time, I ~ mass * length^2.
   Eigen::Vector3d angular_momentum = Eigen::Vector3d::Zero();
   Eigen::Matrix3d inertia = Eigen::Matrix3d::Zero();
+
+  // Inertia principal values (ascending). Useful to diagnose near-singular
+  // cases where omega becomes ill-conditioned.
+  Eigen::Vector3d inertia_eigenvalues = Eigen::Vector3d::Zero();
+  double inertia_condition_number = 0.0;  // max/min over nonzero eigenvalues
+
+  // How well omega satisfies I*omega ≈ L (0 if exact or if both are ~0).
+  double angular_momentum_fit_rel_error = 0.0;
 
   // Residual motion after subtracting rigid-equivalent twist:
   // v_i_res = v_i - (v_com + omega × (r_i - com)).
@@ -40,7 +53,7 @@ RigidEquivalentResult ComputeRigidEquivalentForInstance(
 // Simple CSV logger for rigid-equivalent motion.
 //
 // Row format:
-//   time,step,body,total_mass,com_x,com_y,com_z,vcom_x,vcom_y,vcom_z,omega_x,omega_y,omega_z,residual_rms,residual_ke
+//   time,step,body,total_mass,com_x,com_y,com_z,vcom_x,vcom_y,vcom_z,omega_x,omega_y,omega_z,inertia_eig0,inertia_eig1,inertia_eig2,inertia_cond,L_fit_rel,residual_rms,residual_ke
 class RigidEquivalentCsvLogger {
  public:
   explicit RigidEquivalentCsvLogger(std::string path);

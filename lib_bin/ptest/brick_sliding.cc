@@ -104,7 +104,7 @@ int main(int argc, char** argv) {
   const double contact_mu_k_default     = 0.2;
   const double contact_stiffness        = 1e8;
   const bool enable_self_collision      = false;
-  const double init_clearance           = 1e-5;
+  const double init_clearance           = 2e-6;
   const double brick_mass_kg            = 1.0;
   const double slope_rho0               = 1500.0;
 
@@ -114,7 +114,7 @@ int main(int argc, char** argv) {
   double contact_cor          = contact_cor_default;
   double contact_mu_s         = contact_mu_s_default;
   double contact_mu_k         = contact_mu_k_default;
-  int max_steps               = 2000;
+  int max_steps               = 600;
   int export_interval         = 10;
   std::string out_suffix;
   std::string rigid_equiv_csv;

@@ -110,6 +110,29 @@ RigidEquivalentResult ComputeRigidEquivalentForInstance(
   out.inertia = I;
   out.omega = PseudoInverseSolveSymmetric(I, L);
 
+  // Diagnostics (helpful when omega looks "strange").
+  {
+    Eigen::SelfAdjointEigenSolver<Eigen::Matrix3d> es(I);
+    if (es.info() == Eigen::Success) {
+      out.inertia_eigenvalues = es.eigenvalues();  // ascending
+      const double e0 = out.inertia_eigenvalues(0);
+      const double e1 = out.inertia_eigenvalues(1);
+      const double e2 = out.inertia_eigenvalues(2);
+      const double max_eval = std::max({e0, e1, e2, 0.0});
+      const double tol = std::max(1e-16, 1e-12 * max_eval);
+      const double min_nz =
+          (e0 > tol) ? e0 : ((e1 > tol) ? e1 : ((e2 > tol) ? e2 : 0.0));
+      out.inertia_condition_number = (min_nz > 0.0) ? (max_eval / min_nz) : 0.0;
+    }
+
+    const Eigen::Vector3d L_hat = I * out.omega;
+    const double denom = std::max(L.norm(), 1e-18);
+    out.angular_momentum_fit_rel_error = (L_hat - L).norm() / denom;
+    if (!(std::isfinite(out.angular_momentum_fit_rel_error))) {
+      out.angular_momentum_fit_rel_error = 0.0;
+    }
+  }
+
   // Residual motion.
   double sum_m_vres2 = 0.0;
   for (int i = 0; i < inst.num_nodes; ++i) {
@@ -158,6 +181,8 @@ void RigidEquivalentCsvLogger::WriteHeader() {
              "com_x,com_y,com_z,"
              "vcom_x,vcom_y,vcom_z,"
              "omega_x,omega_y,omega_z,"
+             "inertia_eig0,inertia_eig1,inertia_eig2,inertia_cond,"
+             "L_fit_rel,"
              "residual_rms,residual_ke\n";
   wrote_header_ = true;
 }
@@ -172,6 +197,9 @@ void RigidEquivalentCsvLogger::WriteRow(double time, int step,
           << r.com.x() << "," << r.com.y() << "," << r.com.z() << ","
           << r.v_com.x() << "," << r.v_com.y() << "," << r.v_com.z() << ","
           << r.omega.x() << "," << r.omega.y() << "," << r.omega.z() << ","
+          << r.inertia_eigenvalues(0) << "," << r.inertia_eigenvalues(1) << ","
+          << r.inertia_eigenvalues(2) << "," << r.inertia_condition_number
+          << "," << r.angular_momentum_fit_rel_error << ","
           << r.residual_rms_speed << "," << r.residual_kinetic_energy << "\n";
 }
 

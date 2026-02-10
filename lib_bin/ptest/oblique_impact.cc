@@ -242,10 +242,16 @@ int main(int argc, char** argv) {
   gpu_t10_data.Setup(tet5pt_x, tet5pt_y, tet5pt_z, tet5pt_weights, h_x12, h_y12,
                      h_z12, elements);
 
-  const SolidMaterialProperties mat_sphere = SolidMaterialProperties::SVK(
+  // const SolidMaterialProperties mat_sphere = SolidMaterialProperties::SVK(
+  //     1e7, 0.3, 70.7355, 5e2, 5e2);
+  // const SolidMaterialProperties mat_plate = SolidMaterialProperties::SVK(
+  //     1e7, 0.3, 70.7355, 5e2, 5e2);
+
+    const SolidMaterialProperties mat_sphere = SolidMaterialProperties::SVK(
       1e7, 0.3, 70.7355, 5e1, 5e1);
   const SolidMaterialProperties mat_plate = SolidMaterialProperties::SVK(
       1e7, 0.3, 70.7355, 5e1, 5e1);
+
 
   gpu_t10_data.ApplyMaterial(mat_sphere);
   gpu_t10_data.SetDensityForElementRange(inst_plate.element_offset,
