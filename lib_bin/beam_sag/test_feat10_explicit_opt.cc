@@ -314,6 +314,7 @@ int main(int argc, char** argv) {
 
   // Debug: at step 0 (initial config), compute F and P for element 0 to check F == I
   {
+    gpu_feat10opt.EnableDiagnostics(true, true);  // Pre-allocate F and P buffers
     gpu_feat10opt.ClearInternalForce();
     gpu_feat10opt.ComputeInternalForce(true, true);
     std::vector<std::vector<Eigen::Matrix3f>> F_per_elem;
@@ -324,6 +325,7 @@ int main(int argc, char** argv) {
     }
   }
 
+  // this is the sim loop
   for (int step = 0; step < opt.steps; ++step) {
     // Remove the applied load halfway through the simulation to mirror
     // the non-optimized explicit test driver.

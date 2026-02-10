@@ -485,11 +485,9 @@ void GPU_FEAT10Opt_Data::ClearInternalForce() {
   HANDLE_ERROR(cudaMemset(d_internal_force, 0, 3 * n_nodes * sizeof(float)));
 }
 
-void GPU_FEAT10Opt_Data::ComputeInternalForce(bool writeOutF, bool writeOutP) {
-  assert(is_precomputed && "Must call ComputePrecomputation() first");
-
-  // Allocate F buffer if needed and requested
-  if (writeOutF && d_deformation_grad_F == nullptr) {
+void GPU_FEAT10Opt_Data::EnableDiagnostics(bool enableF, bool enableP) {
+  // Pre-allocate diagnostic buffers if needed
+  if (enableF && d_deformation_grad_F == nullptr) {
     HANDLE_ERROR(
         cudaMalloc(&d_deformation_grad_F, 9 * 4 * n_elem_padded * sizeof(float)));
     // Update device copy with new pointer
@@ -497,17 +495,26 @@ void GPU_FEAT10Opt_Data::ComputeInternalForce(bool writeOutF, bool writeOutP) {
                             cudaMemcpyHostToDevice));
   }
 
-  // Allocate P buffer if needed and requested
-  if (writeOutP && d_piola_stress_P == nullptr) {
+  if (enableP && d_piola_stress_P == nullptr) {
     HANDLE_ERROR(
         cudaMalloc(&d_piola_stress_P, 9 * 4 * n_elem_padded * sizeof(float)));
     // Update device copy with new pointer
     HANDLE_ERROR(cudaMemcpy(d_data, this, sizeof(GPU_FEAT10Opt_Data),
                             cudaMemcpyHostToDevice));
   }
+}
 
-  launchInternalForceKernel_FEAT10Opt(this, n_elem_padded, writeOutF,
-                                      writeOutP);
+void GPU_FEAT10Opt_Data::ComputeInternalForce(bool writeOutF, bool writeOutP) {
+  assert(is_precomputed && "Must call ComputePrecomputation() first");
+  
+  // Launch kernel directly - no wrapper overhead
+  constexpr int BLOCK_SIZE = 64;
+  const int num_blocks = n_elem_padded / 16;
+  constexpr size_t shared_mem_size = 3 * 9 * BLOCK_SIZE * sizeof(float);
+  
+  internalF_MooneyRivlin_4QP<<<num_blocks, BLOCK_SIZE, shared_mem_size>>>(
+      n_elem, d_pos_nodes, d_elem_nodes_soa, d_iso_map_inv, d_internal_force,
+      d_deformation_grad_F, d_piola_stress_P, writeOutF, writeOutP);
 }
 
 void GPU_FEAT10Opt_Data::SetExternalForce(const Eigen::VectorXf& f_ext) {
@@ -662,18 +669,4 @@ void GPU_FEAT10Opt_Data::RetrievePiolaToCPU(
 // Kernel launch wrapper: pass explicit parameters from host struct to reduce
 // kernel register pressure (parameters stay in constant/parameter memory).
 
-void launchInternalForceKernel_FEAT10Opt(const GPU_FEAT10Opt_Data* host_data,
-                                         int n_elem_padded, bool writeOutF,
-                                         bool writeOutP) {
-  constexpr int BLOCK_SIZE = 64;
-  int num_blocks = n_elem_padded / 16;
-
-  // Shared memory: 3 matrices (F, invJacobian, PK1) * 9 components * 64 threads
-  size_t shared_mem_size = getInternalForceKernelSharedMemSize(BLOCK_SIZE);
-
-  internalF_MooneyRivlin_4QP<<<num_blocks, BLOCK_SIZE, shared_mem_size>>>(
-      host_data->n_elem, host_data->d_pos_nodes, host_data->d_elem_nodes_soa,
-      host_data->d_iso_map_inv, host_data->d_internal_force,
-      host_data->d_deformation_grad_F, host_data->d_piola_stress_P,
-      writeOutF, writeOutP);
-}
+// launchInternalForceKernel_FEAT10Opt removed - now inlined in ComputeInternalForce()

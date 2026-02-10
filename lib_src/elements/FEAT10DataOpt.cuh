@@ -137,6 +137,10 @@ struct GPU_FEAT10Opt_Data {
   // Zero internal force buffer.
   void ClearInternalForce();
 
+  // Enable diagnostic output by pre-allocating F and/or P buffers.
+  // Call this ONCE before simulation if you need diagnostics.
+  void EnableDiagnostics(bool enableF = true, bool enableP = true);
+
   // Compute internal forces (optionally writing F and P).
   void ComputeInternalForce(bool writeOutF = false, bool writeOutP = false);
 
@@ -210,6 +214,4 @@ struct GPU_FEAT10Opt_Data {
 
 // Kernel launch wrapper (declared here, defined in FEAT10DataOpt.cu).
 // Launch fused internal force kernel using host-side struct.
-void launchInternalForceKernel_FEAT10Opt(const GPU_FEAT10Opt_Data* host_data,
-                                         int n_elem_padded, bool writeOutF,
-                                         bool writeOutP);
+// launchInternalForceKernel_FEAT10Opt removed - inlined in ComputeInternalForce()
