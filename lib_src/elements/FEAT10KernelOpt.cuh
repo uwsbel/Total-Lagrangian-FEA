@@ -59,8 +59,7 @@ __global__ void internalF_MooneyRivlin_4QP(
     const float* __restrict__ pIsoMapInverse,
     float* __restrict__ pInternalForceNodes,
     float* __restrict__ pDeformationGradientF,
-    float* __restrict__ pPiolaStressP,
-    bool writeOutDefGradientF, bool writeOutPiolaP) {
+    bool writeOutDefGradientF) {
   // Define a tile of four threads; each thread handles one quadrature point
   constexpr int TILE = 4;
   namespace cg = cooperative_groups;
@@ -568,19 +567,6 @@ __global__ void internalF_MooneyRivlin_4QP(
     PKone_22 = fmaf(F00, F11, -(F01 * F10)) * invJ;
     PKone_22 += intermediate_Matrix02 * F02 + intermediate_Matrix12 * F12 +
                 intermediate_Matrix22 * F22;
-
-    // Write P to global memory if requested (for unit tests)
-    if (writeOutPiolaP && pPiolaStressP != nullptr) {
-      pPiolaStressP[baseIdx + 0 * blockDim.x] = PKone_00;
-      pPiolaStressP[baseIdx + 1 * blockDim.x] = PKone_01;
-      pPiolaStressP[baseIdx + 2 * blockDim.x] = PKone_02;
-      pPiolaStressP[baseIdx + 3 * blockDim.x] = PKone_10;
-      pPiolaStressP[baseIdx + 4 * blockDim.x] = PKone_11;
-      pPiolaStressP[baseIdx + 5 * blockDim.x] = PKone_12;
-      pPiolaStressP[baseIdx + 6 * blockDim.x] = PKone_20;
-      pPiolaStressP[baseIdx + 7 * blockDim.x] = PKone_21;
-      pPiolaStressP[baseIdx + 8 * blockDim.x] = PKone_22;
-    }
   }
   // End of PK1 computation
 

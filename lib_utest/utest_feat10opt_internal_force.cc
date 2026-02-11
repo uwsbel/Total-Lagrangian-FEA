@@ -323,6 +323,9 @@ TEST_F(FEAT10OptInternalForceTest, DeformationGradient_GPUvsCPU) {
   delete element;
 }
 
+// Piola stress output removed for register optimization (72 -> 56 registers)
+// TEST DISABLED - Piola stress functionality no longer supported
+/*
 TEST_F(FEAT10OptInternalForceTest, PiolaStress_GPUvsCPU) {
   // Apply affine deformation and verify P matches at all quadrature points
 
@@ -387,6 +390,7 @@ TEST_F(FEAT10OptInternalForceTest, PiolaStress_GPUvsCPU) {
   element->Destroy();
   delete element;
 }
+*/
 
 TEST_F(FEAT10OptInternalForceTest, InternalForce_GPUvsCPU) {
   // Apply general affine deformation and verify internal force matches

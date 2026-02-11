@@ -314,11 +314,11 @@ int main(int argc, char** argv) {
     return 1;
   }
 
-  // Debug: at step 0 (initial config), compute F and P for element 0 to check F == I
+  // Debug: at step 0 (initial config), compute F for element 0 to check F == I
   {
-    gpu_feat10opt.EnableDiagnostics(true, true);  // Pre-allocate F and P buffers
+    gpu_feat10opt.EnableDiagnostics(true);  // Pre-allocate F buffer
     gpu_feat10opt.ClearInternalForce();
-    gpu_feat10opt.ComputeInternalForce(true, true);
+    gpu_feat10opt.ComputeInternalForce(true);
     std::vector<std::vector<Eigen::Matrix3f>> F_per_elem;
     gpu_feat10opt.RetrieveDeformationGradientToCPU(F_per_elem);
     if (!F_per_elem.empty() && !F_per_elem[0].empty()) {

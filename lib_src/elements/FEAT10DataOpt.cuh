@@ -68,10 +68,6 @@ struct GPU_FEAT10Opt_Data {
   // [9 * 4 * n_elem_padded] floats
   float* d_deformation_grad_F;
 
-  // First Piola–Kirchhoff stress P (optional), blocked SoA
-  // [9 * 4 * n_elem_padded] floats
-  float* d_piola_stress_P;
-
   // Inverse lumped mass [n_nodes] (1 / m_i)
   float* d_inv_mass_lumped;
 
@@ -101,7 +97,6 @@ struct GPU_FEAT10Opt_Data {
         d_internal_force(nullptr),
         d_external_force(nullptr),
         d_deformation_grad_F(nullptr),
-        d_piola_stress_P(nullptr),
         d_inv_mass_lumped(nullptr),
         d_data(nullptr),
         is_initialized(false),
@@ -137,12 +132,12 @@ struct GPU_FEAT10Opt_Data {
   // Zero internal force buffer.
   void ClearInternalForce();
 
-  // Enable diagnostic output by pre-allocating F and/or P buffers.
+  // Enable diagnostic output by pre-allocating F buffer.
   // Call this ONCE before simulation if you need diagnostics.
-  void EnableDiagnostics(bool enableF = true, bool enableP = true);
+  void EnableDiagnostics(bool enableF = true);
 
-  // Compute internal forces (optionally writing F and P).
-  void ComputeInternalForce(bool writeOutF = false, bool writeOutP = false);
+  // Compute internal forces (optionally writing F).
+  void ComputeInternalForce(bool writeOutF = false);
 
   // Set external force from CPU.
   void SetExternalForce(const Eigen::VectorXf& f_ext);
@@ -170,9 +165,6 @@ struct GPU_FEAT10Opt_Data {
   // Download deformation gradient F to CPU.
   void RetrieveDeformationGradientToCPU(
       std::vector<std::vector<Eigen::Matrix3f>>& F);
-
-  // Download first Piola–Kirchhoff stress P to CPU.
-  void RetrievePiolaToCPU(std::vector<std::vector<Eigen::Matrix3f>>& P);
 
   // Host methods – accessors
   int get_n_elem() const { return n_elem; }

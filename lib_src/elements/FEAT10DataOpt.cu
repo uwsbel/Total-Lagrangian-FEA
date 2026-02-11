@@ -376,7 +376,6 @@ void GPU_FEAT10Opt_Data::Destroy() {
   if (d_internal_force) cudaFree(d_internal_force);
   if (d_external_force) cudaFree(d_external_force);
   if (d_deformation_grad_F) cudaFree(d_deformation_grad_F);
-  if (d_piola_stress_P) cudaFree(d_piola_stress_P);
   if (d_inv_mass_lumped) cudaFree(d_inv_mass_lumped);
   if (d_data) cudaFree(d_data);
 
@@ -387,7 +386,6 @@ void GPU_FEAT10Opt_Data::Destroy() {
   d_internal_force = nullptr;
   d_external_force = nullptr;
   d_deformation_grad_F = nullptr;
-  d_piola_stress_P = nullptr;
   d_inv_mass_lumped = nullptr;
   d_data = nullptr;
 
@@ -485,8 +483,8 @@ void GPU_FEAT10Opt_Data::ClearInternalForce() {
   HANDLE_ERROR(cudaMemset(d_internal_force, 0, 3 * n_nodes * sizeof(float)));
 }
 
-void GPU_FEAT10Opt_Data::EnableDiagnostics(bool enableF, bool enableP) {
-  // Pre-allocate diagnostic buffers if needed
+void GPU_FEAT10Opt_Data::EnableDiagnostics(bool enableF) {
+  // Pre-allocate diagnostic buffer for F if needed
   if (enableF && d_deformation_grad_F == nullptr) {
     HANDLE_ERROR(
         cudaMalloc(&d_deformation_grad_F, 9 * 4 * n_elem_padded * sizeof(float)));
@@ -494,27 +492,19 @@ void GPU_FEAT10Opt_Data::EnableDiagnostics(bool enableF, bool enableP) {
     HANDLE_ERROR(cudaMemcpy(d_data, this, sizeof(GPU_FEAT10Opt_Data),
                             cudaMemcpyHostToDevice));
   }
-
-  if (enableP && d_piola_stress_P == nullptr) {
-    HANDLE_ERROR(
-        cudaMalloc(&d_piola_stress_P, 9 * 4 * n_elem_padded * sizeof(float)));
-    // Update device copy with new pointer
-    HANDLE_ERROR(cudaMemcpy(d_data, this, sizeof(GPU_FEAT10Opt_Data),
-                            cudaMemcpyHostToDevice));
-  }
 }
 
-void GPU_FEAT10Opt_Data::ComputeInternalForce(bool writeOutF, bool writeOutP) {
+void GPU_FEAT10Opt_Data::ComputeInternalForce(bool writeOutF) {
   assert(is_precomputed && "Must call ComputePrecomputation() first");
-  
+
   // Launch kernel directly - no wrapper overhead
   constexpr int BLOCK_SIZE = 64;
   const int num_blocks = n_elem_padded / 16;
   constexpr size_t shared_mem_size = 3 * 9 * BLOCK_SIZE * sizeof(float);
-  
+
   internalF_MooneyRivlin_4QP<<<num_blocks, BLOCK_SIZE, shared_mem_size>>>(
       n_elem, d_pos_nodes, d_elem_nodes_soa, d_iso_map_inv, d_internal_force,
-      d_deformation_grad_F, d_piola_stress_P, writeOutF, writeOutP);
+      d_deformation_grad_F, writeOutF);
 }
 
 void GPU_FEAT10Opt_Data::SetExternalForce(const Eigen::VectorXf& f_ext) {
@@ -623,45 +613,6 @@ void GPU_FEAT10Opt_Data::RetrieveDeformationGradientToCPU(
       F[elem][qp](2, 0) = F_flat[base + 6 * 64];
       F[elem][qp](2, 1) = F_flat[base + 7 * 64];
       F[elem][qp](2, 2) = F_flat[base + 8 * 64];
-    }
-  }
-}
-
-void GPU_FEAT10Opt_Data::RetrievePiolaToCPU(
-    std::vector<std::vector<Eigen::Matrix3f>>& P) {
-  if (d_piola_stress_P == nullptr) {
-    std::cerr << "GPU_FEAT10Opt_Data: Piola stress P not computed." << std::endl;
-    return;
-  }
-
-  P.resize(n_elem);
-
-  // Copy all P data from device
-  std::vector<float> P_flat(9 * 4 * n_elem_padded);
-  HANDLE_ERROR(cudaMemcpy(P_flat.data(), d_piola_stress_P,
-                          9 * 4 * n_elem_padded * sizeof(float),
-                          cudaMemcpyDeviceToHost));
-
-  // Unpack from blocked SoA format
-  for (int elem = 0; elem < n_elem; elem++) {
-    P[elem].resize(4);
-
-    for (int qp = 0; qp < 4; qp++) {
-      // Find location in blocked SoA
-      int global_qp = elem * 4 + qp;
-      int qp_block = global_qp / 64;
-      int thread_in_block = global_qp % 64;
-      int base = qp_block * 576 + thread_in_block;
-
-      P[elem][qp](0, 0) = P_flat[base + 0 * 64];
-      P[elem][qp](0, 1) = P_flat[base + 1 * 64];
-      P[elem][qp](0, 2) = P_flat[base + 2 * 64];
-      P[elem][qp](1, 0) = P_flat[base + 3 * 64];
-      P[elem][qp](1, 1) = P_flat[base + 4 * 64];
-      P[elem][qp](1, 2) = P_flat[base + 5 * 64];
-      P[elem][qp](2, 0) = P_flat[base + 6 * 64];
-      P[elem][qp](2, 1) = P_flat[base + 7 * 64];
-      P[elem][qp](2, 2) = P_flat[base + 8 * 64];
     }
   }
 }
