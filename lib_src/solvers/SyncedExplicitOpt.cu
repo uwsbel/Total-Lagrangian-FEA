@@ -77,9 +77,15 @@ SyncedExplicitOptSolver::SyncedExplicitOptSolver(GPU_FEAT10Opt_Data* element)
       n_fixed_nodes_(0),
       current_time_(0.0),
       current_step_(0),
-      is_initialized_(false) {
+      is_initialized_(false),
+      block_size_(256),
+      node_grid_(0),
+      bc_grid_(0) {
   // Set default parameters
   params_.dt = 1e-6;
+
+  // Compute grid dimensions
+  node_grid_ = (n_nodes_ + block_size_ - 1) / block_size_;
 
   AllocateMemory();
 }
@@ -127,6 +133,10 @@ void SyncedExplicitOptSolver::SetFixedNodes(const std::vector<int>& fixed_nodes)
     HANDLE_ERROR(cudaMemcpy(d_fixed_nodes_, fixed_nodes.data(),
                             n_fixed_nodes_ * sizeof(int),
                             cudaMemcpyHostToDevice));
+    // Compute BC grid dimensions
+    bc_grid_ = (n_fixed_nodes_ + block_size_ - 1) / block_size_;
+  } else {
+    bc_grid_ = 0;
   }
 }
 
@@ -187,9 +197,6 @@ void SyncedExplicitOptSolver::SetVelocityFromCPU(const Eigen::VectorXd& vel_x,
 }
 
 void SyncedExplicitOptSolver::Solve() {
-  const int block_size = 256;
-  int node_grid = (n_nodes_ + block_size - 1) / block_size;
-
   // Stage 1: Clear internal force
   element_->ClearInternalForce();
 
@@ -197,7 +204,7 @@ void SyncedExplicitOptSolver::Solve() {
   element_->ComputeInternalForce(false);  // No F output needed
 
   // Stage 3: Update velocity
-  syncedExplicitOpt_velocityUpdate<<<node_grid, block_size>>>(
+  syncedExplicitOpt_velocityUpdate<<<node_grid_, block_size_>>>(
       d_vel_,
       element_->GetInternalForceDevicePtr(),
       element_->GetExternalForceDevicePtr(),
@@ -207,13 +214,12 @@ void SyncedExplicitOptSolver::Solve() {
 
   // Stage 4: Apply fixed node boundary conditions
   if (n_fixed_nodes_ > 0) {
-    int bc_grid = (n_fixed_nodes_ + block_size - 1) / block_size;
-    syncedExplicitOpt_applyFixedBC<<<bc_grid, block_size>>>(
+    syncedExplicitOpt_applyFixedBC<<<bc_grid_, block_size_>>>(
         d_vel_, d_fixed_nodes_, n_fixed_nodes_);
   }
 
   // Stage 5: Update positions
-  syncedExplicitOpt_positionUpdate<<<node_grid, block_size>>>(
+  syncedExplicitOpt_positionUpdate<<<node_grid_, block_size_>>>(
       element_->GetPositionDevicePtr(),
       d_vel_,
       params_.dt,

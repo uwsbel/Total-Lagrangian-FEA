@@ -109,6 +109,11 @@ class SyncedExplicitOptSolver {
   // Internal state
   bool is_initialized_;
 
+  // Kernel launch configuration (computed once during initialization)
+  int block_size_;
+  int node_grid_;
+  int bc_grid_;  // Grid size for boundary condition kernel
+
   // Internal methods
   void AllocateMemory();
   void FreeMemory();
