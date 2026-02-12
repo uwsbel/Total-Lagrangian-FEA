@@ -3,6 +3,6 @@ build --lockfile_mode=error
 build --cxxopt=-std=c++17
 build --host_cxxopt=-std=c++17
 
-# If supported by your rules_cuda:
-build --@rules_cuda//cuda:archs='compute_61:sm_61;compute_75:sm_75;compute_86:sm_86,compute_86'
+# Build only for RTX 3050 Ti (sm_86) - faster compilation and better optimization
+build --@rules_cuda//cuda:archs='compute_86:sm_86,compute_86'
 build --flag_alias=cuda_archs=@rules_cuda//cuda:archs

@@ -69,16 +69,14 @@ class SyncedExplicitOptSolver {
 
   // Current simulation time.
   double GetCurrentTime() const { return current_time_; }
+  void updateCurrentTime(double time_increment) { current_time_ += time_increment; } // Needed for CUDA Graphs
 
   // Current step index.
   int GetCurrentStep() const { return current_step_; }
+  void updateCurrentStep(int step_increment) { current_step_ += step_increment; } // Needed for CUDA Graphs
 
   // Number of nodes.
   int GetNumNodes() const { return n_nodes_; }
-
-  // Timing
-  // Time in ms for last Solve() call.
-  double GetLastStepTimeMs() const { return last_step_time_ms_; }
 
   // Data transfer
   // Download velocity to CPU.
@@ -110,11 +108,6 @@ class SyncedExplicitOptSolver {
 
   // Internal state
   bool is_initialized_;
-
-  // Timing
-  cudaEvent_t timing_start_;
-  cudaEvent_t timing_stop_;
-  double last_step_time_ms_;
 
   // Internal methods
   void AllocateMemory();

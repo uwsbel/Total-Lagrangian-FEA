@@ -327,6 +327,12 @@ int main(int argc, char** argv) {
     }
   }
 
+  // events used for timing
+  cudaEvent_t timing_start;
+  cudaEvent_t timing_stop;
+  HANDLE_ERROR(cudaEventCreate(&timing_start));
+  HANDLE_ERROR(cudaEventCreate(&timing_stop));
+  
   // this is the sim loop
   for (int step = 0; step < opt.steps; ++step) {
     // Remove the applied load halfway through the simulation to mirror
@@ -336,10 +342,18 @@ int main(int argc, char** argv) {
       solver.SetExternalForce(f_ext);
     }
 
+    HANDLE_ERROR(cudaEventRecord(timing_start));
     solver.Solve();
+    HANDLE_ERROR(cudaEventRecord(timing_stop));
+    HANDLE_ERROR(cudaEventSynchronize(timing_stop));
+    float elapsed_ms;
+    HANDLE_ERROR(cudaEventElapsedTime(&elapsed_ms, timing_start, timing_stop));
+    step_times_ms.push_back(elapsed_ms);
 
-    double kernel_time = solver.GetLastStepTimeMs();
-    step_times_ms.push_back(kernel_time);
+    // Update time tracking
+    solver.updateCurrentTime(opt.dt);
+    solver.updateCurrentStep(1);
+
 
     // Only retrieve positions when needed: for CSV output or periodic printing
     const bool need_retrieve = opt.write_csv || (step % 500 == 0) || (step == opt.steps - 1);
@@ -359,7 +373,7 @@ int main(int argc, char** argv) {
                   << plot_target_node << " pos = (" << std::setprecision(6)
                   << pos_x(plot_target_node) << ", " << pos_y(plot_target_node)
                   << ", " << pos_z(plot_target_node)
-                  << "), kernel time = " << kernel_time << " ms" << std::endl;
+                  << "), kernel time = " << step_times_ms.back() << " ms" << std::endl;
       }
     }
   }
@@ -393,6 +407,8 @@ int main(int argc, char** argv) {
   }
 
   // Clean up
+  HANDLE_ERROR(cudaEventDestroy(timing_start));
+  HANDLE_ERROR(cudaEventDestroy(timing_stop));
   gpu_feat10opt.Destroy();
 
   std::cout << "\nTest completed successfully!" << std::endl;
