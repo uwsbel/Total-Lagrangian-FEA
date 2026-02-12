@@ -72,12 +72,11 @@ __global__ void internalF_MooneyRivlin_4QP_kelvin_voigt(
   const int element_idx =
       blockIdx.x * elements_per_block + tile.meta_group_rank();
 
-  // Shared memory for F, invJacobian, PK1, and Edot
+  // Shared memory for F, invJacobian, and PK1
   extern __shared__ float shMem[];
   float* s_F = shMem;
   float* s_invJacobian = s_F + 9 * blockDim.x;
   float* s_PK1 = s_invJacobian + 9 * blockDim.x;
-  float* s_Edot = s_PK1 + 9 * blockDim.x;
 
   // Early exit for padded elements (they have degenerate geometry)
   if (element_idx >= kTotalElements) {
@@ -105,6 +104,10 @@ __global__ void internalF_MooneyRivlin_4QP_kelvin_voigt(
   const int baseIdxNodes =
       blockIdx.x * nodes_per_element * elements_per_block + tile.meta_group_rank();
   const int* __restrict__ pElementNodes = pElement_NodeIndexes + baseIdxNodes;
+
+  // Thread-local Edot components (symmetric tensor storage).
+  float Edot_00 = 0.0f, Edot_01 = 0.0f, Edot_02 = 0.0f;
+  float Edot_11 = 0.0f, Edot_12 = 0.0f, Edot_22 = 0.0f;
 
   // ============================================================
   // Compute deformation gradient F
@@ -160,13 +163,6 @@ __global__ void internalF_MooneyRivlin_4QP_kelvin_voigt(
 #define PKone_20 s_PK1[threadIdx.x + 6 * blockDim.x]
 #define PKone_21 s_PK1[threadIdx.x + 7 * blockDim.x]
 #define PKone_22 s_PK1[threadIdx.x + 8 * blockDim.x]
-
-#define Edot_00 s_Edot[threadIdx.x + 0 * blockDim.x]
-#define Edot_01 s_Edot[threadIdx.x + 1 * blockDim.x]
-#define Edot_02 s_Edot[threadIdx.x + 2 * blockDim.x]
-#define Edot_11 s_Edot[threadIdx.x + 3 * blockDim.x]
-#define Edot_12 s_Edot[threadIdx.x + 4 * blockDim.x]
-#define Edot_22 s_Edot[threadIdx.x + 5 * blockDim.x]
 
     // Node 0 (of 0-9)
     {
@@ -517,7 +513,7 @@ __global__ void internalF_MooneyRivlin_4QP_kelvin_voigt(
 
   // ============================================================
   // Compute Edot = 0.5*(Fdot^T F + F^T Fdot) incrementally
-  // Accumulate directly into s_Edot shared memory.
+  // Accumulate into thread-local symmetric Edot components.
   // ============================================================
   {
     Edot_00 = 0.0f; Edot_01 = 0.0f; Edot_02 = 0.0f;
@@ -1371,23 +1367,17 @@ __global__ void internalF_MooneyRivlin_4QP_kelvin_voigt(
 #undef intermediate_Matrix11
 #undef intermediate_Matrix12
 #undef intermediate_Matrix22
-#undef Edot_00
-#undef Edot_01
-#undef Edot_02
-#undef Edot_11
-#undef Edot_12
-#undef Edot_22
 }
 
 /**
  * Returns required shared memory size for the internal force kernel.
  *
- * Shared memory is used for F, invJacobian, PK1, and Edot matrices
- * (each 9 floats per thread for F/invJacobian/PK1, 6 for Edot).
+ * Shared memory is used for F, invJacobian, and PK1 matrices
+ * (each 9 floats per thread).
  *
  * @param blockSize Number of threads per block (should be 64)
  * @return Required shared memory in bytes
  */
 inline size_t getInternalForceKernelSharedMemSize(int blockSize = 64) {
-  return (3 * 9 + 6) * blockSize * sizeof(float);  // F + invJ + PK1 + Edot
+  return (3 * 9) * blockSize * sizeof(float);  // F + invJ + PK1
 }
