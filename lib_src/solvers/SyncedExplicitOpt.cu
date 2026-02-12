@@ -83,6 +83,7 @@ SyncedExplicitOptSolver::SyncedExplicitOptSolver(GPU_FEAT10Opt_Data* element)
       bc_grid_(0) {
   // Set default parameters
   params_.dt = 1e-6;
+  params_.print_interval = 500;  // Default: print every 500 steps (graph size matches)
 
   // Compute grid dimensions
   node_grid_ = (n_nodes_ + block_size_ - 1) / block_size_;

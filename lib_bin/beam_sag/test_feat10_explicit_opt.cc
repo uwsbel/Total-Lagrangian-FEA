@@ -333,6 +333,9 @@ int main(int argc, char** argv) {
   HANDLE_ERROR(cudaEventCreate(&timing_start));
   HANDLE_ERROR(cudaEventCreate(&timing_stop));
   
+  // Get the print interval from solver (graph size will match this)
+  const int print_interval = solver.GetPrintInterval();
+  
   // this is the sim loop
   for (int step = 0; step < opt.steps; ++step) {
     // Remove the applied load halfway through the simulation to mirror
@@ -356,7 +359,7 @@ int main(int argc, char** argv) {
 
 
     // Only retrieve positions when needed: for CSV output or periodic printing
-    const bool need_retrieve = opt.write_csv || (step % 500 == 0) || (step == opt.steps - 1);
+    const bool need_retrieve = opt.write_csv || (step % print_interval == 0) || (step == opt.steps - 1);
     
     if (need_retrieve) {
       Eigen::VectorXd pos_x, pos_y, pos_z;
@@ -368,7 +371,7 @@ int main(int argc, char** argv) {
         target_node_z.push_back(pos_z(plot_target_node));
       }
 
-      if (step % 500 == 0 || step == opt.steps - 1) {
+      if (step % print_interval == 0 || step == opt.steps - 1) {
         std::cout << "Step " << step << "/" << opt.steps << ": node "
                   << plot_target_node << " pos = (" << std::setprecision(6)
                   << pos_x(plot_target_node) << ", " << pos_y(plot_target_node)

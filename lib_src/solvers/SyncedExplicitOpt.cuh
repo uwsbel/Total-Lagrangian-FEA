@@ -21,7 +21,8 @@
 
 // Solver parameters.
 struct SyncedExplicitOptParams {
-  double dt;  // Time step
+  double dt;            // Time step
+  int print_interval;   // Print output every N steps (graph size will match this)
 };
 
 // Explicit dynamics solver for FEAT10Opt elements using symplectic Euler.
@@ -77,6 +78,9 @@ class SyncedExplicitOptSolver {
 
   // Number of nodes.
   int GetNumNodes() const { return n_nodes_; }
+
+  // Print interval (how often to output results; graph size will match this).
+  int GetPrintInterval() const { return params_.print_interval; }
 
   // Data transfer
   // Download velocity to CPU.
