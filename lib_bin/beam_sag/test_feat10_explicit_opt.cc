@@ -336,48 +336,89 @@ int main(int argc, char** argv) {
   // Get the print interval from solver (graph size will match this)
   const int print_interval = solver.GetPrintInterval();
   
-  // this is the sim loop
-  for (int step = 0; step < opt.steps; ++step) {
-    // Remove the applied load halfway through the simulation to mirror
-    // the non-optimized explicit test driver.
-    if (step == opt.steps / 2) {
+  // Enable CUDA Graphs and prepare
+  solver.EnableGraphs(true);
+  
+  // Warmup: run one Solve() to ensure everything is initialized
+  std::cout << "Warming up GPU..." << std::endl;
+  solver.Solve();
+  HANDLE_ERROR(cudaDeviceSynchronize());
+  
+  // Capture the graph (print_interval consecutive Solve calls)
+  std::cout << "Capturing CUDA Graph..." << std::endl;
+  solver.CaptureGraph();
+  
+  const int num_graph_launches = opt.steps / print_interval;
+  const int load_removal_launch = (opt.steps / 2) / print_interval;
+  
+  std::vector<double> graph_times_ms;
+  
+  // Main loop: launch graphs instead of individual steps
+  for (int graph_idx = 0; graph_idx < num_graph_launches; ++graph_idx) {
+    const int current_step = graph_idx * print_interval;
+    
+    // Handle load removal at graph boundary
+    if (graph_idx == load_removal_launch) {
       f_ext.setZero();
       solver.SetExternalForce(f_ext);
+      // Recapture graph with new external force
+      std::cout << "Recapturing graph after load removal..." << std::endl;
+      solver.CaptureGraph();
     }
-
+    
+    // Time the graph execution
     HANDLE_ERROR(cudaEventRecord(timing_start));
-    solver.Solve();
+    
+    solver.ExecuteGraph();  // Executes "print_interval" simulation time steps in one graph
+    
     HANDLE_ERROR(cudaEventRecord(timing_stop));
-    HANDLE_ERROR(cudaEventSynchronize(timing_stop));
+    HANDLE_ERROR(cudaEventSynchronize(timing_stop));    
     float elapsed_ms;
     HANDLE_ERROR(cudaEventElapsedTime(&elapsed_ms, timing_start, timing_stop));
-    step_times_ms.push_back(elapsed_ms);
-
-    // Update time tracking
-    solver.updateCurrentTime(opt.dt);
-    solver.updateCurrentStep(1);
-
-
-    // Only retrieve positions when needed: for CSV output or periodic printing
-    const bool need_retrieve = opt.write_csv || (step % print_interval == 0) || (step == opt.steps - 1);
+    graph_times_ms.push_back(elapsed_ms);
     
-    if (need_retrieve) {
-      Eigen::VectorXd pos_x, pos_y, pos_z;
-      gpu_feat10opt.RetrievePositionToCPU(pos_x, pos_y, pos_z);
-
-      if (opt.write_csv) {
-        target_node_x.push_back(pos_x(plot_target_node));
-        target_node_y.push_back(pos_y(plot_target_node));
-        target_node_z.push_back(pos_z(plot_target_node));
-      }
-
-      if (step % print_interval == 0 || step == opt.steps - 1) {
-        std::cout << "Step " << step << "/" << opt.steps << ": node "
-                  << plot_target_node << " pos = (" << std::setprecision(6)
-                  << pos_x(plot_target_node) << ", " << pos_y(plot_target_node)
-                  << ", " << pos_z(plot_target_node)
-                  << "), kernel time = " << step_times_ms.back() << " ms" << std::endl;
-      }
+    // Update time tracking
+    solver.updateCurrentTime(opt.dt * print_interval);
+    solver.updateCurrentStep(print_interval);
+    
+    // Retrieve and print (now happens every "print_interval" simulation time steps)
+    Eigen::VectorXd pos_x, pos_y, pos_z;
+    gpu_feat10opt.RetrievePositionToCPU(pos_x, pos_y, pos_z);
+    
+    if (opt.write_csv) {
+      // For CSV, we only have positions at graph boundaries now
+      target_node_x.push_back(pos_x(plot_target_node));
+      target_node_y.push_back(pos_y(plot_target_node));
+      target_node_z.push_back(pos_z(plot_target_node));
+    }
+    
+    std::cout << "Step " << current_step << "/" << opt.steps 
+              << ": node " << plot_target_node 
+              << " pos = (" << std::setprecision(6)
+              << pos_x(plot_target_node) << ", " 
+              << pos_y(plot_target_node) << ", " 
+              << pos_z(plot_target_node) << ")"
+              << ", graph time = " << elapsed_ms << " ms"
+              << " (" << (elapsed_ms / print_interval) << " ms/step)" << std::endl;
+  }
+  
+  // Handle remainder steps (if opt.steps not evenly divisible by print_interval)
+  const int remainder = opt.steps % print_interval;
+  if (remainder > 0) {
+    std::cout << "Executing " << remainder << " remaining steps..." << std::endl;
+    for (int i = 0; i < remainder; ++i) {
+      solver.Solve();
+      solver.updateCurrentTime(opt.dt);
+      solver.updateCurrentStep(1);
+    }
+    HANDLE_ERROR(cudaDeviceSynchronize());
+  }
+  
+  // Store individual step times for statistics
+  for (double graph_time : graph_times_ms) {
+    // Each graph represents print_interval steps
+    for (int i = 0; i < print_interval; ++i) {
+      step_times_ms.push_back(graph_time / print_interval);
     }
   }
 

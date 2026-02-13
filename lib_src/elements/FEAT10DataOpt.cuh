@@ -130,14 +130,14 @@ struct GPU_FEAT10Opt_Data {
   void ComputeLumpedMassHRZ();
 
   // Zero internal force buffer.
-  void ClearInternalForce();
+  void ClearInternalForce(cudaStream_t stream = 0);
 
   // Enable diagnostic output by pre-allocating F buffer.
   // Call this ONCE before simulation if you need diagnostics.
   void EnableDiagnostics(bool enableF = true);
 
   // Compute internal forces (optionally writing F).
-  void ComputeInternalForce(bool writeOutF = false);
+  void ComputeInternalForce(bool writeOutF = false, cudaStream_t stream = 0);
 
   // Set external force from CPU.
   void SetExternalForce(const Eigen::VectorXf& f_ext);

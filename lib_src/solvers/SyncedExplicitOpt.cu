@@ -80,7 +80,12 @@ SyncedExplicitOptSolver::SyncedExplicitOptSolver(GPU_FEAT10Opt_Data* element)
       is_initialized_(false),
       block_size_(256),
       node_grid_(0),
-      bc_grid_(0) {
+      bc_grid_(0),
+      use_graphs_(false),
+      cuda_graph_(nullptr),
+      graph_exec_(nullptr),
+      graph_captured_(false),
+      stream_(nullptr) {
   // Set default parameters
   params_.dt = 1e-6;
   params_.print_interval = 500;  // Default: print every 500 steps (graph size matches)
@@ -100,10 +105,27 @@ void SyncedExplicitOptSolver::AllocateMemory() {
   HANDLE_ERROR(cudaMalloc(&d_vel_, n_nodes_ * 3 * sizeof(double)));
   HANDLE_ERROR(cudaMemset(d_vel_, 0, n_nodes_ * 3 * sizeof(double)));
 
+  // Create stream for graph operations
+  HANDLE_ERROR(cudaStreamCreate(&stream_));
+
   is_initialized_ = true;
 }
 
 void SyncedExplicitOptSolver::FreeMemory() {
+  // Destroy graph resources
+  if (graph_exec_) {
+    HANDLE_ERROR(cudaGraphExecDestroy(graph_exec_));
+    graph_exec_ = nullptr;
+  }
+  if (cuda_graph_) {
+    HANDLE_ERROR(cudaGraphDestroy(cuda_graph_));
+    cuda_graph_ = nullptr;
+  }
+  if (stream_) {
+    HANDLE_ERROR(cudaStreamDestroy(stream_));
+    stream_ = nullptr;
+  }
+
   if (d_vel_) {
     HANDLE_ERROR(cudaFree(d_vel_));
     d_vel_ = nullptr;
@@ -198,14 +220,17 @@ void SyncedExplicitOptSolver::SetVelocityFromCPU(const Eigen::VectorXd& vel_x,
 }
 
 void SyncedExplicitOptSolver::Solve() {
+  // Determine which stream to use (for graph capture compatibility)
+  cudaStream_t exec_stream = use_graphs_ ? stream_ : 0;
+  
   // Stage 1: Clear internal force
-  element_->ClearInternalForce();
+  element_->ClearInternalForce(exec_stream);
 
   // Stage 2: Compute internal force using fused kernel
-  element_->ComputeInternalForce(false);  // No F output needed
+  element_->ComputeInternalForce(false, exec_stream);  // No F output needed
 
   // Stage 3: Update velocity
-  syncedExplicitOpt_velocityUpdate<<<node_grid_, block_size_>>>(
+  syncedExplicitOpt_velocityUpdate<<<node_grid_, block_size_, 0, exec_stream>>>(
       d_vel_,
       element_->GetInternalForceDevicePtr(),
       element_->GetExternalForceDevicePtr(),
@@ -215,15 +240,69 @@ void SyncedExplicitOptSolver::Solve() {
 
   // Stage 4: Apply fixed node boundary conditions
   if (n_fixed_nodes_ > 0) {
-    syncedExplicitOpt_applyFixedBC<<<bc_grid_, block_size_>>>(
+    syncedExplicitOpt_applyFixedBC<<<bc_grid_, block_size_, 0, exec_stream>>>(
         d_vel_, d_fixed_nodes_, n_fixed_nodes_);
   }
 
   // Stage 5: Update positions
-  syncedExplicitOpt_positionUpdate<<<node_grid_, block_size_>>>(
+  syncedExplicitOpt_positionUpdate<<<node_grid_, block_size_, 0, exec_stream>>>(
       element_->GetPositionDevicePtr(),
       d_vel_,
       params_.dt,
       n_nodes_);
 
+}
+
+// CUDA Graphs Implementation
+
+void SyncedExplicitOptSolver::EnableGraphs(bool enable) {
+  use_graphs_ = enable;
+  graph_captured_ = false;  // Force recapture if toggled
+}
+
+void SyncedExplicitOptSolver::CaptureGraph() {
+  if (!use_graphs_) {
+    std::cerr << "Warning: Graphs not enabled, skipping capture" << std::endl;
+    return;
+  }
+  
+  // Clean up old graph if recapturing
+  if (graph_exec_) {
+    HANDLE_ERROR(cudaGraphExecDestroy(graph_exec_));
+    graph_exec_ = nullptr;
+  }
+  if (cuda_graph_) {
+    HANDLE_ERROR(cudaGraphDestroy(cuda_graph_));
+    cuda_graph_ = nullptr;
+  }
+  
+  // Begin graph capture on stream (use Relaxed mode to allow cross-stream dependencies)
+  HANDLE_ERROR(cudaStreamBeginCapture(stream_, cudaStreamCaptureModeRelaxed));
+  
+  // Capture print_interval consecutive Solve() calls
+  for (int i = 0; i < params_.print_interval; ++i) {
+    Solve();  // This captures all kernels in Solve()
+  }
+  
+  // End capture
+  HANDLE_ERROR(cudaStreamEndCapture(stream_, &cuda_graph_));
+  
+  // Instantiate the graph for execution
+  HANDLE_ERROR(cudaGraphInstantiate(&graph_exec_, cuda_graph_, nullptr, nullptr, 0));
+  
+  graph_captured_ = true;
+  
+  std::cout << "CUDA Graph captured: " << params_.print_interval 
+            << " steps per graph launch" << std::endl;
+}
+
+void SyncedExplicitOptSolver::ExecuteGraph() {
+  if (!graph_captured_) {
+    std::cerr << "Error: Graph not captured yet, call CaptureGraph() first" << std::endl;
+    return;
+  }
+  
+  // Launch the graph (executes print_interval Solve() calls in one shot)
+  // Note: This is asynchronous - caller must synchronize stream before accessing results
+  HANDLE_ERROR(cudaGraphLaunch(graph_exec_, stream_));
 }

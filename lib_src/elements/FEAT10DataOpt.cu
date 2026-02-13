@@ -479,8 +479,8 @@ void GPU_FEAT10Opt_Data::ComputeLumpedMassHRZ() {
       cudaMemcpy(d_data, this, sizeof(GPU_FEAT10Opt_Data), cudaMemcpyHostToDevice));
 }
 
-void GPU_FEAT10Opt_Data::ClearInternalForce() {
-  HANDLE_ERROR(cudaMemset(d_internal_force, 0, 3 * n_nodes * sizeof(float)));
+void GPU_FEAT10Opt_Data::ClearInternalForce(cudaStream_t stream) {
+  HANDLE_ERROR(cudaMemsetAsync(d_internal_force, 0, 3 * n_nodes * sizeof(float), stream));
 }
 
 void GPU_FEAT10Opt_Data::EnableDiagnostics(bool enableF) {
@@ -494,7 +494,7 @@ void GPU_FEAT10Opt_Data::EnableDiagnostics(bool enableF) {
   }
 }
 
-void GPU_FEAT10Opt_Data::ComputeInternalForce(bool writeOutF) {
+void GPU_FEAT10Opt_Data::ComputeInternalForce(bool writeOutF, cudaStream_t stream) {
   assert(is_precomputed && "Must call ComputePrecomputation() first");
 
   // Launch kernel directly - no wrapper overhead
@@ -502,7 +502,7 @@ void GPU_FEAT10Opt_Data::ComputeInternalForce(bool writeOutF) {
   const int num_blocks = n_elem_padded / 16;
   constexpr size_t shared_mem_size = 3 * 9 * BLOCK_SIZE * sizeof(float);
 
-  internalF_MooneyRivlin_4QP<<<num_blocks, BLOCK_SIZE, shared_mem_size>>>(
+  internalF_MooneyRivlin_4QP<<<num_blocks, BLOCK_SIZE, shared_mem_size, stream>>>(
       n_elem, d_pos_nodes, d_elem_nodes_soa, d_iso_map_inv, d_internal_force,
       d_deformation_grad_F, writeOutF);
 }

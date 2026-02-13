@@ -95,6 +95,24 @@ class SyncedExplicitOptSolver {
   // Reset simulation (zero velocity, reset time/step).
   void Reset();
 
+  // CUDA Graphs support
+  // Enable CUDA Graphs (must call before first Solve)
+  void EnableGraphs(bool enable = true);
+  
+  // Check if graphs are enabled
+  bool IsUsingGraphs() const { return use_graphs_; }
+  
+  // Capture the graph (call this once after setup, before main loop)
+  // Captures print_interval consecutive Solve() calls
+  void CaptureGraph();
+  
+  // Execute the captured graph (replaces print_interval Solve() calls)
+  // Note: This is asynchronous - call GetGraphStream() and synchronize before accessing results
+  void ExecuteGraph();
+  
+  // Get the stream used for graph execution (for synchronization)
+  cudaStream_t GetGraphStream() const { return stream_; }
+
  private:
   // Element data
   GPU_FEAT10Opt_Data* element_;
@@ -117,6 +135,13 @@ class SyncedExplicitOptSolver {
   int block_size_;
   int node_grid_;
   int bc_grid_;  // Grid size for boundary condition kernel
+
+  // CUDA Graph support
+  bool use_graphs_;              // Enable/disable graphs
+  cudaGraph_t cuda_graph_;       // The captured graph
+  cudaGraphExec_t graph_exec_;   // Executable graph instance
+  bool graph_captured_;          // Has graph been captured?
+  cudaStream_t stream_;          // Stream for graph capture/execution
 
   // Internal methods
   void AllocateMemory();
