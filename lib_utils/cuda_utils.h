@@ -1,7 +1,9 @@
 #pragma once
 
 #include <cuda_runtime.h>
+#if __has_include(<cudss.h>)
 #include <cudss.h>
+#endif
 #include <cusparse.h>
 
 #include <cstdio>
@@ -31,6 +33,7 @@ static inline void HandleError(cudaError_t err, const char *file, int line) {
   }
 #endif
 
+#if __has_include(<cudss.h>)
 #ifndef CHECK_CUDSS_MACRO
 #define CHECK_CUDSS_MACRO
 #define CUDSS_OK(call)                                              \
@@ -42,4 +45,5 @@ static inline void HandleError(cudaError_t err, const char *file, int line) {
       exit(1);                                                      \
     }                                                               \
   } while (0)
+#endif
 #endif
