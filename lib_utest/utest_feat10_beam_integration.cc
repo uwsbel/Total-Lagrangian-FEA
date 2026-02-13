@@ -212,7 +212,7 @@ TEST_F(FEAT10BeamIntegrationTest, BeamRes0_UndeformedEquilibrium_FEAT10Opt) {
 
   element->ComputePrecomputation();
   element->ClearInternalForce();
-  element->ComputeInternalForce();
+  element->ComputeInternalForce(nullptr);
 
   Eigen::VectorXf f_int;
   element->RetrieveInternalForceToCPU(f_int);
@@ -262,7 +262,7 @@ TEST_F(FEAT10BeamIntegrationTest, BeamRes0_ForceEquilibrium_UniformStretch) {
   feat10opt->UpdatePositions(positions);
 
   feat10opt->ClearInternalForce();
-  feat10opt->ComputeInternalForce();
+  feat10opt->ComputeInternalForce(nullptr);
 
   Eigen::VectorXf f_int_feat10opt;
   feat10opt->RetrieveInternalForceToCPU(f_int_feat10opt);
@@ -350,7 +350,7 @@ TEST_F(FEAT10BeamIntegrationTest, BeamRes0_FEAT10_vs_FEAT10Opt_Comparison) {
   feat10opt->UpdatePositions(positions);
 
   feat10opt->ClearInternalForce();
-  feat10opt->ComputeInternalForce();
+  feat10opt->ComputeInternalForce(nullptr);
 
   Eigen::VectorXf f_int_feat10opt;
   feat10opt->RetrieveInternalForceToCPU(f_int_feat10opt);
@@ -558,7 +558,7 @@ TEST_F(FEAT10BeamIntegrationTest, BeamRes0_LargeDeformation) {
   feat10opt->UpdatePositions(positions);
 
   feat10opt->ClearInternalForce();
-  feat10opt->ComputeInternalForce();
+  feat10opt->ComputeInternalForce(nullptr);
 
   Eigen::VectorXf f_int_feat10opt;
   feat10opt->RetrieveInternalForceToCPU(f_int_feat10opt);

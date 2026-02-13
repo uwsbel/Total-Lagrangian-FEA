@@ -100,7 +100,7 @@ class FEAT10OptInternalForceTest : public ::testing::Test {
 
     // Compute internal force on GPU
     element->ClearInternalForce();
-    element->ComputeInternalForce(false);
+    element->ComputeInternalForce(nullptr, false);
 
     // Retrieve internal force from GPU
     Eigen::VectorXf f_int_gpu;
@@ -235,7 +235,7 @@ TEST_F(FEAT10OptInternalForceTest, UndeformedConfig_FIsIdentity) {
 
   element->ComputePrecomputation();
   element->ClearInternalForce();
-  element->ComputeInternalForce(true);  // writeOutF = true
+  element->ComputeInternalForce(nullptr, true);  // writeOutF = true
 
   // Retrieve F from GPU
   std::vector<std::vector<Eigen::Matrix3f>> F_gpu;
@@ -285,7 +285,7 @@ TEST_F(FEAT10OptInternalForceTest, DeformationGradient_GPUvsCPU) {
 
   // Compute internal force (this computes F internally)
   element->ClearInternalForce();
-  element->ComputeInternalForce(true);  // writeOutF = true
+  element->ComputeInternalForce(nullptr, true);  // writeOutF = true
 
   // Retrieve F from GPU
   std::vector<std::vector<Eigen::Matrix3f>> F_gpu;
@@ -339,7 +339,7 @@ TEST_F(FEAT10OptInternalForceTest, PiolaStress_GPUvsCPU) {
 
   // Compute with P output enabled
   element->ClearInternalForce();
-  element->ComputeInternalForce(false, true);  // writeOutP=true
+  element->ComputeInternalForce(nullptr, false, true);  // writeOutP=true
 
   // Retrieve P from GPU
   std::vector<std::vector<Eigen::Matrix3f>> P_gpu;
@@ -436,7 +436,7 @@ TEST_F(FEAT10OptInternalForceTest, PureRotation_Small) {
   UpdateGPUPositions(element, x_cur);
 
   element->ClearInternalForce();
-  element->ComputeInternalForce();
+  element->ComputeInternalForce(nullptr);
 
   Eigen::VectorXf f_int_gpu;
   element->RetrieveInternalForceToCPU(f_int_gpu);
@@ -573,7 +573,7 @@ TEST_F(FEAT10OptMultiElementTest, TwoElements_UndeformedEquilibrium) {
 
   element.ComputePrecomputation();
   element.ClearInternalForce();
-  element.ComputeInternalForce();
+  element.ComputeInternalForce(nullptr);
 
   Eigen::VectorXf f_int;
   element.RetrieveInternalForceToCPU(f_int);
@@ -599,7 +599,7 @@ TEST_F(FEAT10OptMultiElementTest, TwoElements_ForceEquilibrium) {
   element.UpdatePositions(deformed);
 
   element.ClearInternalForce();
-  element.ComputeInternalForce();
+  element.ComputeInternalForce(nullptr);
 
   Eigen::VectorXf f_int;
   element.RetrieveInternalForceToCPU(f_int);
@@ -629,7 +629,7 @@ TEST_F(FEAT10OptMultiElementTest, TwoElements_SharedNodeForceAssembly) {
   element.UpdatePositions(deformed);
 
   element.ClearInternalForce();
-  element.ComputeInternalForce();
+  element.ComputeInternalForce(nullptr);
 
   Eigen::VectorXf f_int;
   element.RetrieveInternalForceToCPU(f_int);

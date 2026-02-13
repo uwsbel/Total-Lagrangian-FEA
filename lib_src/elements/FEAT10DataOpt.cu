@@ -485,7 +485,8 @@ void GPU_FEAT10Opt_Data::ClearInternalForce() {
   HANDLE_ERROR(cudaMemset(d_internal_force, 0, 3 * n_nodes * sizeof(float)));
 }
 
-void GPU_FEAT10Opt_Data::ComputeInternalForce(bool writeOutF, bool writeOutP) {
+void GPU_FEAT10Opt_Data::ComputeInternalForce(const double* d_vel_nodes,
+                                              bool writeOutF, bool writeOutP) {
   assert(is_precomputed && "Must call ComputePrecomputation() first");
 
   // Allocate F buffer if needed and requested
@@ -506,8 +507,8 @@ void GPU_FEAT10Opt_Data::ComputeInternalForce(bool writeOutF, bool writeOutP) {
                             cudaMemcpyHostToDevice));
   }
 
-  launchInternalForceKernel_FEAT10Opt(this, n_elem_padded, writeOutF,
-                                      writeOutP);
+  launchInternalForceKernel_FEAT10Opt(this, n_elem_padded, d_vel_nodes,
+                                      writeOutF, writeOutP);
 }
 
 void GPU_FEAT10Opt_Data::SetExternalForce(const Eigen::VectorXf& f_ext) {
@@ -663,8 +664,9 @@ void GPU_FEAT10Opt_Data::RetrievePiolaToCPU(
 // kernel register pressure (parameters stay in constant/parameter memory).
 
 void launchInternalForceKernel_FEAT10Opt(const GPU_FEAT10Opt_Data* host_data,
-                                         int n_elem_padded, bool writeOutF,
-                                         bool writeOutP) {
+                                         int n_elem_padded,
+                                         const double* d_vel_nodes,
+                                         bool writeOutF, bool writeOutP) {
   constexpr int BLOCK_SIZE = 64;
   int num_blocks = n_elem_padded / 16;
 
@@ -672,8 +674,8 @@ void launchInternalForceKernel_FEAT10Opt(const GPU_FEAT10Opt_Data* host_data,
   size_t shared_mem_size = getInternalForceKernelSharedMemSize(BLOCK_SIZE);
 
   internalF_MooneyRivlin_4QP<<<num_blocks, BLOCK_SIZE, shared_mem_size>>>(
-      host_data->n_elem, host_data->d_pos_nodes, host_data->d_elem_nodes_soa,
-      host_data->d_iso_map_inv, host_data->d_internal_force,
-      host_data->d_deformation_grad_F, host_data->d_piola_stress_P,
-      writeOutF, writeOutP);
+      host_data->n_elem, host_data->d_pos_nodes, d_vel_nodes,
+      host_data->d_elem_nodes_soa, host_data->d_iso_map_inv,
+      host_data->d_internal_force, host_data->d_deformation_grad_F,
+      host_data->d_piola_stress_P, writeOutF, writeOutP);
 }

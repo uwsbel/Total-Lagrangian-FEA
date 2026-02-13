@@ -137,8 +137,11 @@ struct GPU_FEAT10Opt_Data {
   // Zero internal force buffer.
   void ClearInternalForce();
 
-  // Compute internal forces (optionally writing F and P).
-  void ComputeInternalForce(bool writeOutF = false, bool writeOutP = false);
+  // Compute internal forces (optionally writing F and P). Pass velocity pointer
+  // for Kelvin-Voigt damping. Use nullptr for purely elastic force.
+  // TODO: make this optional and use a flag
+  void ComputeInternalForce(const double* d_vel_nodes, bool writeOutF = false,
+                            bool writeOutP = false);
 
   // Set external force from CPU.
   void SetExternalForce(const Eigen::VectorXf& f_ext);
@@ -211,5 +214,6 @@ struct GPU_FEAT10Opt_Data {
 // Kernel launch wrapper (declared here, defined in FEAT10DataOpt.cu).
 // Launch fused internal force kernel using host-side struct.
 void launchInternalForceKernel_FEAT10Opt(const GPU_FEAT10Opt_Data* host_data,
-                                         int n_elem_padded, bool writeOutF,
-                                         bool writeOutP);
+                                         int n_elem_padded,
+                                         const double* d_vel_nodes,
+                                         bool writeOutF, bool writeOutP);

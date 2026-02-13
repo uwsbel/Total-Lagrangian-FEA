@@ -7,7 +7,8 @@
  * Email:   negrut@wisc.edu, arivoli@wisc.edu
  * File:    FEAT10KernelOpt.cuh
  * Brief:   Fused internal force kernel for T10 elements with
- *          Mooney-Rivlin material and 4-point quadrature.
+ *          Mooney-Rivlin (+ optional Kelvin-Voigt damping) and 4-point
+ *          quadrature.
  *==============================================================
  *==============================================================*/
 
@@ -21,6 +22,10 @@ constexpr float kMu10 = 80000.0f;
 constexpr float kMu01 = 20000.0f;
 constexpr float kBulkK = 1.0e6f;
 constexpr float kMinJthreshold = 1e-6f;
+constexpr float kEtaDamp = 50.0f;    // Kelvin-Voigt shear damping (Pa·s)
+constexpr float kLambdaDamp = 25.0f;  // Kelvin-Voigt volumetric damping (Pa·s)
+constexpr bool kUseKelvinVoigtDamping =
+    (kEtaDamp != 0.0f) || (kLambdaDamp != 0.0f);
 
 /**
  * Warp shuffle reduction and atomic add helper.
@@ -49,12 +54,14 @@ __device__ __forceinline__ void reduce_scale_and_atomicAdd(
 }
 
 /**
- * Internal force kernel for T10 elements with Mooney-Rivlin, 4-point quadrature.
+ * Internal force kernel for T10 elements with Mooney-Rivlin (+ optional
+ * Kelvin-Voigt damping), 4-point quadrature.
  * 4 threads per element (one per QP), 64 threads per block. Uses warp shuffle reduction.
  */
 __global__ void internalF_MooneyRivlin_4QP(
     int n_elem,
     const double* __restrict__ pPosNodes,
+    const double* __restrict__ pVelNodes,
     const int* __restrict__ pElement_NodeIndexes,
     const float* __restrict__ pIsoMapInverse,
     float* __restrict__ pInternalForceNodes,
@@ -105,6 +112,10 @@ __global__ void internalF_MooneyRivlin_4QP(
   const int baseIdxNodes =
       blockIdx.x * nodes_per_element * elements_per_block + tile.meta_group_rank();
   const int* __restrict__ pElementNodes = pElement_NodeIndexes + baseIdxNodes;
+
+  // Thread-local Edot components (symmetric tensor storage).
+  float Edot_00 = 0.0f, Edot_01 = 0.0f, Edot_02 = 0.0f;
+  float Edot_11 = 0.0f, Edot_12 = 0.0f, Edot_22 = 0.0f;
 
   // ============================================================
   // Compute deformation gradient F
@@ -460,6 +471,358 @@ __global__ void internalF_MooneyRivlin_4QP(
   // End of deformation gradient F computation
 
   // ============================================================
+  // Compute Edot = 0.5*(Fdot^T F + F^T Fdot) incrementally
+  // Accumulate into thread-local symmetric Edot components.
+  // ============================================================
+  if (kUseKelvinVoigtDamping && pVelNodes != nullptr) {
+    Edot_00 = 0.0f;
+    Edot_01 = 0.0f;
+    Edot_02 = 0.0f;
+    Edot_11 = 0.0f;
+    Edot_12 = 0.0f;
+    Edot_22 = 0.0f;
+
+    // Node 0 (of 0-9)
+    {
+      int whichGlobalNode = 0;
+      if (lane_in_tile == 0) {
+        whichGlobalNode = __ldg(&pElementNodes[0 * elements_per_block]);
+      }
+      whichGlobalNode = tile.shfl(whichGlobalNode, 0);
+
+      float value = 0.0f;
+      if (lane_in_tile < 3) {
+        value = (float)pVelNodes[3 * whichGlobalNode + lane_in_tile];
+      }
+      const float vx = tile.shfl(value, 0);
+      const float vy = tile.shfl(value, 1);
+      const float vz = tile.shfl(value, 2);
+
+      const float h0 = 4.f * eta + 4.f * xi + 4.f * zeta - 3.f;
+      const float gx = h0 * (isoJacInv00 + isoJacInv10 + isoJacInv20);
+      const float gy = h0 * (isoJacInv01 + isoJacInv11 + isoJacInv21);
+      const float gz = h0 * (isoJacInv02 + isoJacInv12 + isoJacInv22);
+
+      const float wx = F00 * vx + F10 * vy + F20 * vz;
+      const float wy = F01 * vx + F11 * vy + F21 * vz;
+      const float wz = F02 * vx + F12 * vy + F22 * vz;
+
+      Edot_00 += gx * wx;
+      Edot_01 += 0.5f * (gx * wy + gy * wx);
+      Edot_02 += 0.5f * (gx * wz + gz * wx);
+      Edot_11 += gy * wy;
+      Edot_12 += 0.5f * (gy * wz + gz * wy);
+      Edot_22 += gz * wz;
+    }
+
+    // Node 1 (of 0-9)
+    {
+      int whichGlobalNode = 0;
+      if (lane_in_tile == 0) {
+        whichGlobalNode = __ldg(&pElementNodes[1 * elements_per_block]);
+      }
+      whichGlobalNode = tile.shfl(whichGlobalNode, 0);
+
+      float value = 0.0f;
+      if (lane_in_tile < 3) {
+        value = (float)pVelNodes[3 * whichGlobalNode + lane_in_tile];
+      }
+      const float vx = tile.shfl(value, 0);
+      const float vy = tile.shfl(value, 1);
+      const float vz = tile.shfl(value, 2);
+
+      const float h0 = 4.f * xi - 1.f;
+      const float gx = h0 * isoJacInv00;
+      const float gy = h0 * isoJacInv01;
+      const float gz = h0 * isoJacInv02;
+
+      const float wx = F00 * vx + F10 * vy + F20 * vz;
+      const float wy = F01 * vx + F11 * vy + F21 * vz;
+      const float wz = F02 * vx + F12 * vy + F22 * vz;
+
+      Edot_00 += gx * wx;
+      Edot_01 += 0.5f * (gx * wy + gy * wx);
+      Edot_02 += 0.5f * (gx * wz + gz * wx);
+      Edot_11 += gy * wy;
+      Edot_12 += 0.5f * (gy * wz + gz * wy);
+      Edot_22 += gz * wz;
+    }
+
+    // Node 2 (of 0-9)
+    {
+      int whichGlobalNode = 0;
+      if (lane_in_tile == 0) {
+        whichGlobalNode = __ldg(&pElementNodes[2 * elements_per_block]);
+      }
+      whichGlobalNode = tile.shfl(whichGlobalNode, 0);
+
+      float value = 0.0f;
+      if (lane_in_tile < 3) {
+        value = (float)pVelNodes[3 * whichGlobalNode + lane_in_tile];
+      }
+      const float vx = tile.shfl(value, 0);
+      const float vy = tile.shfl(value, 1);
+      const float vz = tile.shfl(value, 2);
+
+      const float h1 = 4.f * eta - 1.f;
+      const float gx = h1 * isoJacInv10;
+      const float gy = h1 * isoJacInv11;
+      const float gz = h1 * isoJacInv12;
+
+      const float wx = F00 * vx + F10 * vy + F20 * vz;
+      const float wy = F01 * vx + F11 * vy + F21 * vz;
+      const float wz = F02 * vx + F12 * vy + F22 * vz;
+
+      Edot_00 += gx * wx;
+      Edot_01 += 0.5f * (gx * wy + gy * wx);
+      Edot_02 += 0.5f * (gx * wz + gz * wx);
+      Edot_11 += gy * wy;
+      Edot_12 += 0.5f * (gy * wz + gz * wy);
+      Edot_22 += gz * wz;
+    }
+
+    // Node 3 (of 0-9)
+    {
+      int whichGlobalNode = 0;
+      if (lane_in_tile == 0) {
+        whichGlobalNode = __ldg(&pElementNodes[3 * elements_per_block]);
+      }
+      whichGlobalNode = tile.shfl(whichGlobalNode, 0);
+
+      float value = 0.0f;
+      if (lane_in_tile < 3) {
+        value = (float)pVelNodes[3 * whichGlobalNode + lane_in_tile];
+      }
+      const float vx = tile.shfl(value, 0);
+      const float vy = tile.shfl(value, 1);
+      const float vz = tile.shfl(value, 2);
+
+      const float h2 = 4.f * zeta - 1.f;
+      const float gx = h2 * isoJacInv20;
+      const float gy = h2 * isoJacInv21;
+      const float gz = h2 * isoJacInv22;
+
+      const float wx = F00 * vx + F10 * vy + F20 * vz;
+      const float wy = F01 * vx + F11 * vy + F21 * vz;
+      const float wz = F02 * vx + F12 * vy + F22 * vz;
+
+      Edot_00 += gx * wx;
+      Edot_01 += 0.5f * (gx * wy + gy * wx);
+      Edot_02 += 0.5f * (gx * wz + gz * wx);
+      Edot_11 += gy * wy;
+      Edot_12 += 0.5f * (gy * wz + gz * wy);
+      Edot_22 += gz * wz;
+    }
+
+    // Node 4 (of 0-9)
+    {
+      int whichGlobalNode = 0;
+      if (lane_in_tile == 0) {
+        whichGlobalNode = __ldg(&pElementNodes[4 * elements_per_block]);
+      }
+      whichGlobalNode = tile.shfl(whichGlobalNode, 0);
+
+      float value = 0.0f;
+      if (lane_in_tile < 3) {
+        value = (float)pVelNodes[3 * whichGlobalNode + lane_in_tile];
+      }
+      const float vx = tile.shfl(value, 0);
+      const float vy = tile.shfl(value, 1);
+      const float vz = tile.shfl(value, 2);
+
+      const float h0 = -4.f * eta - 8.f * xi - 4.f * zeta + 4.f;
+      const float h1 = -4.f * xi;
+      const float h2 = -4.f * xi;
+      const float gx = h0 * isoJacInv00 + h1 * isoJacInv10 + h2 * isoJacInv20;
+      const float gy = h0 * isoJacInv01 + h1 * isoJacInv11 + h2 * isoJacInv21;
+      const float gz = h0 * isoJacInv02 + h1 * isoJacInv12 + h2 * isoJacInv22;
+
+      const float wx = F00 * vx + F10 * vy + F20 * vz;
+      const float wy = F01 * vx + F11 * vy + F21 * vz;
+      const float wz = F02 * vx + F12 * vy + F22 * vz;
+
+      Edot_00 += gx * wx;
+      Edot_01 += 0.5f * (gx * wy + gy * wx);
+      Edot_02 += 0.5f * (gx * wz + gz * wx);
+      Edot_11 += gy * wy;
+      Edot_12 += 0.5f * (gy * wz + gz * wy);
+      Edot_22 += gz * wz;
+    }
+
+    // Node 5 (of 0-9)
+    {
+      int whichGlobalNode = 0;
+      if (lane_in_tile == 0) {
+        whichGlobalNode = __ldg(&pElementNodes[5 * elements_per_block]);
+      }
+      whichGlobalNode = tile.shfl(whichGlobalNode, 0);
+
+      float value = 0.0f;
+      if (lane_in_tile < 3) {
+        value = (float)pVelNodes[3 * whichGlobalNode + lane_in_tile];
+      }
+      const float vx = tile.shfl(value, 0);
+      const float vy = tile.shfl(value, 1);
+      const float vz = tile.shfl(value, 2);
+
+      const float h0 = 4.f * eta;
+      const float h1 = 4.f * xi;
+      const float gx = h0 * isoJacInv00 + h1 * isoJacInv10;
+      const float gy = h0 * isoJacInv01 + h1 * isoJacInv11;
+      const float gz = h0 * isoJacInv02 + h1 * isoJacInv12;
+
+      const float wx = F00 * vx + F10 * vy + F20 * vz;
+      const float wy = F01 * vx + F11 * vy + F21 * vz;
+      const float wz = F02 * vx + F12 * vy + F22 * vz;
+
+      Edot_00 += gx * wx;
+      Edot_01 += 0.5f * (gx * wy + gy * wx);
+      Edot_02 += 0.5f * (gx * wz + gz * wx);
+      Edot_11 += gy * wy;
+      Edot_12 += 0.5f * (gy * wz + gz * wy);
+      Edot_22 += gz * wz;
+    }
+
+    // Node 6 (of 0-9)
+    {
+      int whichGlobalNode = 0;
+      if (lane_in_tile == 0) {
+        whichGlobalNode = __ldg(&pElementNodes[6 * elements_per_block]);
+      }
+      whichGlobalNode = tile.shfl(whichGlobalNode, 0);
+
+      float value = 0.0f;
+      if (lane_in_tile < 3) {
+        value = (float)pVelNodes[3 * whichGlobalNode + lane_in_tile];
+      }
+      const float vx = tile.shfl(value, 0);
+      const float vy = tile.shfl(value, 1);
+      const float vz = tile.shfl(value, 2);
+
+      const float h0 = -4.f * eta;
+      const float h1 = -8.f * eta - 4.f * xi - 4.f * zeta + 4.f;
+      const float h2 = -4.f * eta;
+      const float gx = h0 * isoJacInv00 + h1 * isoJacInv10 + h2 * isoJacInv20;
+      const float gy = h0 * isoJacInv01 + h1 * isoJacInv11 + h2 * isoJacInv21;
+      const float gz = h0 * isoJacInv02 + h1 * isoJacInv12 + h2 * isoJacInv22;
+
+      const float wx = F00 * vx + F10 * vy + F20 * vz;
+      const float wy = F01 * vx + F11 * vy + F21 * vz;
+      const float wz = F02 * vx + F12 * vy + F22 * vz;
+
+      Edot_00 += gx * wx;
+      Edot_01 += 0.5f * (gx * wy + gy * wx);
+      Edot_02 += 0.5f * (gx * wz + gz * wx);
+      Edot_11 += gy * wy;
+      Edot_12 += 0.5f * (gy * wz + gz * wy);
+      Edot_22 += gz * wz;
+    }
+
+    // Node 7 (of 0-9)
+    {
+      int whichGlobalNode = 0;
+      if (lane_in_tile == 0) {
+        whichGlobalNode = __ldg(&pElementNodes[7 * elements_per_block]);
+      }
+      whichGlobalNode = tile.shfl(whichGlobalNode, 0);
+
+      float value = 0.0f;
+      if (lane_in_tile < 3) {
+        value = (float)pVelNodes[3 * whichGlobalNode + lane_in_tile];
+      }
+      const float vx = tile.shfl(value, 0);
+      const float vy = tile.shfl(value, 1);
+      const float vz = tile.shfl(value, 2);
+
+      const float h0 = -4.f * zeta;
+      const float h1 = -4.f * zeta;
+      const float h2 = -4.f * eta - 4.f * xi - 8.f * zeta + 4.f;
+      const float gx = h0 * isoJacInv00 + h1 * isoJacInv10 + h2 * isoJacInv20;
+      const float gy = h0 * isoJacInv01 + h1 * isoJacInv11 + h2 * isoJacInv21;
+      const float gz = h0 * isoJacInv02 + h1 * isoJacInv12 + h2 * isoJacInv22;
+
+      const float wx = F00 * vx + F10 * vy + F20 * vz;
+      const float wy = F01 * vx + F11 * vy + F21 * vz;
+      const float wz = F02 * vx + F12 * vy + F22 * vz;
+
+      Edot_00 += gx * wx;
+      Edot_01 += 0.5f * (gx * wy + gy * wx);
+      Edot_02 += 0.5f * (gx * wz + gz * wx);
+      Edot_11 += gy * wy;
+      Edot_12 += 0.5f * (gy * wz + gz * wy);
+      Edot_22 += gz * wz;
+    }
+
+    // Node 8 (of 0-9)
+    {
+      int whichGlobalNode = 0;
+      if (lane_in_tile == 0) {
+        whichGlobalNode = __ldg(&pElementNodes[8 * elements_per_block]);
+      }
+      whichGlobalNode = tile.shfl(whichGlobalNode, 0);
+
+      float value = 0.0f;
+      if (lane_in_tile < 3) {
+        value = (float)pVelNodes[3 * whichGlobalNode + lane_in_tile];
+      }
+      const float vx = tile.shfl(value, 0);
+      const float vy = tile.shfl(value, 1);
+      const float vz = tile.shfl(value, 2);
+
+      const float h0 = 4.f * zeta;
+      const float h2 = 4.f * xi;
+      const float gx = h0 * isoJacInv00 + h2 * isoJacInv20;
+      const float gy = h0 * isoJacInv01 + h2 * isoJacInv21;
+      const float gz = h0 * isoJacInv02 + h2 * isoJacInv22;
+
+      const float wx = F00 * vx + F10 * vy + F20 * vz;
+      const float wy = F01 * vx + F11 * vy + F21 * vz;
+      const float wz = F02 * vx + F12 * vy + F22 * vz;
+
+      Edot_00 += gx * wx;
+      Edot_01 += 0.5f * (gx * wy + gy * wx);
+      Edot_02 += 0.5f * (gx * wz + gz * wx);
+      Edot_11 += gy * wy;
+      Edot_12 += 0.5f * (gy * wz + gz * wy);
+      Edot_22 += gz * wz;
+    }
+
+    // Node 9 (of 0-9)
+    {
+      int whichGlobalNode = 0;
+      if (lane_in_tile == 0) {
+        whichGlobalNode = __ldg(&pElementNodes[9 * elements_per_block]);
+      }
+      whichGlobalNode = tile.shfl(whichGlobalNode, 0);
+
+      float value = 0.0f;
+      if (lane_in_tile < 3) {
+        value = (float)pVelNodes[3 * whichGlobalNode + lane_in_tile];
+      }
+      const float vx = tile.shfl(value, 0);
+      const float vy = tile.shfl(value, 1);
+      const float vz = tile.shfl(value, 2);
+
+      const float h1 = 4.f * zeta;
+      const float h2 = 4.f * eta;
+      const float gx = h1 * isoJacInv10 + h2 * isoJacInv20;
+      const float gy = h1 * isoJacInv11 + h2 * isoJacInv21;
+      const float gz = h1 * isoJacInv12 + h2 * isoJacInv22;
+
+      const float wx = F00 * vx + F10 * vy + F20 * vz;
+      const float wy = F01 * vx + F11 * vy + F21 * vz;
+      const float wz = F02 * vx + F12 * vy + F22 * vz;
+
+      Edot_00 += gx * wx;
+      Edot_01 += 0.5f * (gx * wy + gy * wx);
+      Edot_02 += 0.5f * (gx * wz + gz * wx);
+      Edot_11 += gy * wy;
+      Edot_12 += 0.5f * (gy * wz + gz * wy);
+      Edot_22 += gz * wz;
+    }
+  }
+
+  // ============================================================
   // Compute 1st Piola-Kirchhoff stress tensor P (Mooney-Rivlin)
   // P = 2*hatJ*(alpha*I - mu01*hatJ*F*F^T)F + beta*F^{-T}
   // ============================================================
@@ -502,6 +865,9 @@ __global__ void internalF_MooneyRivlin_4QP(
     bibi = -kMu01 * hatJ;
     bibi *= (2.0f * hatJ);
     alpha *= (2.0f * hatJ);
+    if (kUseKelvinVoigtDamping) {
+      alpha += kLambdaDamp * (Edot_00 + Edot_11 + Edot_22);
+    }
     PKone_00 = alpha + bibi * PKone_00;
     PKone_11 = alpha + bibi * PKone_11;
     PKone_22 = alpha + bibi * PKone_22;
@@ -568,6 +934,19 @@ __global__ void internalF_MooneyRivlin_4QP(
     PKone_22 = fmaf(F00, F11, -(F01 * F10)) * invJ;
     PKone_22 += intermediate_Matrix02 * F02 + intermediate_Matrix12 * F12 +
                 intermediate_Matrix22 * F22;
+
+    if (kUseKelvinVoigtDamping) {
+      constexpr float two_eta = 2.0f * kEtaDamp;
+      PKone_00 += two_eta * (F00 * Edot_00 + F01 * Edot_01 + F02 * Edot_02);
+      PKone_01 += two_eta * (F00 * Edot_01 + F01 * Edot_11 + F02 * Edot_12);
+      PKone_02 += two_eta * (F00 * Edot_02 + F01 * Edot_12 + F02 * Edot_22);
+      PKone_10 += two_eta * (F10 * Edot_00 + F11 * Edot_01 + F12 * Edot_02);
+      PKone_11 += two_eta * (F10 * Edot_01 + F11 * Edot_11 + F12 * Edot_12);
+      PKone_12 += two_eta * (F10 * Edot_02 + F11 * Edot_12 + F12 * Edot_22);
+      PKone_20 += two_eta * (F20 * Edot_00 + F21 * Edot_01 + F22 * Edot_02);
+      PKone_21 += two_eta * (F20 * Edot_01 + F21 * Edot_11 + F22 * Edot_12);
+      PKone_22 += two_eta * (F20 * Edot_02 + F21 * Edot_12 + F22 * Edot_22);
+    }
 
     // Write P to global memory if requested (for unit tests)
     if (writeOutPiolaP && pPiolaStressP != nullptr) {

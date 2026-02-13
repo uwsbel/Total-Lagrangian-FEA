@@ -230,7 +230,7 @@ TEST_F(FEAT10CrossValidationTest, UndeformedConfig_BothZero) {
   GPU_FEAT10Opt_Data* feat10opt = SetupFEAT10Opt(X_ref_);
   feat10opt->ComputePrecomputation();
   feat10opt->ClearInternalForce();
-  feat10opt->ComputeInternalForce();
+  feat10opt->ComputeInternalForce(nullptr);
 
   Eigen::VectorXf f_int_feat10opt;
   feat10opt->RetrieveInternalForceToCPU(f_int_feat10opt);
@@ -286,7 +286,7 @@ TEST_F(FEAT10CrossValidationTest, DeformationGradient_AffineDeformation) {
   feat10opt->UpdatePositions(positions);
 
   feat10opt->ClearInternalForce();
-  feat10opt->ComputeInternalForce(true);  // writeOutF = true
+  feat10opt->ComputeInternalForce(nullptr, true);  // writeOutF = true
 
   std::vector<std::vector<Eigen::Matrix3f>> F_feat10opt;
   feat10opt->RetrieveDeformationGradientToCPU(F_feat10opt);
@@ -387,7 +387,7 @@ TEST_F(FEAT10CrossValidationTest, ForceEquilibrium_AffineDeformation) {
   feat10opt->UpdatePositions(positions);
 
   feat10opt->ClearInternalForce();
-  feat10opt->ComputeInternalForce();
+  feat10opt->ComputeInternalForce(nullptr);
 
   Eigen::VectorXf f_int_feat10opt;
   feat10opt->RetrieveInternalForceToCPU(f_int_feat10opt);
@@ -486,7 +486,7 @@ TEST_F(FEAT10CrossValidationTest, InternalForce_QuadratureDifference) {
   feat10opt->UpdatePositions(positions);
 
   feat10opt->ClearInternalForce();
-  feat10opt->ComputeInternalForce();
+  feat10opt->ComputeInternalForce(nullptr);
 
   Eigen::VectorXf f_int_feat10opt;
   feat10opt->RetrieveInternalForceToCPU(f_int_feat10opt);

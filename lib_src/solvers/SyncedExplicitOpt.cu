@@ -212,7 +212,7 @@ void SyncedExplicitOptSolver::Solve() {
   element_->ClearInternalForce();
 
   // Step 2: Compute internal force using fused kernel
-  element_->ComputeInternalForce(false);  // No F output needed
+  element_->ComputeInternalForce(d_vel_, false, false);
 
   // Step 3: Update velocity
   syncedExplicitOpt_velocityUpdate<<<node_grid, block_size>>>(
