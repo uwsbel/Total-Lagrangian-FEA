@@ -213,12 +213,7 @@ int main(int argc, char** argv) {
   }
 
   // Convert nodes matrix to proper format for FEAT10Opt
-  Eigen::MatrixXd positions(n_nodes, 3);
-  for (int i = 0; i < n_nodes; i++) {
-    positions(i, 0) = nodes(i, 0);
-    positions(i, 1) = nodes(i, 1);
-    positions(i, 2) = nodes(i, 2);
-  }
+  Eigen::MatrixXd positions = nodes;  // Direct assignment, fast
 
   // Initialize FEAT10Opt element
   GPU_FEAT10Opt_Data gpu_feat10opt;

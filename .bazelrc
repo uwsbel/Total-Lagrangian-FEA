@@ -6,3 +6,9 @@ build --host_cxxopt=-std=c++17
 # Build only for RTX 3050 Ti (sm_86) - faster compilation and better optimization
 build --@rules_cuda//cuda:archs='compute_86:sm_86,compute_86'
 build --flag_alias=cuda_archs=@rules_cuda//cuda:archs
+
+# Add line info for profiling (keeps optimizations but adds debug info)
+build --copt=-g
+build --copt=-lineinfo
+# CUDA-specific flags for source line info
+build --@rules_cuda//cuda:copts=-lineinfo,-g
