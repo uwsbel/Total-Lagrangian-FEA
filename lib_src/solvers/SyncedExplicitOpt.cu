@@ -77,10 +77,7 @@ SyncedExplicitOptSolver::SyncedExplicitOptSolver(GPU_FEAT10Opt_Data* element)
       n_fixed_nodes_(0),
       current_time_(0.0),
       current_step_(0),
-      is_initialized_(false),
-      timing_start_(nullptr),
-      timing_stop_(nullptr),
-      last_step_time_ms_(0.0) {
+      is_initialized_(false) {
   // Set default parameters
   params_.dt = 1e-6;
 
@@ -96,10 +93,6 @@ void SyncedExplicitOptSolver::AllocateMemory() {
   HANDLE_ERROR(cudaMalloc(&d_vel_, n_nodes_ * 3 * sizeof(double)));
   HANDLE_ERROR(cudaMemset(d_vel_, 0, n_nodes_ * 3 * sizeof(double)));
 
-  // Create timing events
-  HANDLE_ERROR(cudaEventCreate(&timing_start_));
-  HANDLE_ERROR(cudaEventCreate(&timing_stop_));
-
   is_initialized_ = true;
 }
 
@@ -112,15 +105,6 @@ void SyncedExplicitOptSolver::FreeMemory() {
     HANDLE_ERROR(cudaFree(d_fixed_nodes_));
     d_fixed_nodes_ = nullptr;
   }
-  if (timing_start_) {
-    HANDLE_ERROR(cudaEventDestroy(timing_start_));
-    timing_start_ = nullptr;
-  }
-  if (timing_stop_) {
-    HANDLE_ERROR(cudaEventDestroy(timing_stop_));
-    timing_stop_ = nullptr;
-  }
-
   is_initialized_ = false;
 }
 
@@ -205,9 +189,6 @@ void SyncedExplicitOptSolver::Solve() {
   const int block_size = 256;
   int node_grid = (n_nodes_ + block_size - 1) / block_size;
 
-  // Start timing
-  HANDLE_ERROR(cudaEventRecord(timing_start_));
-
   // Step 1: Clear internal force
   element_->ClearInternalForce();
 
@@ -236,13 +217,6 @@ void SyncedExplicitOptSolver::Solve() {
       d_vel_,
       params_.dt,
       n_nodes_);
-
-  // Stop timing
-  HANDLE_ERROR(cudaEventRecord(timing_stop_));
-  HANDLE_ERROR(cudaEventSynchronize(timing_stop_));
-  float elapsed_ms;
-  HANDLE_ERROR(cudaEventElapsedTime(&elapsed_ms, timing_start_, timing_stop_));
-  last_step_time_ms_ = elapsed_ms;
 
   // Update time tracking
   current_time_ += params_.dt;

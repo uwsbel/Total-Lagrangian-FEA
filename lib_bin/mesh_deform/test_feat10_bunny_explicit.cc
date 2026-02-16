@@ -315,8 +315,10 @@ int main(int argc, char** argv) {
     csv_file << "step,x_position,y_position,z_position,internal_force_l2\n";
   }
 
-  std::vector<double> step_times_ms;
-  step_times_ms.reserve(opt.steps);
+  // Timing events for batch measurement
+  cudaEvent_t timing_start, timing_stop;
+  HANDLE_ERROR(cudaEventCreate(&timing_start));
+  HANDLE_ERROR(cudaEventCreate(&timing_stop));
 
   // ================================================================
   // Optimized path: FEAT10Opt + SyncedExplicitOpt
@@ -354,6 +356,8 @@ int main(int argc, char** argv) {
     solver.SetFixedNodes(fixed_nodes);
     solver.SetExternalForce(f_ext);
 
+    HANDLE_ERROR(cudaEventRecord(timing_start));
+
     for (int step = 0; step < opt.steps; ++step) {
       // Remove force at halfway point
       if (step == opt.steps / 2) {
@@ -363,9 +367,6 @@ int main(int argc, char** argv) {
       }
 
       solver.Solve();
-
-      const double kernel_time = solver.GetLastStepTimeMs();
-      step_times_ms.push_back(kernel_time);
 
       // Periodic console output and CSV
       if (step % 500 == 0 || step == opt.steps - 1 || opt.write_csv) {
@@ -389,6 +390,9 @@ int main(int argc, char** argv) {
         }
       }
     }
+
+    HANDLE_ERROR(cudaEventRecord(timing_stop));
+    HANDLE_ERROR(cudaEventSynchronize(timing_stop));
 
     gpu_feat10opt.Destroy();
 
@@ -437,6 +441,8 @@ int main(int argc, char** argv) {
 
     int vtk_frame = 0;
 
+    HANDLE_ERROR(cudaEventRecord(timing_start));
+
     for (int step = 0; step < opt.steps; ++step) {
       // Remove force at halfway point
       if (step == opt.steps / 2) {
@@ -446,9 +452,6 @@ int main(int argc, char** argv) {
       }
 
       solver.Solve();
-
-      const double kernel_time = solver.GetLastStepTime();
-      step_times_ms.push_back(kernel_time);
 
       // VTK output
       if (opt.vtk_interval > 0 && step % opt.vtk_interval == 0) {
@@ -487,17 +490,17 @@ int main(int argc, char** argv) {
       }
     }
 
+    HANDLE_ERROR(cudaEventRecord(timing_stop));
+    HANDLE_ERROR(cudaEventSynchronize(timing_stop));
+
     gpu_t10_data.Destroy();
   }
 
   // Timing summary
-  if (!step_times_ms.empty()) {
-    double total_time_ms = 0.0;
-    for (double t : step_times_ms) {
-      total_time_ms += t;
-    }
-    const double avg_time_ms =
-        total_time_ms / static_cast<double>(opt.steps);
+  {
+    float total_time_ms = 0.0f;
+    HANDLE_ERROR(cudaEventElapsedTime(&total_time_ms, timing_start, timing_stop));
+    const double avg_time_ms = static_cast<double>(total_time_ms) / static_cast<double>(opt.steps);
     std::cout << "\nTiming summary:" << std::endl;
     std::cout << "  Total simulation time: " << total_time_ms << " ms"
               << std::endl;
@@ -505,6 +508,8 @@ int main(int argc, char** argv) {
     std::cout << "  Throughput: " << (1000.0 / avg_time_ms) << " steps/sec"
               << std::endl;
   }
+  HANDLE_ERROR(cudaEventDestroy(timing_start));
+  HANDLE_ERROR(cudaEventDestroy(timing_stop));
 
   if (opt.write_csv) {
     csv_file.close();

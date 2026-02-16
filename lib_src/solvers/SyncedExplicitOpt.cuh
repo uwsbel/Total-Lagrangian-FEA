@@ -76,10 +76,6 @@ class SyncedExplicitOptSolver {
   // Number of nodes.
   int GetNumNodes() const { return n_nodes_; }
 
-  // Timing
-  // Time in ms for last Solve() call.
-  double GetLastStepTimeMs() const { return last_step_time_ms_; }
-
   // Data transfer
   // Download velocity to CPU.
   void RetrieveVelocityToCPU(Eigen::VectorXd& vel_x, Eigen::VectorXd& vel_y,
@@ -110,11 +106,6 @@ class SyncedExplicitOptSolver {
 
   // Internal state
   bool is_initialized_;
-
-  // Timing
-  cudaEvent_t timing_start_;
-  cudaEvent_t timing_stop_;
-  double last_step_time_ms_;
 
   // Internal methods
   void AllocateMemory();
