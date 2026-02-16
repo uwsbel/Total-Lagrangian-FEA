@@ -50,18 +50,23 @@ struct Options {
   int res               = 0;  // 0/2/4/8/16/32 beam resolutions
   bool write_csv        = false;
   std::string csv_path;
+  int csv_interval      = 1;      // write CSV row every N steps
+  bool csv_force        = false;  // include internal_force_l2 column
 };
 
 void PrintUsage(const char* argv0) {
   std::cout << "Usage: " << argv0
-            << " [--opt] [--mat=MAT] [--res=R] [--dt=DT] [--steps=N] [--csv[=PATH]] [--help]\n"
-            << "  --opt       Use FEAT10Opt + SyncedExplicitOpt (default: standard)\n"
-            << "  --mat=MAT   svk | mr (default: svk; ignored with --opt, forces MR)\n"
-            << "  --res=R     0 | 2 | 4 | 8 | 16 | 32 (default: 0)\n"
-            << "  --dt=DT     Time step size (default: 1e-5)\n"
-            << "  --steps=N   Number of steps (default: 5000)\n"
-            << "  --csv[=PATH] Write CSV output (default path if not specified)\n"
-            << "  --help      Show this message\n";
+            << " [--opt] [--mat=MAT] [--res=R] [--dt=DT] [--steps=N] [--csv[=PATH]]"
+               " [--csv-interval=N] [--csv-force] [--help]\n"
+            << "  --opt            Use FEAT10Opt + SyncedExplicitOpt (default: standard)\n"
+            << "  --mat=MAT        svk | mr (default: svk; ignored with --opt, forces MR)\n"
+            << "  --res=R          0 | 2 | 4 | 8 | 16 | 32 (default: 0)\n"
+            << "  --dt=DT          Time step size (default: 1e-5)\n"
+            << "  --steps=N        Number of steps (default: 5000)\n"
+            << "  --csv[=PATH]     Write CSV output (default path if not specified)\n"
+            << "  --csv-interval=N Write CSV row every N steps (default: 1)\n"
+            << "  --csv-force      Include internal_force_l2 column in CSV\n"
+            << "  --help           Show this message\n";
 }
 
 bool StartsWith(const std::string& s, const std::string& prefix) {
@@ -163,6 +168,18 @@ bool ParseArgs(int argc, char** argv, Options& opt) {
     if (StartsWith(arg, "--csv=")) {
       opt.write_csv = true;
       opt.csv_path  = arg.substr(std::string("--csv=").size());
+      continue;
+    }
+    if (StartsWith(arg, "--csv-interval=")) {
+      const std::string v = arg.substr(std::string("--csv-interval=").size());
+      if (!ParseInt(v, opt.csv_interval) || opt.csv_interval <= 0) {
+        std::cerr << "Invalid --csv-interval: " << v << "\n";
+        return false;
+      }
+      continue;
+    }
+    if (arg == "--csv-force") {
+      opt.csv_force = true;
       continue;
     }
     std::cerr << "Unknown argument: " << arg << "\n";
@@ -303,13 +320,16 @@ int main(int argc, char** argv) {
     }
     csv_file.open(csv_out_path);
     csv_file << std::fixed << std::setprecision(17);
-    csv_file << "step,x_position,y_position,z_position,internal_force_l2\n";
+    csv_file << "step,x_position,y_position,z_position"
+             << (opt.csv_force ? ",internal_force_l2" : "") << "\n";
   }
 
-  // Timing events for batch measurement
+  // Timing events for per-step Solve() measurement
   cudaEvent_t timing_start, timing_stop;
   HANDLE_ERROR(cudaEventCreate(&timing_start));
   HANDLE_ERROR(cudaEventCreate(&timing_stop));
+  std::vector<double> step_times_ms;
+  step_times_ms.reserve(opt.steps);
 
   // ================================================================
   // Optimized path: FEAT10Opt + SyncedExplicitOpt
@@ -350,43 +370,53 @@ int main(int argc, char** argv) {
     solver.SetFixedNodes(fixed_nodes);
     solver.SetExternalForce(f_ext);
 
-    HANDLE_ERROR(cudaEventRecord(timing_start));
-
     for (int step = 0; step < opt.steps; ++step) {
-      // Remove force at halfway point
       if (step == opt.steps / 2) {
         f_ext.setZero();
         solver.SetExternalForce(f_ext);
-        std::cout << "External force removed at step " << step << std::endl;
       }
 
+      float step_time_ms = 0.0f;
+      HANDLE_ERROR(cudaEventRecord(timing_start));
       solver.Solve();
+      HANDLE_ERROR(cudaEventRecord(timing_stop));
+      HANDLE_ERROR(cudaEventSynchronize(timing_stop));
+      HANDLE_ERROR(cudaEventElapsedTime(&step_time_ms, timing_start, timing_stop));
+      step_times_ms.push_back(static_cast<double>(step_time_ms));
 
-      // Periodic output and CSV
-      if (step % 500 == 0 || step == opt.steps - 1 || opt.write_csv) {
-        Eigen::VectorXd pos_x, pos_y, pos_z;
-        gpu_feat10opt.RetrievePositionToCPU(pos_x, pos_y, pos_z);
+      if (((step + 1) % 500) == 0 || step == opt.steps - 1) {
+        std::cout << "Progress: step " << (step + 1) << "/" << opt.steps
+                  << std::endl;
+      }
 
-        if (step % 500 == 0 || step == opt.steps - 1) {
-          std::cout << "Step " << step << "/" << opt.steps << ": node "
-                    << plot_target_node << " pos = (" << std::setprecision(6)
-                    << pos_x(plot_target_node) << ", " << pos_y(plot_target_node) << ", "
-                    << pos_z(plot_target_node) << ")" << std::endl;
-        }
-
-        if (opt.write_csv) {
+      const bool is_csv_step = opt.write_csv &&
+          (step % opt.csv_interval == 0 || step == opt.steps - 1);
+      if (is_csv_step) {
+        double tracked_pos[3];
+        HANDLE_ERROR(cudaMemcpy(tracked_pos,
+            gpu_feat10opt.GetPositionDevicePtr() + 3 * plot_target_node,
+            3 * sizeof(double), cudaMemcpyDeviceToHost));
+        csv_file << step << "," << tracked_pos[0] << ","
+                 << tracked_pos[1] << "," << tracked_pos[2];
+        if (opt.csv_force) {
           Eigen::VectorXf f_int;
           gpu_feat10opt.RetrieveInternalForceToCPU(f_int);
-          const double l2 = static_cast<double>(f_int.norm());
-          csv_file << step << "," << pos_x(plot_target_node) << ","
-                   << pos_y(plot_target_node) << "," << pos_z(plot_target_node) << ","
-                   << l2 << "\n";
+          csv_file << "," << static_cast<double>(f_int.norm());
         }
+        csv_file << "\n";
       }
     }
 
-    HANDLE_ERROR(cudaEventRecord(timing_stop));
-    HANDLE_ERROR(cudaEventSynchronize(timing_stop));
+    // Final position
+    {
+      double tracked_pos[3];
+      HANDLE_ERROR(cudaMemcpy(tracked_pos,
+          gpu_feat10opt.GetPositionDevicePtr() + 3 * plot_target_node,
+          3 * sizeof(double), cudaMemcpyDeviceToHost));
+      std::cout << "Final position: node " << plot_target_node << " = ("
+                << std::setprecision(6) << tracked_pos[0] << ", "
+                << tracked_pos[1] << ", " << tracked_pos[2] << ")" << std::endl;
+    }
 
     gpu_feat10opt.Destroy();
 
@@ -436,20 +466,28 @@ int main(int argc, char** argv) {
     solver.SetParameters(&params);
     solver.SetFixedNodes(fixed_nodes);
 
-    HANDLE_ERROR(cudaEventRecord(timing_start));
-
     for (int step = 0; step < opt.steps; ++step) {
-      // Remove force at halfway point
       if (step == opt.steps / 2) {
         h_f_ext.setZero();
         gpu_t10_data.SetExternalForce(h_f_ext);
-        std::cout << "External force removed at step " << step << std::endl;
       }
 
+      float step_time_ms = 0.0f;
+      HANDLE_ERROR(cudaEventRecord(timing_start));
       solver.Solve();
+      HANDLE_ERROR(cudaEventRecord(timing_stop));
+      HANDLE_ERROR(cudaEventSynchronize(timing_stop));
+      HANDLE_ERROR(cudaEventElapsedTime(&step_time_ms, timing_start, timing_stop));
+      step_times_ms.push_back(static_cast<double>(step_time_ms));
 
-      // Periodic output and CSV
-      if (step % 500 == 0 || step == opt.steps - 1 || opt.write_csv) {
+      if (((step + 1) % 500) == 0 || step == opt.steps - 1) {
+        std::cout << "Progress: step " << (step + 1) << "/" << opt.steps
+                  << std::endl;
+      }
+
+      const bool is_csv_step = opt.write_csv &&
+          (step % opt.csv_interval == 0 || step == opt.steps - 1);
+      if (is_csv_step) {
         double x_target = 0.0, y_target = 0.0, z_target = 0.0;
         HANDLE_ERROR(cudaMemcpy(&x_target,
                                 gpu_t10_data.GetX12DevicePtr() + plot_target_node,
@@ -460,40 +498,50 @@ int main(int argc, char** argv) {
         HANDLE_ERROR(cudaMemcpy(&z_target,
                                 gpu_t10_data.GetZ12DevicePtr() + plot_target_node,
                                 sizeof(double), cudaMemcpyDeviceToHost));
-
-        if (step % 500 == 0 || step == opt.steps - 1) {
-          std::cout << "Step " << step << "/" << opt.steps << ": node "
-                    << plot_target_node << " pos = (" << std::setprecision(6)
-                    << x_target << ", " << y_target << ", " << z_target << ")"
-                    << std::endl;
-        }
-
-        if (opt.write_csv) {
+        csv_file << step << "," << x_target << "," << y_target << ","
+                 << z_target;
+        if (opt.csv_force) {
           Eigen::VectorXd f_int;
           gpu_t10_data.RetrieveInternalForceToCPU(f_int);
-          const double l2 = f_int.norm();
-          csv_file << step << "," << x_target << "," << y_target << ","
-                   << z_target << "," << l2 << "\n";
+          csv_file << "," << f_int.norm();
         }
+        csv_file << "\n";
       }
     }
 
-    HANDLE_ERROR(cudaEventRecord(timing_stop));
-    HANDLE_ERROR(cudaEventSynchronize(timing_stop));
+    // Final position
+    {
+      double x_target = 0.0, y_target = 0.0, z_target = 0.0;
+      HANDLE_ERROR(cudaMemcpy(&x_target,
+                              gpu_t10_data.GetX12DevicePtr() + plot_target_node,
+                              sizeof(double), cudaMemcpyDeviceToHost));
+      HANDLE_ERROR(cudaMemcpy(&y_target,
+                              gpu_t10_data.GetY12DevicePtr() + plot_target_node,
+                              sizeof(double), cudaMemcpyDeviceToHost));
+      HANDLE_ERROR(cudaMemcpy(&z_target,
+                              gpu_t10_data.GetZ12DevicePtr() + plot_target_node,
+                              sizeof(double), cudaMemcpyDeviceToHost));
+      std::cout << "Final position: node " << plot_target_node << " = ("
+                << std::setprecision(6) << x_target << ", " << y_target << ", "
+                << z_target << ")" << std::endl;
+    }
 
     gpu_t10_data.Destroy();
   }
 
   // Timing summary
-  {
-    float total_time_ms = 0.0f;
-    HANDLE_ERROR(cudaEventElapsedTime(&total_time_ms, timing_start, timing_stop));
-    const double avg_time_ms = static_cast<double>(total_time_ms) / static_cast<double>(opt.steps);
+  if (!step_times_ms.empty()) {
+    double total_time_ms = 0.0;
+    for (double t : step_times_ms) {
+      total_time_ms += t;
+    }
+    const double avg_time_ms = total_time_ms / static_cast<double>(step_times_ms.size());
     std::cout << "\nTiming summary:" << std::endl;
-    std::cout << "  Total simulation time: " << total_time_ms << " ms"
+    std::cout << "  Total solve time: " << total_time_ms << " ms"
               << std::endl;
-    std::cout << "  Average step time: " << avg_time_ms << " ms" << std::endl;
-    std::cout << "  Throughput: " << (1000.0 / avg_time_ms) << " steps/sec"
+    std::cout << "  Average solve step time: " << avg_time_ms << " ms"
+              << std::endl;
+    std::cout << "  Throughput: " << (1000.0 / avg_time_ms) << " solve steps/sec"
               << std::endl;
   }
   HANDLE_ERROR(cudaEventDestroy(timing_start));
