@@ -1,6 +1,7 @@
-package(default_visibility = ["//visibility:public"])
-
 load("@rules_foreign_cc//foreign_cc:defs.bzl", "cmake")
+load("@rules_cc//cc:defs.bzl", "cc_library")
+
+package(default_visibility = ["//visibility:public"])
 
 filegroup(
     name = "srcs",
@@ -52,7 +53,10 @@ cmake(
         "CXXSTD_MAX": "17",
         # Point CMake at the system CUDA toolkit (adjust if needed).
         "CUDAToolkit_ROOT": "/usr/local/cuda",
-        # Match `.bazelrc` default archs (compute_75 + compute_86).
+        # Ensure CMake finds NVCC inside Bazel's sandbox (its PATH may not include
+        # `/usr/local/cuda/bin`).
+        "CMAKE_CUDA_COMPILER": "/usr/local/cuda/bin/nvcc",
+        # Build for common NVIDIA GPU archs (compute_75 + compute_86).
         "CMAKE_CUDA_ARCHITECTURES": "75;86",
     },
     generate_args = [

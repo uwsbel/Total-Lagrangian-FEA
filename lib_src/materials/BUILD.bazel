@@ -1,3 +1,5 @@
+load("@rules_cc//cc:defs.bzl", "cc_library")
+
 #==============================================================
 #==============================================================
 # Project: RoboDyna
@@ -16,6 +18,7 @@ cc_library(
         "MaterialModel.cuh",
         "MooneyRivlin.cuh",
         "SVK.cuh",
+        "SolidMaterialProperties.h",
     ],
     copts = ["--std=c++17"],
 )

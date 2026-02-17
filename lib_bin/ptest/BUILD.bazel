@@ -1,0 +1,105 @@
+load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library")
+
+
+package(default_visibility = ["//visibility:public"])
+
+cc_library(
+    name = "rigid_equivalent_utils",
+    srcs = ["rigid_equivalent_utils.cc"],
+    hdrs = ["rigid_equivalent_utils.h"],
+    copts = ["--std=c++17"],
+    deps = [
+        "//lib_utils:mesh_manager",
+        "@eigen//:eigen",
+    ],
+)
+
+cc_binary(
+    name = "sphere_stacking",
+    srcs = ["sphere_stacking.cc"],
+    copts = ["--std=c++17"],
+    linkopts = [
+        "-L/usr/local/cuda/lib64",
+        "-lnvrtc",
+        "-lcuda",
+        "-lcublas",
+        "-lcusparse",
+        "-lcudart",
+        "-lcudss",
+    ],
+    data = [
+        "//:data_meshes",
+    ],
+    deps = [
+        "//lib_src/collision:deme_mesh_collision_system",
+        "//lib_src/elements:FEAT10Data",
+        "//lib_src/solvers:solvers_syncednewton",
+        ":rigid_equivalent_utils",
+        "//lib_utils:cli_utils",
+        "//lib_utils:cuda_utils",
+        "//lib_utils:mesh_manager",
+        "//lib_utils:surface_trimesh_extract",
+        "//lib_utils:visualization_utils",
+        "@eigen//:eigen",
+    ],
+)
+
+cc_binary(
+    name = "brick_sliding",
+    srcs = ["brick_sliding.cc"],
+    copts = ["--std=c++17"],
+    linkopts = [
+        "-L/usr/local/cuda/lib64",
+        "-lnvrtc",
+        "-lcuda",
+        "-lcublas",
+        "-lcusparse",
+        "-lcudart",
+        "-lcudss",
+    ],
+    data = [
+        "//:data_meshes",
+    ],
+    deps = [
+        "//lib_src/collision:deme_mesh_collision_system",
+        "//lib_src/elements:FEAT10Data",
+        "//lib_src/solvers:solvers_syncednewton",
+        ":rigid_equivalent_utils",
+        "//lib_utils:cli_utils",
+        "//lib_utils:cuda_utils",
+        "//lib_utils:mesh_manager",
+        "//lib_utils:surface_trimesh_extract",
+        "//lib_utils:visualization_utils",
+        "@eigen//:eigen",
+    ],
+)
+
+cc_binary(
+    name = "oblique_impact",
+    srcs = ["oblique_impact.cc"],
+    copts = ["--std=c++17"],
+    linkopts = [
+        "-L/usr/local/cuda/lib64",
+        "-lnvrtc",
+        "-lcuda",
+        "-lcusparse",
+        "-lcudart",
+        "-lcudss",
+        "-lcublas",
+    ],
+    data = [
+        "//:data_meshes",
+    ],
+    deps = [
+        "//lib_src/collision:deme_mesh_collision_system",
+        "//lib_src/elements:FEAT10Data",
+        "//lib_src/solvers:solvers_syncednewton",
+        ":rigid_equivalent_utils",
+        "//lib_utils:cli_utils",
+        "//lib_utils:cuda_utils",
+        "//lib_utils:mesh_manager",
+        "//lib_utils:surface_trimesh_extract",
+        "//lib_utils:visualization_utils",
+        "@eigen//:eigen",
+    ],
+)

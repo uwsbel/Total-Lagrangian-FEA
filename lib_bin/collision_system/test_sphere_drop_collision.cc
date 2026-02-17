@@ -26,10 +26,14 @@
 #include "../../lib_utils/quadrature_utils.h"
 #include "../../lib_utils/visualization_utils.h"
 
-// Material properties
-const double E    = 4e6;     // Young's modulus (softer for visible deformation)
-const double nu   = 0.3;     // Poisson's ratio
-const double rho0 = 3500.0;  // Density (kg/m^3)
+// Material properties (using SolidMaterialProperties)
+const SolidMaterialProperties mat_sphere = SolidMaterialProperties::SVK(
+    4e6,     // E: Young's modulus (softer for visible deformation)
+    0.3,     // nu: Poisson's ratio
+    3500.0,  // rho0: Density (kg/m³)
+    1e4,     // eta_damp
+    1e4      // lambda_damp
+);
 
 // Simulation parameters
 const double gravity = -9.81;  // Gravity acceleration (m/s^2)
@@ -40,7 +44,8 @@ const double sphere_gap =
 
 // Contact damping (Drake-style normal damping coefficient)
 const double contact_damping_default  = 0.2;
-const double contact_friction_default = 0.8;
+const double contact_mu_s_default = 0.8;
+const double contact_mu_k_default = 0.8;
 
 using ANCFCPUUtils::VisualizationUtils;
 
@@ -50,7 +55,8 @@ int main(int argc, char** argv) {
   std::cout << "========================================" << std::endl;
 
   double contact_damping     = contact_damping_default;
-  double contact_friction    = contact_friction_default;
+  double contact_mu_s        = contact_mu_s_default;
+  double contact_mu_k        = contact_mu_k_default;
   bool enable_self_collision = false;
   int max_steps              = num_steps;
   int export_interval        = 5;
@@ -58,7 +64,8 @@ int main(int argc, char** argv) {
     contact_damping = std::atof(argv[1]);
   }
   if (argc > 2) {
-    contact_friction = std::atof(argv[2]);
+    contact_mu_s = std::atof(argv[2]);
+    contact_mu_k = contact_mu_s;
   }
   if (argc > 3) {
     enable_self_collision = (std::atoi(argv[3]) != 0);
@@ -73,7 +80,8 @@ int main(int argc, char** argv) {
     export_interval = std::atoi(argv[5]);
   }
   std::cout << "Contact damping: " << contact_damping << std::endl;
-  std::cout << "Contact friction: " << contact_friction << std::endl;
+  std::cout << "Contact static friction (mu_s): " << contact_mu_s << std::endl;
+  std::cout << "Contact kinetic friction (mu_k): " << contact_mu_k << std::endl;
   std::cout << "Enable self collision: " << (enable_self_collision ? 1 : 0)
             << std::endl;
   std::cout << "Max steps: " << max_steps << std::endl;
@@ -205,10 +213,7 @@ int main(int argc, char** argv) {
   gpu_t10_data.Setup(tet5pt_x, tet5pt_y, tet5pt_z, tet5pt_weights, h_x12, h_y12,
                      h_z12, elements);
 
-  gpu_t10_data.SetDensity(rho0);
-  gpu_t10_data.SetDamping(1e4, 1e4);
-
-  gpu_t10_data.SetSVK(E, nu);
+  gpu_t10_data.ApplyMaterial(mat_sphere);
 
   gpu_t10_data.CalcDnDuPre();
   gpu_t10_data.CalcMassMatrix();
@@ -353,7 +358,7 @@ int main(int argc, char** argv) {
 
     // Add contact forces from collision patches (GPU version)
     Eigen::VectorXd contact_forces = narrowphase.ComputeExternalForcesGPU(
-        solver.GetVelocityGuessDevicePtr(), contact_damping, contact_friction);
+        solver.GetVelocityGuessDevicePtr(), contact_damping, contact_mu_k);
     if (contact_forces.size() == h_f_ext.size()) {
       h_f_ext += contact_forces;
     }
@@ -361,7 +366,7 @@ int main(int argc, char** argv) {
     // Add gravity (only to top sphere nodes - bottom is fixed anyway)
     // F = m * g, distributed per node
     // For simplicity, assume uniform mass distribution
-    double total_mass    = rho0 * (4.0 / 3.0 * M_PI * 0.15 * 0.15 * 0.15);
+    double total_mass    = mat_sphere.rho0 * (4.0 / 3.0 * M_PI * 0.15 * 0.15 * 0.15);
     double mass_per_node = total_mass / instance_top.num_nodes;
     double gravity_force_per_node = mass_per_node * gravity;
 

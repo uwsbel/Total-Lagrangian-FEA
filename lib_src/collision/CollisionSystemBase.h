@@ -29,8 +29,9 @@ struct CollisionSystemInput {
 };
 
 struct CollisionSystemParams {
-  double damping  = 0.0;
-  double friction = 0.0;
+  double damping   = 0.0;
+  double friction  = 0.0;
+  double stiffness = 1.0e7;  // Contact stiffness (Young's modulus E for Hertzian model)
 };
 
 class CollisionSystem {

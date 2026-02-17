@@ -1,0 +1,162 @@
+diff --git a/foreign_cc/boost_build.bzl b/foreign_cc/boost_build.bzl
+--- a/foreign_cc/boost_build.bzl
++++ b/foreign_cc/boost_build.bzl
+@@ -59,4 +59,3 @@ boost_build = rule(
+     # TODO: Remove once https://github.com/bazelbuild/bazel/issues/11584 is closed and the min supported
+     # version is updated to a release of Bazel containing the new default for this setting.
+-    incompatible_use_toolchain_transition = True,
+ )
+
+diff --git a/foreign_cc/cmake.bzl b/foreign_cc/cmake.bzl
+--- a/foreign_cc/cmake.bzl
++++ b/foreign_cc/cmake.bzl
+@@ -419,4 +419,3 @@ cmake = rule(
+     # TODO: Remove once https://github.com/bazelbuild/bazel/issues/11584 is closed and the min supported
+     # version is updated to a release of Bazel containing the new default for this setting.
+-    incompatible_use_toolchain_transition = True,
+ )
+
+diff --git a/foreign_cc/configure.bzl b/foreign_cc/configure.bzl
+--- a/foreign_cc/configure.bzl
++++ b/foreign_cc/configure.bzl
+@@ -234,4 +234,3 @@ configure_make = rule(
+     # TODO: Remove once https://github.com/bazelbuild/bazel/issues/11584 is closed and the min supported
+     # version is updated to a release of Bazel containing the new default for this setting.
+-    incompatible_use_toolchain_transition = True,
+ )
+
+diff --git a/foreign_cc/make.bzl b/foreign_cc/make.bzl
+--- a/foreign_cc/make.bzl
++++ b/foreign_cc/make.bzl
+@@ -121,4 +121,3 @@ make = rule(
+     # TODO: Remove once https://github.com/bazelbuild/bazel/issues/11584 is closed and the min supported
+     # version is updated to a release of Bazel containing the new default for this setting.
+-    incompatible_use_toolchain_transition = True,
+ )
+
+diff --git a/foreign_cc/ninja.bzl b/foreign_cc/ninja.bzl
+--- a/foreign_cc/ninja.bzl
++++ b/foreign_cc/ninja.bzl
+@@ -120,4 +120,3 @@ ninja = rule(
+     # TODO: Remove once https://github.com/bazelbuild/bazel/issues/11584 is closed and the min supported
+     # version is updated to a release of Bazel containing the new default for this setting.
+-    incompatible_use_toolchain_transition = True,
+ )
+
+diff --git a/foreign_cc/private/cc_toolchain_util.bzl b/foreign_cc/private/cc_toolchain_util.bzl
+--- a/foreign_cc/private/cc_toolchain_util.bzl
++++ b/foreign_cc/private/cc_toolchain_util.bzl
+@@ -4,1 +4,2 @@
++load("@@rules_cc+//cc:defs.bzl", "CcInfo")
+ load("@bazel_skylib//lib:collections.bzl", "collections")
+
+diff --git a/foreign_cc/private/framework.bzl b/foreign_cc/private/framework.bzl
+--- a/foreign_cc/private/framework.bzl
++++ b/foreign_cc/private/framework.bzl
+@@ -5,1 +5,2 @@
++load("@@rules_cc+//cc:defs.bzl", "CcInfo")
+ load("@bazel_skylib//lib:collections.bzl", "collections")
+
+diff --git a/foreign_cc/private/transitions.bzl b/foreign_cc/private/transitions.bzl
+--- a/foreign_cc/private/transitions.bzl
++++ b/foreign_cc/private/transitions.bzl
+@@ -3,1 +3,2 @@
++load("@@rules_cc+//cc:defs.bzl", "CcInfo")
+ load("//foreign_cc:providers.bzl", "ForeignCcDepsInfo")
+ 
+@@ -37,6 +38,5 @@ extra_toolchains_transitioned_foreign_cc_target = rule(
+         "_allowlist_function_transition": attr.label(
+             default = "@bazel_tools//tools/allowlists/function_transition_allowlist",
+         ),
+     },
+-    incompatible_use_toolchain_transition = True,
+ )
+
+diff --git a/toolchains/native_tools/native_tools_toolchain.bzl b/toolchains/native_tools/native_tools_toolchain.bzl
+--- a/toolchains/native_tools/native_tools_toolchain.bzl
++++ b/toolchains/native_tools/native_tools_toolchain.bzl
+@@ -71,3 +71,2 @@ native_tools_toolchain = rule(
+     },
+-    incompatible_use_toolchain_transition = True,
+ )
+
+diff --git a/toolchains/toolchains.bzl b/toolchains/toolchains.bzl
+--- a/toolchains/toolchains.bzl
++++ b/toolchains/toolchains.bzl
+@@ -44,10 +44,9 @@ current_cmake_toolchain = rule(
+ current_cmake_toolchain = rule(
+     implementation = _current_toolchain_impl,
+     attrs = {
+         "_toolchain": attr.string(default = str(Label("//toolchains:cmake_toolchain"))),
+     },
+-    incompatible_use_toolchain_transition = True,
+     toolchains = [
+         str(Label("//toolchains:cmake_toolchain")),
+     ],
+ )
+@@ -55,10 +54,9 @@ current_make_toolchain = rule(
+ current_make_toolchain = rule(
+     implementation = _current_toolchain_impl,
+     attrs = {
+         "_toolchain": attr.string(default = str(Label("//toolchains:make_toolchain"))),
+     },
+-    incompatible_use_toolchain_transition = True,
+     toolchains = [
+         str(Label("//toolchains:make_toolchain")),
+     ],
+ )
+@@ -66,10 +64,9 @@ current_ninja_toolchain = rule(
+ current_ninja_toolchain = rule(
+     implementation = _current_toolchain_impl,
+     attrs = {
+         "_toolchain": attr.string(default = str(Label("//toolchains:ninja_toolchain"))),
+     },
+-    incompatible_use_toolchain_transition = True,
+     toolchains = [
+         str(Label("//toolchains:ninja_toolchain")),
+     ],
+ )
+@@ -77,10 +74,9 @@ current_autoconf_toolchain = rule(
+ current_autoconf_toolchain = rule(
+     implementation = _current_toolchain_impl,
+     attrs = {
+         "_toolchain": attr.string(default = str(Label("//toolchains:autoconf_toolchain"))),
+     },
+-    incompatible_use_toolchain_transition = True,
+     toolchains = [
+         str(Label("//toolchains:autoconf_toolchain")),
+     ],
+ )
+@@ -88,10 +84,9 @@ current_automake_toolchain = rule(
+ current_automake_toolchain = rule(
+     implementation = _current_toolchain_impl,
+     attrs = {
+         "_toolchain": attr.string(default = str(Label("//toolchains:automake_toolchain"))),
+     },
+-    incompatible_use_toolchain_transition = True,
+     toolchains = [
+         str(Label("//toolchains:automake_toolchain")),
+     ],
+ )
+@@ -99,10 +94,9 @@ current_m4_toolchain = rule(
+ current_m4_toolchain = rule(
+     implementation = _current_toolchain_impl,
+     attrs = {
+         "_toolchain": attr.string(default = str(Label("//toolchains:m4_toolchain"))),
+     },
+-    incompatible_use_toolchain_transition = True,
+     toolchains = [
+         str(Label("//toolchains:m4_toolchain")),
+     ],
+ )
+@@ -110,10 +104,9 @@ current_pkgconfig_toolchain = rule(
+ current_pkgconfig_toolchain = rule(
+     implementation = _current_toolchain_impl,
+     attrs = {
+         "_toolchain": attr.string(default = str(Label("//toolchains:pkgconfig_toolchain"))),
+     },
+-    incompatible_use_toolchain_transition = True,
+     toolchains = [
+         str(Label("//toolchains:pkgconfig_toolchain")),
+     ],
+ )

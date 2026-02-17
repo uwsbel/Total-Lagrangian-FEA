@@ -96,3 +96,39 @@ cuda_library(
     ],
 )
 
+cuda_library(
+    name = "multi_element_problem",
+    srcs = ["FEMultiElementProblem.cu"],
+    hdrs = [
+        "FEMultiElementProblem.h",
+        "FEStateBuffer.h",
+    ],
+    copts = ["--std=c++17", "-O3", "--use_fast_math", "--extra-device-vectorization"],
+    deps = [
+        "//lib_src/elements:ANCF3243Data",
+        "//lib_src/elements:ANCF3443Data",
+        "//lib_src/elements:FEAT10Data",
+        "//lib_utils:cuda_utils",
+        "@eigen//:eigen",
+    ],
+)
+
+cuda_library(
+    name = "multi_element_newton",
+    srcs = ["MultiElementNewton.cu"],
+    hdrs = [
+        "MultiElementNewton.cuh",
+        "SolverBase.h",
+    ],
+    copts = ["--std=c++17", "-O3", "--use_fast_math", "--extra-device-vectorization"],
+    linkopts = ["-lcusolver", "-lcublas", "-lcusparse", "-lcudss"],
+    deps = [
+        ":multi_element_problem",
+        ":solvers_syncednewton",
+        "//lib_src/elements:ANCF3243Data",
+        "//lib_src/elements:ANCF3443Data",
+        "//lib_src/elements:FEAT10Data",
+        "//lib_utils:cuda_utils",
+        "@eigen//:eigen",
+    ],
+)

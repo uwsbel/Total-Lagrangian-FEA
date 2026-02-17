@@ -223,7 +223,7 @@ __global__ void mass_matrix_qp_kernel(GPU_FEAT10_Data *d_data) {
   int j_global = d_data->element_connectivity()(elem, j_local);
 
   // Get material density
-  double rho = d_data->rho0();
+  double rho = d_data->rho0(elem);
 
   // Accumulator for this (i, j) pair across all QPs
   double mass_contribution = 0.0;

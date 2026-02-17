@@ -23,9 +23,14 @@
 #include "../../lib_utils/cpu_utils.h"
 #include "../../lib_utils/quadrature_utils.h"
 
-const double E    = 3.0e8;  // Pa  (~0.3 GPa, between 0.7 GPa and 0.13 GPa)
-const double nu   = 0.40;   // polymers tend to be higher than metals
-const double rho0 = 920.0;  // kg/m^3, typical polyethylene density
+// Material properties (using SolidMaterialProperties)
+const SolidMaterialProperties mat_bunny = SolidMaterialProperties::SVK(
+    3.0e8,  // E: Young's modulus (Pa) (~0.3 GPa)
+    0.40,   // nu: Poisson's ratio (polymers tend higher)
+    920.0,  // rho0: Density (kg/m³, typical polyethylene)
+    0.0,    // eta_damp
+    0.0     // lambda_damp
+);
 
 enum MATERIAL_MODEL { MAT_SVK, MAT_MOONEY_RIVLIN };
 
@@ -111,19 +116,19 @@ int main() {
   gpu_t10_data.Setup(tet5pt_x_host, tet5pt_y_host, tet5pt_z_host,
                      tet5pt_weights_host, h_x12, h_y12, h_z12, elements);
 
-  gpu_t10_data.SetDensity(rho0);
-  gpu_t10_data.SetDamping(0.0, 0.0);
-
   if (material == MAT_SVK) {
-    gpu_t10_data.SetSVK(E, nu);
+    gpu_t10_data.ApplyMaterial(mat_bunny);
     std::cout << "Material: SVK" << std::endl;
   } else {
-    const double mu    = E / (2.0 * (1.0 + nu));
-    const double K     = E / (3.0 * (1.0 - 2.0 * nu));
+    // Create Mooney-Rivlin material from SVK parameters
+    const double mu    = mat_bunny.E / (2.0 * (1.0 + mat_bunny.nu));
+    const double K     = mat_bunny.E / (3.0 * (1.0 - 2.0 * mat_bunny.nu));
     const double kappa = 1.5 * K;
     const double mu10  = 0.30 * mu;
     const double mu01  = 0.20 * mu;
-    gpu_t10_data.SetMooneyRivlin(mu10, mu01, kappa);
+    SolidMaterialProperties mat_mr = SolidMaterialProperties::MooneyRivlin(
+        mu10, mu01, kappa, mat_bunny.rho0);
+    gpu_t10_data.ApplyMaterial(mat_mr);
     std::cout << "Material: Mooney-Rivlin" << std::endl;
   }
 

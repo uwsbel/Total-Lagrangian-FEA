@@ -37,9 +37,14 @@
 
 namespace {
 
-constexpr double kE    = 7e8;
-constexpr double kNu   = 0.33;
-constexpr double kRho0 = 2700;
+// Material properties (using SolidMaterialProperties)
+const SolidMaterialProperties mat_beam = SolidMaterialProperties::SVK(
+    7e8,    // E: Young's modulus (Pa)
+    0.33,   // nu: Poisson's ratio
+    2700,   // rho0: Density (kg/m³)
+    0.0,    // eta_damp
+    0.0     // lambda_damp
+);
 
 enum class SolverKind { kNewton, kVbd, kAdamW };
 
@@ -316,9 +321,7 @@ int main(int argc, char** argv) {
   data.Setup(Quadrature::tet5pt_x, Quadrature::tet5pt_y, Quadrature::tet5pt_z,
              Quadrature::tet5pt_weights, h_x12, h_y12, h_z12, elements);
 
-  data.SetDensity(kRho0);
-  data.SetDamping(0.0, 0.0);
-  data.SetSVK(kE, kNu);
+  data.ApplyMaterial(mat_beam);
 
   // Common precomputations
   data.CalcDnDuPre();
