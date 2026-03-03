@@ -14,8 +14,12 @@
 #include <cuda_runtime.h>
 
 #include <Eigen/Dense>
+#include <chrono>
+#include <cstdlib>
+#include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <string>
 #include <vector>
 
 #include "../../lib_src/elements/FEAT10Data.cuh"
@@ -29,15 +33,172 @@ const double rho0 = 920.0;  // kg/m^3, typical polyethylene density
 
 enum MATERIAL_MODEL { MAT_SVK, MAT_MOONEY_RIVLIN };
 
-int main() {
+namespace {
+
+struct Options {
+  double dt = 1e-4;                    // Time step (Newton typically needs larger dt)
+  int steps = 8000;                    // Number of steps
+  bool write_csv = false;              // CSV output flag
+  std::string csv_path;                // CSV output path
+  int vtk_interval = 10;               // VTK output interval (default: 10, 0 = disabled)
+  std::string vtk_dir = "output";      // VTK output directory
+  MATERIAL_MODEL material = MAT_MOONEY_RIVLIN;  // Default: Mooney-Rivlin
+};
+
+bool StartsWith(const std::string& s, const std::string& prefix) {
+  return s.rfind(prefix, 0) == 0;
+}
+
+bool ParseInt(const std::string& s, int& out) {
+  try {
+    size_t idx = 0;
+    int v = std::stoi(s, &idx);
+    if (idx != s.size())
+      return false;
+    out = v;
+    return true;
+  } catch (...) {
+    return false;
+  }
+}
+
+bool ParseDouble(const std::string& s, double& out) {
+  try {
+    size_t idx = 0;
+    double v = std::stod(s, &idx);
+    if (idx != s.size())
+      return false;
+    out = v;
+    return true;
+  } catch (...) {
+    return false;
+  }
+}
+
+void PrintUsage(const char* argv0) {
+  std::cout << "Usage: " << argv0
+            << " [--dt=DT] [--steps=N] [--mat=MAT] [--csv[=PATH]]"
+            << " [--vtk=N] [--vtk-dir=PATH] [--help]\n"
+            << "  --dt=DT       Time step size (default: 1e-4)\n"
+            << "  --steps=N     Number of time steps (default: 8000)\n"
+            << "  --mat=MAT     svk | mr (default: mr)\n"
+            << "  --csv[=PATH]  Write CSV output (optional path)\n"
+            << "  --vtk=N       VTK output interval, 0 to disable (default: 10)\n"
+            << "  --vtk-dir=P   VTK output directory (default: output)\n"
+            << "  --help        Display this help message\n";
+}
+
+bool ParseMaterial(const std::string& s, MATERIAL_MODEL& out) {
+  if (s == "svk") {
+    out = MAT_SVK;
+    return true;
+  }
+  if (s == "mr") {
+    out = MAT_MOONEY_RIVLIN;
+    return true;
+  }
+  return false;
+}
+
+bool ParseArgs(int argc, char** argv, Options& opt) {
+  for (int i = 1; i < argc; ++i) {
+    const std::string arg(argv[i]);
+    if (arg == "--help" || arg == "-h") {
+      PrintUsage(argv[0]);
+      return false;
+    }
+    if (StartsWith(arg, "--dt=")) {
+      const std::string v = arg.substr(std::string("--dt=").size());
+      if (!ParseDouble(v, opt.dt) || !(opt.dt > 0.0)) {
+        std::cerr << "Invalid --dt: " << v << "\n";
+        return false;
+      }
+      continue;
+    }
+    if (StartsWith(arg, "--steps=")) {
+      const std::string v = arg.substr(std::string("--steps=").size());
+      if (!ParseInt(v, opt.steps) || opt.steps <= 0) {
+        std::cerr << "Invalid --steps: " << v << "\n";
+        return false;
+      }
+      continue;
+    }
+    if (StartsWith(arg, "--mat=")) {
+      const std::string v = arg.substr(std::string("--mat=").size());
+      if (!ParseMaterial(v, opt.material)) {
+        std::cerr << "Unknown material: " << v << "\n";
+        return false;
+      }
+      continue;
+    }
+    if (arg == "--csv") {
+      opt.write_csv = true;
+      continue;
+    }
+    if (StartsWith(arg, "--csv=")) {
+      opt.write_csv = true;
+      opt.csv_path = arg.substr(std::string("--csv=").size());
+      continue;
+    }
+    if (StartsWith(arg, "--vtk=")) {
+      const std::string v = arg.substr(std::string("--vtk=").size());
+      if (!ParseInt(v, opt.vtk_interval) || opt.vtk_interval < 0) {
+        std::cerr << "Invalid --vtk: " << v << "\n";
+        return false;
+      }
+      continue;
+    }
+    if (StartsWith(arg, "--vtk-dir=")) {
+      opt.vtk_dir = arg.substr(std::string("--vtk-dir=").size());
+      continue;
+    }
+    std::cerr << "Unknown argument: " << arg << "\n";
+    return false;
+  }
+  return true;
+}
+
+std::string JoinPath(const std::string& a, const std::string& b) {
+  if (a.empty())
+    return b;
+  if (a.back() == '/')
+    return a + b;
+  return a + "/" + b;
+}
+
+std::string DefaultOutputDir() {
+  if (const char* d = std::getenv("TEST_UNDECLARED_OUTPUTS_DIR")) {
+    return d;
+  }
+  return ".";
+}
+
+}  // namespace
+
+int main(int argc, char** argv) {
+  Options opt;
+  if (!ParseArgs(argc, argv, opt)) {
+    return 1;
+  }
+
+  // Workspace directory for mesh paths (Bazel runfiles support)
+  std::string workspace_dir = ".";
+  if (const char* d = std::getenv("BUILD_WORKSPACE_DIRECTORY")) {
+    workspace_dir = d;
+  }
+  auto mesh_path = [&](const std::string& rel) {
+    return JoinPath(workspace_dir, rel);
+  };
+
   // Read mesh data
   Eigen::MatrixXd nodes;
   Eigen::MatrixXi elements;
 
-  int n_nodes = ANCFCPUUtils::FEAT10_read_nodes(
-      "data/meshes/T10/bunny_ascii_26.1.node", nodes);
-  int n_elems = ANCFCPUUtils::FEAT10_read_elements(
-      "data/meshes/T10/bunny_ascii_26.1.ele", elements);
+  const std::string node_file = mesh_path("data/meshes/T10/bunny_ascii_26.1.node");
+  const std::string elem_file = mesh_path("data/meshes/T10/bunny_ascii_26.1.ele");
+
+  int n_nodes = ANCFCPUUtils::FEAT10_read_nodes(node_file.c_str(), nodes);
+  int n_elems = ANCFCPUUtils::FEAT10_read_elements(elem_file.c_str(), elements);
 
   std::cout << "mesh read nodes: " << n_nodes << std::endl;
   std::cout << "mesh read elements: " << n_elems << std::endl;
@@ -48,7 +209,8 @@ int main() {
   std::cout << "elements matrix:" << std::endl;
   std::cout << elements << std::endl;
 
-  MATERIAL_MODEL material = MAT_SVK;
+  // Material model (configured via --mat, default: mr)
+  MATERIAL_MODEL material = opt.material;
 
   GPU_FEAT10_Data gpu_t10_data(n_elems, n_nodes);
 
@@ -86,6 +248,17 @@ int main() {
     std::cout << h_fixed_nodes(i) << " ";
   }
   std::cout << std::endl;
+
+  // Track node: highest initial z (bunny ear tip)
+  int track_node = 0;
+  double max_z = h_z12(0);
+  for (int i = 1; i < n_nodes; ++i) {
+    if (h_z12(i) > max_z) {
+      max_z = h_z12(i);
+      track_node = i;
+    }
+  }
+  std::cout << "Tracking node " << track_node << " (initial z = " << max_z << ")" << std::endl;
 
   // Set fixed nodes
   gpu_t10_data.SetNodalFixed(h_fixed_nodes);
@@ -198,7 +371,24 @@ int main() {
             << "):" << std::endl;
   std::cout << f_int.transpose() << std::endl;
   std::cout << "done retrieving internal force vector" << std::endl;
-  SyncedNewtonParams params = {1e-4, 1e-6, 1e-4, 1e14, 5, 10, 1e-3};
+
+  // Open CSV file if requested
+  std::ofstream csv_file;
+  std::string csv_out_path;
+  if (opt.write_csv) {
+    csv_out_path = opt.csv_path;
+    if (csv_out_path.empty()) {
+      csv_out_path = JoinPath(DefaultOutputDir(), "bunny_newton.csv");
+    }
+    csv_file.open(csv_out_path);
+    csv_file << std::fixed << std::setprecision(17);
+    csv_file << "step,x_position,y_position,z_position,solve_time_ms,iterations\n";
+  }
+
+  std::vector<double> step_times_ms;
+  step_times_ms.reserve(opt.steps);
+
+  SyncedNewtonParams params = {opt.dt, 1e-6, 1e-4, 1e14, 5, 10, 1e-3};
   SyncedNewtonSolver solver(&gpu_t10_data, gpu_t10_data.get_n_constraint());
   solver.Setup();
   solver.SetParameters(&params);
@@ -207,24 +397,74 @@ int main() {
   solver.SetFixedSparsityPattern(
       true);  // Enable analysis reuse for fixed structure
 
-  int output_interval = 10;  // 10 vtk per seconds
-  int output_frame    = 0;
+  int vtk_frame = 0;
+  // Release force at 1s: force_release_step = 1.0 / dt
+  const int force_release_step = static_cast<int>(1.0 / opt.dt);
 
-  for (int i = 0; i < 8000; i++) {
-    // Reset external force to zero after 5000 steps
-    if (i == 1000) {
+  std::cout << "Starting simulation: " << opt.steps << " steps, dt=" << opt.dt << std::endl;
+  if (opt.vtk_interval > 0) {
+    std::cout << "VTK output interval: " << opt.vtk_interval << " (dir: " << opt.vtk_dir << ")" << std::endl;
+  }
+  std::cout << "Force will be removed at step " << force_release_step << " (t=" << (force_release_step * opt.dt) << " s)" << std::endl;
+
+  for (int step = 0; step < opt.steps; step++) {
+    // Reset external force to zero after force_release_step
+    if (step == force_release_step) {
       Eigen::VectorXd h_zero(gpu_t10_data.get_n_coef() * 3);
       h_zero.setZero();
       gpu_t10_data.SetExternalForce(h_zero);
-      std::cout << "External force reset to zero at step " << i << std::endl;
+      std::cout << "External force reset to zero at step " << step << std::endl;
     }
 
+    auto solve_start = std::chrono::high_resolution_clock::now();
     solver.Solve();
-    if (i % output_interval == 0) {
-      gpu_t10_data.WriteOutputVTK("output/bunny_newton_step_" +
-                                  std::to_string(output_frame) + ".vtk");
-      output_frame++;
+    auto solve_end = std::chrono::high_resolution_clock::now();
+    double solve_time_ms = std::chrono::duration<double, std::milli>(solve_end - solve_start).count();
+    step_times_ms.push_back(solve_time_ms);
+
+    // VTK output
+    if (opt.vtk_interval > 0 && step % opt.vtk_interval == 0) {
+      gpu_t10_data.WriteOutputVTK(JoinPath(opt.vtk_dir, "bunny_newton_step_" +
+                                  std::to_string(vtk_frame) + ".vtk"));
+      vtk_frame++;
     }
+
+    // CSV output and periodic console updates
+    if (opt.write_csv || step % 500 == 0 || step == opt.steps - 1) {
+      Eigen::VectorXd x12, y12, z12;
+      gpu_t10_data.RetrievePositionToCPU(x12, y12, z12);
+
+      if (step % 500 == 0 || step == opt.steps - 1) {
+        std::cout << "Step " << step << "/" << opt.steps << ": node " << track_node
+                  << " pos = (" << std::setprecision(6) << x12(track_node) << ", "
+                  << y12(track_node) << ", " << z12(track_node) << ")" << std::endl;
+      }
+
+      if (opt.write_csv) {
+        // Get iteration count from solver (assuming it's available, otherwise use 0)
+        int iterations = 0;  // Newton solver doesn't expose this easily, so use 0 for now
+        csv_file << step << "," << x12(track_node) << "," << y12(track_node) << ","
+                 << z12(track_node) << "," << solve_time_ms << "," << iterations << "\n";
+      }
+    }
+  }
+
+  // Timing summary
+  if (!step_times_ms.empty()) {
+    double total_time_ms = 0.0;
+    for (double t : step_times_ms) {
+      total_time_ms += t;
+    }
+    const double avg_time_ms = total_time_ms / static_cast<double>(opt.steps);
+    std::cout << "\nTiming summary:" << std::endl;
+    std::cout << "  Total simulation time: " << total_time_ms << " ms" << std::endl;
+    std::cout << "  Average step time: " << avg_time_ms << " ms" << std::endl;
+    std::cout << "  Throughput: " << (1000.0 / avg_time_ms) << " steps/sec" << std::endl;
+  }
+
+  if (opt.write_csv) {
+    csv_file.close();
+    std::cout << "Wrote CSV: " << csv_out_path << std::endl;
   }
 
   // // Set highest precision for cout

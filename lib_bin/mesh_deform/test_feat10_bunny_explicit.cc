@@ -47,14 +47,16 @@ constexpr double kMR_kappa = 1.5 * kBulk;
 constexpr double kFixedZThreshold = -4.0;   // fix nodes with z < this
 constexpr double kForceZThreshold = 4.0;    // apply force to nodes with z > this
 constexpr double kForceZ          = -35000.0; // N, downward on ears
+// Release load at step so that t_release = 1 s when dt=1e-5 (match Newton: 1000*1e-3=1 s). Total steps set for 8 s at dt=1e-5.
+constexpr int kForceReleaseStep = 100000;  // 100000 * 1e-5 = 1 s loaded
 
 enum class MaterialKind { kSVK, kMR };
 
 struct Options {
   bool use_opt          = false;
   MaterialKind material = MaterialKind::kSVK;
-  double dt             = 1e-6;
-  int steps             = 5000;
+  double dt             = 1e-5;
+  int steps             = 800000;  // 800000 * 1e-5 = 8 s total (match Newton 8000*1e-3)
   bool write_csv        = false;
   std::string csv_path;
   int csv_interval      = 1;      // write CSV row every N steps
@@ -375,8 +377,10 @@ int main(int argc, char** argv) {
     solver.SetFixedNodes(fixed_nodes);
     solver.SetExternalForce(f_ext);
 
+    // Release force at 1s: force_release_step = 1.0 / dt
+    const int force_release_step = static_cast<int>(1.0 / opt.dt);
     for (int step = 0; step < opt.steps; ++step) {
-      if (step == opt.steps / 2) {
+      if (step == force_release_step) {
         f_ext.setZero();
         solver.SetExternalForce(f_ext);
       }
@@ -390,7 +394,14 @@ int main(int argc, char** argv) {
       step_times_ms.push_back(static_cast<double>(step_time_ms));
 
       if (((step + 1) % 500) == 0 || step == opt.steps - 1) {
+        double tracked_pos[3];
+        HANDLE_ERROR(cudaMemcpy(tracked_pos,
+            gpu_feat10opt.GetPositionDevicePtr() + 3 * track_node,
+            3 * sizeof(double), cudaMemcpyDeviceToHost));
         std::cout << "Progress: step " << (step + 1) << "/" << opt.steps
+                  << " node " << track_node << " pos = ("
+                  << std::setprecision(6) << tracked_pos[0] << ", "
+                  << tracked_pos[1] << ", " << tracked_pos[2] << ")"
                   << std::endl;
       }
 
@@ -469,9 +480,11 @@ int main(int argc, char** argv) {
     solver.SetFixedNodes(fixed_nodes);
 
     int vtk_frame = 0;
+    // Release force at 1s: force_release_step = 1.0 / dt
+    const int force_release_step = static_cast<int>(1.0 / opt.dt);
 
     for (int step = 0; step < opt.steps; ++step) {
-      if (step == opt.steps / 2) {
+      if (step == force_release_step) {
         h_f_ext.setZero();
         gpu_t10_data.SetExternalForce(h_f_ext);
       }
@@ -485,8 +498,20 @@ int main(int argc, char** argv) {
       step_times_ms.push_back(static_cast<double>(step_time_ms));
 
       if (((step + 1) % 500) == 0 || step == opt.steps - 1) {
+        double x_track = 0.0, y_track = 0.0, z_track = 0.0;
+        HANDLE_ERROR(cudaMemcpy(&x_track,
+                                gpu_t10_data.GetX12DevicePtr() + track_node,
+                                sizeof(double), cudaMemcpyDeviceToHost));
+        HANDLE_ERROR(cudaMemcpy(&y_track,
+                                gpu_t10_data.GetY12DevicePtr() + track_node,
+                                sizeof(double), cudaMemcpyDeviceToHost));
+        HANDLE_ERROR(cudaMemcpy(&z_track,
+                                gpu_t10_data.GetZ12DevicePtr() + track_node,
+                                sizeof(double), cudaMemcpyDeviceToHost));
         std::cout << "Progress: step " << (step + 1) << "/" << opt.steps
-                  << std::endl;
+                  << " node " << track_node << " pos = ("
+                  << std::setprecision(6) << x_track << ", " << y_track << ", "
+                  << z_track << ")" << std::endl;
       }
 
       // VTK output
