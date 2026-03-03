@@ -5,7 +5,8 @@
  * (Newton / Nesterov / AdamW / VBD). Use `--solver=...` to select the solver.
  *
  * Example:
- *   ./bazel-bin/lib_bin/beam_sag/test_ancf3443 --solver=vbd --res=0 --dt=1e-3 --omega=1.8 --csv
+ *   ./bazel-bin/lib_bin/beam_sag/test_ancf3443 --solver=vbd --res=0 --dt=1e-3
+ * --omega=1.8 --csv
  *
  * Notes:
  * - Steps are hardcoded to 200.
@@ -52,32 +53,31 @@ constexpr const char* kVtuPrefix = "ancf3443";
 enum class SolverKind { kNewton, kNesterov, kAdamW, kVbd };
 
 struct Options {
-  SolverKind solver  = SolverKind::kVbd;
+  SolverKind solver = SolverKind::kVbd;
   // Structured ANCF3443 shell (XY plane): nx × ny elements over a fixed
   // x_size × y_size domain (hardcoded). nx=ny is derived from `res`.
-  int res            = kDefaultRes;
-  int steps          = 200;
-  double dt          = 5e-4;
-  double tip_force_z = std::numeric_limits<double>::quiet_NaN();
+  int res                = kDefaultRes;
+  int steps              = 200;
+  double dt              = 5e-4;
+  double tip_force_z     = std::numeric_limits<double>::quiet_NaN();
   int force_release_step = 100;  // hardcoded (not a CLI option)
-  double lrratio     = 0.5;
-  double omega       = std::numeric_limits<double>::quiet_NaN();  // VBD only
-  bool write_csv     = false;
+  double lrratio         = 0.5;
+  double omega   = std::numeric_limits<double>::quiet_NaN();  // VBD only
+  bool write_csv = false;
   std::string csv_path;
   bool write_vtu = false;
 };
 
 void PrintUsage(const char* argv0) {
   std::cout
-      << "Usage: " << argv0
-      << " [--solver=SOLVER] [--res=R]\n"
+      << "Usage: " << argv0 << " [--solver=SOLVER] [--res=R]\n"
       << "                 [--dt=DT]\n"
       << "                 [--tip_force_z=FZ] [--lrratio=R]\n"
       << "                 [--omega=W] [--csv[=PATH]] [--help]\n\n"
       << "  --solver=SOLVER   newton | nesterov | adamw | vbd (default: vbd)\n"
       << "  --res=R           0 | 2 | 4 | 8 | 16 | 32 (default: 0)\n"
-       << "                   (0->10x10, 2->20x20, 4->50x50, 8->100x100,\n"
-       << "                    16->200x200, 32->400x400)\n"
+      << "                   (0->10x10, 2->20x20, 4->50x50, 8->100x100,\n"
+      << "                    16->200x200, 32->400x400)\n"
       << "                   (shell size is fixed: x_size=4, y_size=2)\n"
       << "                   (steps=200, force released after step 100)\n"
       << "  --dt=DT           time step passed to solver params (default: "
@@ -295,29 +295,13 @@ int main(int argc, char** argv) {
   const double W = kShellYSize / static_cast<double>(y_res);
   const double H = kDefaultH;
 
-  std::cout << "ANCF3443(shell): res=" << opt.res
-            << " nx=" << x_res
-            << " ny=" << y_res
-            << " elements=" << n_elem
-            << " nodes=" << n_nodes
-            << " coef=" << data.get_n_coef()
-            << " solver=" << SolverName(opt.solver)
-            << " steps=" << opt.steps
-            << " dt=" << opt.dt
-            << " L=" << L << " W=" << W << " H=" << H
-            << " x_size=" << kShellXSize
-            << " y_size=" << kShellYSize
-            << " tip_force_z=" << opt.tip_force_z
-            << " force_release_step=" << opt.force_release_step
-            << std::endl;
-
   Eigen::VectorXd h_x12(data.get_n_coef());
   Eigen::VectorXd h_y12(data.get_n_coef());
   Eigen::VectorXd h_z12(data.get_n_coef());
   Eigen::MatrixXi element_connectivity(n_elem, 4);
   ANCFCPUUtils::ANCF3443_generate_shell_coordinates(
-      kShellXSize, kShellYSize, x_res, y_res,
-      h_x12, h_y12, h_z12, element_connectivity);
+      kShellXSize, kShellYSize, x_res, y_res, h_x12, h_y12, h_z12,
+      element_connectivity);
 
   const int n_nodes_from_coords = static_cast<int>(h_x12.size()) / 4;
   if (n_nodes_from_coords != n_nodes) {
@@ -340,6 +324,18 @@ int main(int argc, char** argv) {
   for (int i = 0; i < static_cast<int>(fixed_dofs.size()); ++i) {
     h_fixed_nodes(i) = fixed_dofs[static_cast<size_t>(i)];
   }
+  const int constrained_dofs = h_fixed_nodes.size() * 3;
+
+  std::cout << "ANCF3443(shell): res=" << opt.res << " nx=" << x_res
+            << " ny=" << y_res << " elements=" << n_elem << " nodes=" << n_nodes
+            << " coef=" << data.get_n_coef()
+            << " constrained_dofs=" << constrained_dofs
+            << " solver=" << SolverName(opt.solver) << " steps=" << opt.steps
+            << " dt=" << opt.dt << " L=" << L << " W=" << W << " H=" << H
+            << " x_size=" << kShellXSize << " y_size=" << kShellYSize
+            << " tip_force_z=" << opt.tip_force_z
+            << " force_release_step=" << opt.force_release_step << std::endl;
+
   data.SetNodalFixed(h_fixed_nodes);
 
   Eigen::VectorXd h_f_ext_on(data.get_n_coef() * 3);
@@ -364,7 +360,8 @@ int main(int argc, char** argv) {
   // Distribute total vertical force across all tip-edge nodes. `lrratio`
   // provides a linear bias from -y (ratio) to +y (1-ratio). When lrratio=0.5,
   // this is uniform.
-  const double denom_y = (tip_y_max > tip_y_min) ? (tip_y_max - tip_y_min) : 1.0;
+  const double denom_y =
+      (tip_y_max > tip_y_min) ? (tip_y_max - tip_y_min) : 1.0;
   std::vector<double> weights(tip_nodes.size(), 0.0);
   double wsum = 0.0;
   for (size_t i = 0; i < tip_nodes.size(); ++i) {
@@ -372,7 +369,7 @@ int main(int argc, char** argv) {
     const int base = node * 4;
     const double t = (h_y12(base + 0) - tip_y_min) / denom_y;  // in [0,1]
     const double w = (1.0 - t) * opt.lrratio + t * (1.0 - opt.lrratio);
-    weights[i] = w;
+    weights[i]     = w;
     wsum += w;
   }
   if (wsum <= 0.0) {
@@ -380,7 +377,7 @@ int main(int argc, char** argv) {
     return 1;
   }
   for (size_t i = 0; i < tip_nodes.size(); ++i) {
-    const int node = tip_nodes[i];
+    const int node  = tip_nodes[i];
     const double fz = opt.tip_force_z * (weights[i] / wsum);
     const int coeff = node * 4;  // position coefficient
     h_f_ext_on(coeff * 3 + 2) += fz;
@@ -451,6 +448,9 @@ int main(int argc, char** argv) {
   switch (opt.solver) {
     case SolverKind::kNewton: {
       SyncedNewtonParams params = {1e-4, 1e-4, 1e-4, 1e14, 5, 10, opt.dt};
+      if (opt.res == 8 || opt.res == 16 || opt.res == 32) {
+        params = {1e-3, 1e-3, 1e-3, 1e14, 5, 10, opt.dt};
+      }
       SyncedNewtonSolver solver(&data, data.get_n_constraint());
       solver.Setup();
       solver.SetParameters(&params);
@@ -499,23 +499,23 @@ int main(int argc, char** argv) {
     case SolverKind::kAdamW: {
       SyncedAdamWNocoopParams params;
       if (opt.res == 0) {
-        params = {3e-1,  0.8,  0.9999, 1e-8, 0.0,   0.997, 1e-4,
-                  1e-4,  1e14, 5,      800,   opt.dt, 100,   1e-4};
+        params = {3e-1, 0.8,  0.9999, 1e-8, 0.0,    0.997, 1e-4,
+                  1e-4, 1e14, 5,      800,  opt.dt, 100,   1e-4};
       } else if (opt.res == 2) {
-        params = {2.5e-1, 0.8,  0.999,  1e-8, 0.0,   0.998, 1e-4,
-                  1e-4,  1e14, 5,      800,   opt.dt, 100,   1e-4};
+        params = {2.5e-1, 0.8,  0.999, 1e-8, 0.0,    0.998, 1e-4,
+                  1e-4,   1e14, 5,     800,  opt.dt, 100,   1e-4};
       } else if (opt.res == 4) {
-        params = {8.0e-2, 0.8,  0.999,  1e-8, 0.0,   0.9986, 1e-4,
-                  1e-4,  1e14, 5,      1000,   opt.dt, 100,   1e-4};
+        params = {8.0e-2, 0.8,  0.999, 1e-8, 0.0,    0.9986, 1e-4,
+                  1e-4,   1e14, 5,     1000, opt.dt, 100,    1e-4};
       } else if (opt.res == 8) {
-        params = {3.0e-2, 0.9,  0.999,  1e-1, 0.0,   0.9986, 1e-3,
-                  1e-3,  1e14, 5,      1200,   opt.dt, 100,   1e-3};
+        params = {3.0e-2, 0.9,  0.999, 1e-1, 0.0,    0.9986, 1e-3,
+                  1e-3,   1e14, 5,     1200, opt.dt, 100,    1e-3};
       } else if (opt.res == 16) {
-        params = {3.0e-2, 0.9,  0.999,  1e-1, 0.0,   0.9986, 1e-3,
-                  1e-3,  1e14, 5,      1500,   opt.dt, 100,   1e-3};
+        params = {3.0e-2, 0.9,  0.999, 1e-1, 0.0,    0.9986, 1e-3,
+                  1e-3,   1e14, 5,     1500, opt.dt, 100,    1e-3};
       } else if (opt.res == 32) {
-        params = {3.0e-2, 0.9,  0.999,  1e-1, 0.0,   0.9986, 1e-3,
-                  1e-3,  1e14, 5,      1800,   opt.dt, 100,   1e-3};
+        params = {3.0e-2, 0.9,  0.999, 1e-1, 0.0,    0.9986, 1e-3,
+                  1e-3,   1e14, 5,     1800, opt.dt, 100,    1e-3};
       } else {
         std::cerr << "Unsupported resolution for AdamW: " << opt.res
                   << std::endl;

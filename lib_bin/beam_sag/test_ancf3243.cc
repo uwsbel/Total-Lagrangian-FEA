@@ -9,7 +9,7 @@
  * --tip_force_z=5000 --force_release_step=100 --vtu --csv
  */
 
- //./bazel-bin/lib_bin/beam_sag/test_ancf3243 --solver=adamw --res=16
+//./bazel-bin/lib_bin/beam_sag/test_ancf3243 --solver=adamw --res=16
 
 #include <cuda_runtime.h>
 
@@ -39,11 +39,11 @@ constexpr double kE    = 7e8;
 constexpr double kNu   = 0.33;
 constexpr double kRho0 = 2700;
 
-constexpr double kDefaultL         = 0.2;
-constexpr double kDefaultW         = 0.1;
-constexpr double kDefaultH         = 0.1;
-constexpr double kDefaultTipForceZ = 5000.0;
-constexpr int kDefaultRes = 0;
+constexpr double kDefaultL             = 0.2;
+constexpr double kDefaultW             = 0.1;
+constexpr double kDefaultH             = 0.1;
+constexpr double kDefaultTipForceZ     = 5000.0;
+constexpr int kDefaultRes              = 0;
 constexpr int kDefaultForceReleaseStep = 100;
 
 constexpr int kVtuEvery          = 20;
@@ -52,15 +52,15 @@ constexpr const char* kVtuPrefix = "ancf3243";
 enum class SolverKind { kNewton, kNesterov, kAdamW, kVbd };
 
 struct Options {
-  SolverKind solver  = SolverKind::kVbd;
-  int res            = kDefaultRes;  // res -> num_elements mapping below
-  int num_elements_override = -1;    // -1 means use res mapping
-  int steps          = 200;
-  double dt          = 1e-3;
-  double tip_force_z = std::numeric_limits<double>::quiet_NaN();
+  SolverKind solver         = SolverKind::kVbd;
+  int res                   = kDefaultRes;  // res -> num_elements mapping below
+  int num_elements_override = -1;           // -1 means use res mapping
+  int steps                 = 200;
+  double dt                 = 1e-3;
+  double tip_force_z        = std::numeric_limits<double>::quiet_NaN();
   int force_release_step = kDefaultForceReleaseStep;  // -1 means never release
-  double omega       = std::numeric_limits<double>::quiet_NaN();  // VBD only
-  bool write_csv     = false;
+  double omega   = std::numeric_limits<double>::quiet_NaN();  // VBD only
+  bool write_csv = false;
   std::string csv_path;
   bool write_vtu = false;
 };
@@ -74,7 +74,8 @@ void PrintUsage(const char* argv0) {
       << "                 [--omega=W] [--csv[=PATH]] [--vtu] [--help]\n\n"
       << "  --solver=SOLVER   newton | nesterov | adamw | vbd (default: vbd)\n"
       << "  --res=R           0 | 2 | 4 | 8 | 16 | 32 (default: 0)\n"
-      << "                   (0->1000, 2->10000, 4->50000, 8->100000, 16->200000, 32->500000)\n"
+      << "                   (0->1000, 2->10000, 4->50000, 8->100000, "
+         "16->200000, 32->500000)\n"
       << "  --steps=N         number of Solve() calls (default: 200)\n"
       << "  --dt=DT           time step passed to solver params (default: "
          "1e-3)\n"
@@ -198,10 +199,11 @@ bool ParseArgs(int argc, char** argv, Options& opt) {
     }
     // Back-compat / escape hatch (not advertised): allow specifying element
     // count directly. If you pass this, it overrides --res.
-    if (StartsWith(arg, "--num_elements=") || StartsWith(arg, "--n_elements=") ||
-        StartsWith(arg, "--n_beam=")) {
+    if (StartsWith(arg, "--num_elements=") ||
+        StartsWith(arg, "--n_elements=") || StartsWith(arg, "--n_beam=")) {
       const std::string v = arg.substr(arg.find('=') + 1);
-      if (!ParseInt(v, opt.num_elements_override) || opt.num_elements_override <= 0) {
+      if (!ParseInt(v, opt.num_elements_override) ||
+          opt.num_elements_override <= 0) {
         std::cerr << "Invalid --num_elements: " << v << "\n";
         return false;
       }
@@ -287,7 +289,7 @@ int SelectTipNodeByMaxX(const Eigen::VectorXd& x12, int n_nodes) {
   for (int node = 1; node < n_nodes; ++node) {
     const double x = x12(4 * node);
     if (x > max_x) {
-      max_x   = x;
+      max_x    = x;
       tip_node = node;
     }
   }
@@ -370,15 +372,18 @@ int main(int argc, char** argv) {
   const int n_nodes    = grid_gen.get_num_nodes();
   const int n_elements = grid_gen.get_num_elements();
 
+  Eigen::VectorXi h_fixed_nodes(4);
+  h_fixed_nodes << 0, 1, 2, 3;
+  const int constrained_dofs = h_fixed_nodes.size() * 3;
+
   std::cout << "ANCF3243: nodes=" << n_nodes << " elements=" << n_elements
-            << " coef=" << (4 * n_nodes) << " solver=" << SolverName(opt.solver)
-            << " res=" << opt.res
-            << " num_elements=" << num_elements
-            << " steps=" << opt.steps
+            << " coef=" << (4 * n_nodes)
+            << " constrained_dofs=" << constrained_dofs
+            << " solver=" << SolverName(opt.solver) << " res=" << opt.res
+            << " num_elements=" << num_elements << " steps=" << opt.steps
             << " dt=" << opt.dt << " L=" << L << " W=" << W << " H=" << H
             << " tip_force_z=" << opt.tip_force_z
-            << " force_release_step=" << opt.force_release_step
-            << std::endl;
+            << " force_release_step=" << opt.force_release_step << std::endl;
 
   GPU_ANCF3243_Data data(n_nodes, n_elements);
   data.Initialize();
@@ -400,15 +405,13 @@ int main(int argc, char** argv) {
     }
   }
 
-  Eigen::VectorXi h_fixed_nodes(4);
-  h_fixed_nodes << 0, 1, 2, 3;
   data.SetNodalFixed(h_fixed_nodes);
 
   Eigen::VectorXd h_f_ext_on(data.get_n_coef() * 3);
   h_f_ext_on.setZero();
-  const int tip_node        = SelectTipNodeByMaxX(h_x12, n_nodes);
-  const int tip_coef        = tip_node * 4;  // coef-slot 0 (position) at tip node
-  const double tip_x        = h_x12(tip_coef);
+  const int tip_node = SelectTipNodeByMaxX(h_x12, n_nodes);
+  const int tip_coef = tip_node * 4;  // coef-slot 0 (position) at tip node
+  const double tip_x = h_x12(tip_coef);
   std::cout << "Tip: node=" << tip_node << " coef=" << tip_coef
             << " x=" << tip_x << " (expected ~" << beam_length << ")"
             << std::endl;
@@ -480,6 +483,9 @@ int main(int argc, char** argv) {
   switch (opt.solver) {
     case SolverKind::kNewton: {
       SyncedNewtonParams params = {1e-4, 1e-4, 1e-4, 1e14, 5, 10, opt.dt};
+      if (opt.res == 32) {
+        params = {1e-3, 1e-3, 1e-3, 1e14, 5, 10, opt.dt};
+      }
       SyncedNewtonSolver solver(&data, data.get_n_constraint());
       solver.Setup();
       solver.SetParameters(&params);
@@ -529,22 +535,22 @@ int main(int argc, char** argv) {
       SyncedAdamWNocoopParams params;
       if (opt.res == 0) {
         params = {3e-1, 0.8,  0.9999, 1e-8, 0.0,    0.995, 1e-4,
-                  1e-4, 1e14, 5,     800,  opt.dt, 40,    1e-4};
+                  1e-4, 1e14, 5,      800,  opt.dt, 40,    1e-4};
       } else if (opt.res == 2) {
         params = {3e-1, 0.8,  0.9999, 1e-8, 0.0,    0.995, 1e-4,
-                  1e-4, 1e14, 5,     800,  opt.dt, 40,    1e-4};
+                  1e-4, 1e14, 5,      800,  opt.dt, 40,    1e-4};
       } else if (opt.res == 4) {
         params = {3e-1, 0.8,  0.9999, 1e-8, 0.0,    0.995, 1e-4,
-                  1e-4, 1e14, 5,     800,  opt.dt, 50,    1e-4};
+                  1e-4, 1e14, 5,      800,  opt.dt, 50,    1e-4};
       } else if (opt.res == 8) {
         params = {3e-1, 0.8,  0.9999, 1e-8, 0.0,    0.995, 1e-4,
-                  1e-4, 1e14, 5,     800,  opt.dt, 50,    1e-4};
+                  1e-4, 1e14, 5,      800,  opt.dt, 50,    1e-4};
       } else if (opt.res == 16) {
         params = {3e-1, 0.8,  0.9999, 1e-8, 0.0,    0.995, 1e-4,
-                  1e-4, 1e14, 5,     800,  opt.dt, 50,    1e-4};
+                  1e-4, 1e14, 5,      800,  opt.dt, 50,    1e-4};
       } else if (opt.res == 32) {
         params = {3e-1, 0.8,  0.9999, 1e-8, 0.0,    0.995, 1e-3,
-                  1e-3, 1e14, 5,     800,  opt.dt, 50,    1e-3};
+                  1e-3, 1e14, 5,      800,  opt.dt, 50,    1e-3};
       } else {
         std::cerr << "Unsupported resolution for AdamW: " << opt.res
                   << std::endl;
