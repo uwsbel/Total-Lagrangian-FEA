@@ -543,8 +543,8 @@ int main(int argc, char** argv) {
         params = {3e-1, 0.8,  0.9999, 1e-8, 0.0,    0.995, 1e-4,
                   1e-4, 1e14, 5,     800,  opt.dt, 50,    1e-4};
       } else if (opt.res == 32) {
-        params = {3e-1, 0.8,  0.9999, 1e-8, 0.0,    0.995, 1e-4,
-                  1e-4, 1e14, 5,     800,  opt.dt, 50,    1e-4};
+        params = {3e-1, 0.8,  0.9999, 1e-8, 0.0,    0.995, 1e-3,
+                  1e-3, 1e14, 5,     800,  opt.dt, 50,    1e-3};
       } else {
         std::cerr << "Unsupported resolution for AdamW: " << opt.res
                   << std::endl;

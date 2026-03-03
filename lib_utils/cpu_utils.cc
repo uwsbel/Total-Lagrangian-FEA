@@ -594,6 +594,75 @@ void ANCF3443_generate_beam_coordinates(int n_beam, Eigen::VectorXd &x12,
   }
 }
 
+void ANCF3443_generate_shell_coordinates(double x_size, double y_size,
+                                         int x_resolution, int y_resolution,
+                                         Eigen::VectorXd &x12,
+                                         Eigen::VectorXd &y12,
+                                         Eigen::VectorXd &z12,
+                                         Eigen::MatrixXi &element_connectivity) {
+  if (!(x_size > 0.0) || !(y_size > 0.0)) {
+    throw std::runtime_error(
+        "ANCF3443_generate_shell_coordinates: x_size and y_size must be > 0.");
+  }
+  if (x_resolution <= 0 || y_resolution <= 0) {
+    throw std::runtime_error(
+        "ANCF3443_generate_shell_coordinates: x_resolution and y_resolution "
+        "must be > 0.");
+  }
+
+  const int nx = x_resolution;
+  const int ny = y_resolution;
+  const int n_nodes = (nx + 1) * (ny + 1);
+  const int n_dof   = n_nodes * 4;
+
+  x12.resize(n_dof);
+  y12.resize(n_dof);
+  z12.resize(n_dof);
+  x12.setZero();
+  y12.setZero();
+  z12.setZero();
+
+  const double dx = x_size / static_cast<double>(nx);
+  const double dy = y_size / static_cast<double>(ny);
+
+  auto node_index = [nx](int ix, int iy) { return iy * (nx + 1) + ix; };
+
+  for (int iy = 0; iy <= ny; ++iy) {
+    for (int ix = 0; ix <= nx; ++ix) {
+      const int node = node_index(ix, iy);
+      const int base = node * 4;
+      const double x = static_cast<double>(ix) * dx;
+      const double y = static_cast<double>(iy) * dy;
+
+      // Position coefficient.
+      x12(base + 0) = x;
+      y12(base + 0) = y;
+      z12(base + 0) = 0.0;
+
+      // Directors (initialized to identity, matching the beam generator).
+      x12(base + 1) = 1.0;
+      y12(base + 2) = 1.0;
+      z12(base + 3) = 1.0;
+    }
+  }
+
+  const int n_elem = nx * ny;
+  element_connectivity.resize(n_elem, 4);
+  for (int ey = 0; ey < ny; ++ey) {
+    for (int ex = 0; ex < nx; ++ex) {
+      const int e = ey * nx + ex;
+      const int n0 = node_index(ex, ey);
+      const int n1 = node_index(ex + 1, ey);
+      const int n2 = node_index(ex + 1, ey + 1);
+      const int n3 = node_index(ex, ey + 1);
+      element_connectivity(e, 0) = n0;
+      element_connectivity(e, 1) = n1;
+      element_connectivity(e, 2) = n2;
+      element_connectivity(e, 3) = n3;
+    }
+  }
+}
+
 void ANCF3243_calculate_offsets(int n_beam, Eigen::VectorXi &offset_start,
                                 Eigen::VectorXi &offset_end) {
   offset_start.resize(n_beam);

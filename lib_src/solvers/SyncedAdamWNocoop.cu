@@ -384,7 +384,8 @@ void SyncedAdamWNocoopSolver::OneStepAdamWNocoop() {
         adamw_compute_gradient_kernel<<<blocks_dof, threadsPerBlock>>>(
             typed_data, d_adamw_solver_);
 
-        if (inner_iter % conv_check_interval == 0) {
+        if (inner_iter % conv_check_interval == 0 ||
+            inner_iter == max_inner - 1) {
           double norm_g      = compute_l2_norm_cublas(d_g_, n_dof);
           double norm_v_curr = compute_l2_norm_cublas(d_v_guess_, n_dof);
 
