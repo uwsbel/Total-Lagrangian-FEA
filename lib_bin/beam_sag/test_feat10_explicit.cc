@@ -34,11 +34,12 @@ constexpr double kE    = 7.0e8;   // Young's modulus (Pa)
 constexpr double kNu   = 0.33;    // Poisson's ratio
 constexpr double kRho0 = 2700.0;  // Density (kg/m³)
 
-// Mooney-Rivlin (rubber-like), used when --material=mr
-constexpr double kMR_mu10  = 80000.0;  // Pa
-constexpr double kMR_mu01  = 20000.0;  // Pa
-constexpr double kMR_kappa = 1e6;      // Pa (bulk modulus)
-constexpr double kMR_rho   = 1100.0;   // kg/m³
+// Mooney-Rivlin (matching bunny demo / resolution study), used when --material=mr
+// Derived from E=3.0e8 Pa, nu=0.40, rho=920.0 kg/m³
+constexpr double kMR_mu10  = 32142857.142857143;  // Pa (0.30 * mu, where mu = E/(2*(1+nu)))
+constexpr double kMR_mu01  = 21428571.428571429;  // Pa (0.20 * mu)
+constexpr double kMR_kappa = 7.5e8;               // Pa (1.5 * bulk modulus)
+constexpr double kMR_rho   = 920.0;               // kg/m³
 
 enum class MaterialKind { kSVK, kMR };
 
