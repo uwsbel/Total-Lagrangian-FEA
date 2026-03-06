@@ -3,10 +3,12 @@
 #include <cusparse.h>
 
 #include <Eigen/Dense>
+#include <algorithm>
 #include <iostream>
 #include <vector>
 
 #include "../../lib_utils/cuda_utils.h"
+#include "../../lib_utils/mesh_manager.h"
 #include "../../lib_utils/quadrature_utils.h"
 #include "../materials/MaterialModel.cuh"
 #include "../materials/SolidMaterialProperties.h"
@@ -14,6 +16,24 @@
 
 // Definition of GPU_ANCF3443 and data access device functions
 #pragma once
+
+// Compact, per-mesh material storage for FEAT10 objects.
+// The constitutive model is still assumed uniform across the object (SVK or MR),
+// but parameters can vary per imported mesh (element ranges).
+struct FEAT10MeshMaterial {
+  double rho0        = 0.0;
+  double eta_damp    = 0.0;
+  double lambda_damp = 0.0;
+
+  // SVK parameters (precomputed Lamé parameters).
+  double lambda = 0.0;
+  double mu     = 0.0;
+
+  // Mooney-Rivlin parameters.
+  double mu10  = 0.0;
+  double mu01  = 0.0;
+  double kappa = 0.0;
+};
 
 //
 // define a SAP data strucutre
@@ -213,8 +233,16 @@ struct GPU_FEAT10_Data : public ElementBase {
   // each mesh instance has its own rho0). If not configured, falls back to the
   // global scalar density.
   __device__ double rho0(int elem_idx) const {
-    return (d_rho0_elem != nullptr) ? static_cast<double>(d_rho0_elem[elem_idx])
-                                    : *d_rho0;
+    if (d_rho0_elem != nullptr) {
+      return static_cast<double>(d_rho0_elem[elem_idx]);
+    }
+    if (d_mesh_materials != nullptr) {
+      const int mesh_id = mesh_id_from_elem(elem_idx);
+      if (mesh_id >= 0) {
+        return d_mesh_materials[mesh_id].rho0;
+      }
+    }
+    return *d_rho0;
   }
 
   __device__ double nu() const {
@@ -255,6 +283,104 @@ struct GPU_FEAT10_Data : public ElementBase {
 
   __device__ double kappa() const {
     return *d_kappa;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Per-mesh material accessors (fallback to global scalars when not configured)
+  // ---------------------------------------------------------------------------
+
+  __device__ __forceinline__ int mesh_id_from_elem(int elem_idx) const {
+    if (d_mesh_elem_starts == nullptr || d_mesh_elem_ends == nullptr ||
+        n_mesh_materials <= 0) {
+      return -1;
+    }
+    // Binary search over sorted element starts. Returns a mesh id only if the
+    // element is inside the corresponding [start, end) interval.
+    if (elem_idx < d_mesh_elem_starts[0]) {
+      return -1;
+    }
+    int lo = 0;
+    int hi = n_mesh_materials;
+    while (lo + 1 < hi) {
+      const int mid = (lo + hi) >> 1;
+      if (elem_idx < d_mesh_elem_starts[mid]) {
+        hi = mid;
+      } else {
+        lo = mid;
+      }
+    }
+    return (elem_idx < d_mesh_elem_ends[lo]) ? lo : -1;
+  }
+
+  __device__ __forceinline__ FEAT10MeshMaterial mesh_material(int elem_idx)
+      const {
+    const int mesh_id = mesh_id_from_elem(elem_idx);
+    if (mesh_id >= 0 && d_mesh_materials != nullptr) {
+      return d_mesh_materials[mesh_id];
+    }
+    return mesh_material_fallback();
+  }
+
+  __device__ __forceinline__ FEAT10MeshMaterial mesh_material_fallback() const {
+    FEAT10MeshMaterial mat;
+    mat.rho0        = *d_rho0;
+    mat.eta_damp    = *d_eta_damp;
+    mat.lambda_damp = *d_lambda_damp;
+    mat.lambda      = *d_lambda;
+    mat.mu          = *d_mu;
+    mat.mu10        = *d_mu10;
+    mat.mu01        = *d_mu01;
+    mat.kappa       = *d_kappa;
+    return mat;
+  }
+
+  __device__ __forceinline__ double lambda(int elem_idx) const {
+    if (d_mesh_materials == nullptr) {
+      return *d_lambda;
+    }
+    return mesh_material(elem_idx).lambda;
+  }
+
+  __device__ __forceinline__ double mu(int elem_idx) const {
+    if (d_mesh_materials == nullptr) {
+      return *d_mu;
+    }
+    return mesh_material(elem_idx).mu;
+  }
+
+  __device__ __forceinline__ double mu10(int elem_idx) const {
+    if (d_mesh_materials == nullptr) {
+      return *d_mu10;
+    }
+    return mesh_material(elem_idx).mu10;
+  }
+
+  __device__ __forceinline__ double mu01(int elem_idx) const {
+    if (d_mesh_materials == nullptr) {
+      return *d_mu01;
+    }
+    return mesh_material(elem_idx).mu01;
+  }
+
+  __device__ __forceinline__ double kappa(int elem_idx) const {
+    if (d_mesh_materials == nullptr) {
+      return *d_kappa;
+    }
+    return mesh_material(elem_idx).kappa;
+  }
+
+  __device__ __forceinline__ double eta_damp(int elem_idx) const {
+    if (d_mesh_materials == nullptr) {
+      return *d_eta_damp;
+    }
+    return mesh_material(elem_idx).eta_damp;
+  }
+
+  __device__ __forceinline__ double lambda_damp(int elem_idx) const {
+    if (d_mesh_materials == nullptr) {
+      return *d_lambda_damp;
+    }
+    return mesh_material(elem_idx).lambda_damp;
   }
 
   __device__ int gpu_n_elem() const {
@@ -711,6 +837,170 @@ struct GPU_FEAT10_Data : public ElementBase {
     }
   }
 
+  /**
+   * Apply per-mesh material properties given mesh element ranges.
+   *
+   * This stores a compact material table per mesh (one copy per mesh) plus two
+   * integer arrays for element-range lookup. It does NOT allocate per-element
+   * material arrays.
+   *
+   * Important: All materials must use the same constitutive model (SVK or MR).
+   */
+  void ApplyMaterialsByElementRanges(
+      const std::vector<int>& elem_starts, const std::vector<int>& elem_counts,
+      const std::vector<SolidMaterialProperties>& materials) {
+    if (!is_setup) {
+      std::cerr << "GPU_FEAT10_Data must be set up before applying materials."
+                << std::endl;
+      return;
+    }
+    if (elem_starts.size() != elem_counts.size() ||
+        elem_starts.size() != materials.size() || elem_starts.empty()) {
+      std::cerr << "ApplyMaterialsByElementRanges: size mismatch." << std::endl;
+      return;
+    }
+
+    const int n_mesh = static_cast<int>(materials.size());
+    for (int i = 0; i < n_mesh; ++i) {
+      if (elem_starts[i] < 0 || elem_counts[i] <= 0 ||
+          elem_starts[i] + elem_counts[i] > n_elem) {
+        std::cerr << "ApplyMaterialsByElementRanges: invalid element range."
+                  << std::endl;
+        return;
+      }
+    }
+
+    const int model0 = materials[0].material_model;
+    for (int i = 1; i < n_mesh; ++i) {
+      if (materials[i].material_model != model0) {
+        std::cerr << "ApplyMaterialsByElementRanges: mixed material models are "
+                     "not supported (all must be SVK or all MR)."
+                  << std::endl;
+        return;
+      }
+    }
+
+    // Apply first material globally as default/fallback.
+    ApplyMaterial(materials[0]);
+
+    // Free previous per-mesh configuration (if any).
+    if (d_mesh_materials != nullptr) {
+      HANDLE_ERROR(cudaFree(d_mesh_materials));
+      d_mesh_materials = nullptr;
+    }
+    if (d_mesh_elem_starts != nullptr) {
+      HANDLE_ERROR(cudaFree(d_mesh_elem_starts));
+      d_mesh_elem_starts = nullptr;
+    }
+    if (d_mesh_elem_ends != nullptr) {
+      HANDLE_ERROR(cudaFree(d_mesh_elem_ends));
+      d_mesh_elem_ends = nullptr;
+    }
+    n_mesh_materials = 0;
+
+    // Sort by elem_start to satisfy device binary search.
+    std::vector<int> order(n_mesh);
+    for (int i = 0; i < n_mesh; ++i) order[i] = i;
+    std::sort(order.begin(), order.end(),
+              [&](int a, int b) { return elem_starts[a] < elem_starts[b]; });
+
+    std::vector<int> starts_sorted(n_mesh);
+    std::vector<int> ends_sorted(n_mesh);
+    std::vector<FEAT10MeshMaterial> mats_sorted(n_mesh);
+
+    for (int i = 0; i < n_mesh; ++i) {
+      const int src = order[i];
+      const int s   = elem_starts[src];
+      const int c   = elem_counts[src];
+      starts_sorted[i] = s;
+      ends_sorted[i]   = s + c;
+
+      const auto& props = materials[src];
+      FEAT10MeshMaterial mat;
+      mat.rho0        = props.rho0;
+      mat.eta_damp    = props.eta_damp;
+      mat.lambda_damp = props.lambda_damp;
+      if (model0 == MATERIAL_MODEL_MOONEY_RIVLIN) {
+        mat.mu10  = props.mu10;
+        mat.mu01  = props.mu01;
+        mat.kappa = props.kappa;
+      } else {
+        mat.mu     = props.mu();
+        mat.lambda = props.lambda();
+      }
+      mats_sorted[i] = mat;
+    }
+
+    for (int i = 0; i + 1 < n_mesh; ++i) {
+      if (starts_sorted[i] >= starts_sorted[i + 1] ||
+          ends_sorted[i] > starts_sorted[i + 1]) {
+        std::cerr << "ApplyMaterialsByElementRanges: overlapping or unsorted "
+                     "element ranges are not supported."
+                  << std::endl;
+        return;
+      }
+    }
+
+    // Allocate and upload per-mesh material table + element range lookup.
+    HANDLE_ERROR(cudaMalloc(&d_mesh_elem_starts,
+                            static_cast<size_t>(n_mesh) * sizeof(int)));
+    HANDLE_ERROR(cudaMalloc(&d_mesh_elem_ends,
+                            static_cast<size_t>(n_mesh) * sizeof(int)));
+    HANDLE_ERROR(cudaMalloc(&d_mesh_materials,
+                            static_cast<size_t>(n_mesh) *
+                                sizeof(FEAT10MeshMaterial)));
+
+    HANDLE_ERROR(cudaMemcpy(d_mesh_elem_starts, starts_sorted.data(),
+                            static_cast<size_t>(n_mesh) * sizeof(int),
+                            cudaMemcpyHostToDevice));
+    HANDLE_ERROR(cudaMemcpy(d_mesh_elem_ends, ends_sorted.data(),
+                            static_cast<size_t>(n_mesh) * sizeof(int),
+                            cudaMemcpyHostToDevice));
+    HANDLE_ERROR(cudaMemcpy(d_mesh_materials, mats_sorted.data(),
+                            static_cast<size_t>(n_mesh) *
+                                sizeof(FEAT10MeshMaterial),
+                            cudaMemcpyHostToDevice));
+
+    n_mesh_materials = n_mesh;
+    // Update the device-side copy of this struct so kernels can see the new pointers.
+    HANDLE_ERROR(cudaMemcpy(d_data, this, sizeof(GPU_FEAT10_Data),
+                            cudaMemcpyHostToDevice));
+  }
+
+  /**
+   * Convenience: apply per-mesh materials directly from a MeshManager.
+   *
+   * Requires each loaded mesh to have an assigned material via
+   * MeshManager::SetMeshMaterial (or LoadMesh overload).
+   */
+  void ApplyMaterialsFromMeshManager(
+      const ANCFCPUUtils::MeshManager& mesh_manager) {
+    const int n_mesh = mesh_manager.GetNumMeshes();
+    if (n_mesh <= 0) {
+      std::cerr << "ApplyMaterialsFromMeshManager: no meshes." << std::endl;
+      return;
+    }
+    std::vector<int> elem_starts;
+    std::vector<int> elem_counts;
+    std::vector<SolidMaterialProperties> mats;
+    elem_starts.reserve(n_mesh);
+    elem_counts.reserve(n_mesh);
+    mats.reserve(n_mesh);
+
+    for (int i = 0; i < n_mesh; ++i) {
+      if (!mesh_manager.MeshHasMaterial(i)) {
+        std::cerr << "ApplyMaterialsFromMeshManager: mesh " << i
+                  << " has no material assigned." << std::endl;
+        return;
+      }
+      const auto& inst = mesh_manager.GetMeshInstance(i);
+      elem_starts.push_back(inst.element_offset);
+      elem_counts.push_back(inst.num_elements);
+      mats.push_back(mesh_manager.GetMeshMaterial(i));
+    }
+    ApplyMaterialsByElementRanges(elem_starts, elem_counts, mats);
+  }
+
   void SetExternalForce(const Eigen::VectorXd &h_f_ext) {
     if (h_f_ext.size() != n_coef * 3) {
       std::cerr << "External force vector size mismatch." << std::endl;
@@ -730,6 +1020,12 @@ struct GPU_FEAT10_Data : public ElementBase {
   const double* GetY12DevicePtr() const { return d_h_y12; }
   double* GetZ12DevicePtr() { return d_h_z12; }
   const double* GetZ12DevicePtr() const { return d_h_z12; }
+  double* GetX12JacDevicePtr() { return d_h_x12_jac; }
+  const double* GetX12JacDevicePtr() const { return d_h_x12_jac; }
+  double* GetY12JacDevicePtr() { return d_h_y12_jac; }
+  const double* GetY12JacDevicePtr() const { return d_h_y12_jac; }
+  double* GetZ12JacDevicePtr() { return d_h_z12_jac; }
+  const double* GetZ12JacDevicePtr() const { return d_h_z12_jac; }
   double* GetExternalForceDevicePtr() { return d_f_ext; }
   const double* GetExternalForceDevicePtr() const { return d_f_ext; }
 
@@ -842,6 +1138,20 @@ struct GPU_FEAT10_Data : public ElementBase {
     HANDLE_ERROR(cudaFree(d_eta_damp));
     HANDLE_ERROR(cudaFree(d_lambda_damp));
 
+    if (d_mesh_materials != nullptr) {
+      HANDLE_ERROR(cudaFree(d_mesh_materials));
+      d_mesh_materials = nullptr;
+    }
+    if (d_mesh_elem_starts != nullptr) {
+      HANDLE_ERROR(cudaFree(d_mesh_elem_starts));
+      d_mesh_elem_starts = nullptr;
+    }
+    if (d_mesh_elem_ends != nullptr) {
+      HANDLE_ERROR(cudaFree(d_mesh_elem_ends));
+      d_mesh_elem_ends = nullptr;
+    }
+    n_mesh_materials = 0;
+
     HANDLE_ERROR(cudaFree(d_data));
 
     if (is_constraints_setup) {
@@ -900,6 +1210,11 @@ struct GPU_FEAT10_Data : public ElementBase {
   double *d_mu10, *d_mu01, *d_kappa;
   // Damping parameters
   double *d_eta_damp, *d_lambda_damp;
+  // Optional per-mesh material table (one copy per mesh) and element range lookup.
+  FEAT10MeshMaterial* d_mesh_materials = nullptr;
+  int* d_mesh_elem_starts              = nullptr;
+  int* d_mesh_elem_ends                = nullptr;
+  int n_mesh_materials                 = 0;
 
   // Constraint data
   double *d_constraint;

@@ -132,8 +132,9 @@ __device__ __forceinline__ void compute_p(int elem_idx, int qp_idx,
     }
   }
 
-  double eta = d_data->eta_damp();
-  double lambda_d = d_data->lambda_damp();
+  const FEAT10MeshMaterial mat = d_data->mesh_material(elem_idx);
+  double eta                  = mat.eta_damp;
+  double lambda_d             = mat.lambda_damp;
   const bool do_damp = (v_guess != nullptr) && (eta != 0.0 || lambda_d != 0.0);
 
   double P_vis[3][3] = {{0.0}};
@@ -273,11 +274,11 @@ __device__ __forceinline__ void compute_p(int elem_idx, int qp_idx,
 
   double P_el[3][3];
   if (d_data->material_model() == MATERIAL_MODEL_MOONEY_RIVLIN) {
-    mr_compute_P(F, d_data->mu10(), d_data->mu01(), d_data->kappa(), P_el);
+    mr_compute_P(F, mat.mu10, mat.mu01, mat.kappa, P_el);
   } else {
     // Get material parameters
-    double lambda = d_data->lambda();
-    double mu     = d_data->mu();
+    double lambda = mat.lambda;
+    double mu     = mat.mu;
     svk_compute_P_from_trFtF_and_FFtF(F, trFtF, FFtF, lambda, mu, P_el);
   }
 
@@ -353,11 +354,11 @@ __device__ __forceinline__ void vbd_accumulate_residual_and_hessian_diag(
   const double weight_k  = dt * dV;
 
   double Kblock[3][3];
+  const FEAT10MeshMaterial mat = d_data->mesh_material(elem_idx);
   if (d_data->material_model() == MATERIAL_MODEL_MOONEY_RIVLIN) {
     double F_local[3][3] = {{F00, F01, F02}, {F10, F11, F12}, {F20, F21, F22}};
     double A_mr[3][3][3][3];
-    mr_compute_tangent_tensor(F_local, d_data->mu10(), d_data->mu01(),
-                              d_data->kappa(), A_mr);
+    mr_compute_tangent_tensor(F_local, mat.mu10, mat.mu01, mat.kappa, A_mr);
 #pragma unroll
     for (int d = 0; d < 3; ++d) {
 #pragma unroll
@@ -380,7 +381,7 @@ __device__ __forceinline__ void vbd_accumulate_residual_and_hessian_diag(
     const double FFT[3][3] = {
         {FFT00, FFT01, FFT02}, {FFT10, FFT11, FFT12}, {FFT20, FFT21, FFT22}};
     svk_compute_tangent_block(Fh_vec, Fh_vec, hij, trE, Fh_dot_Fh, FFT,
-                              d_data->lambda(), d_data->mu(), weight_k, Kblock);
+                              mat.lambda, mat.mu, weight_k, Kblock);
   }
 
   h00 += Kblock[0][0];
@@ -594,8 +595,9 @@ __device__ __forceinline__ void compute_hessian_assemble_csr<GPU_FEAT10_Data>(
     }
   }
 
-  double lambda = d_data->lambda();
-  double mu     = d_data->mu();
+  const FEAT10MeshMaterial mat = d_data->mesh_material(elem_idx);
+  double lambda               = mat.lambda;
+  double mu                   = mat.mu;
   double detJ   = d_data->detJ_ref(elem_idx, qp_idx);
   double wq     = d_data->tet5pt_weights(qp_idx);
   double dV     = detJ * wq;
@@ -604,8 +606,7 @@ __device__ __forceinline__ void compute_hessian_assemble_csr<GPU_FEAT10_Data>(
       (d_data->material_model() == MATERIAL_MODEL_MOONEY_RIVLIN);
   double A_mr[3][3][3][3];
   if (use_mr) {
-    mr_compute_tangent_tensor(F, d_data->mu10(), d_data->mu01(),
-                              d_data->kappa(), A_mr);
+    mr_compute_tangent_tensor(F, mat.mu10, mat.mu01, mat.kappa, A_mr);
   }
 
   // Local K_elem 30x30
@@ -686,8 +687,8 @@ __device__ __forceinline__ void compute_hessian_assemble_csr<GPU_FEAT10_Data>(
     }
   }
 
-  double eta_d    = d_data->eta_damp();
-  double lambda_d = d_data->lambda_damp();
+  double eta_d    = mat.eta_damp;
+  double lambda_d = mat.lambda_damp;
   if (eta_d == 0.0 && lambda_d == 0.0) {
     return;
   }

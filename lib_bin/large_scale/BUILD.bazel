@@ -1,6 +1,15 @@
 load("@rules_cc//cc:defs.bzl", "cc_binary")
+load("@rules_cuda//cuda:defs.bzl", "cuda_library")
 
 package(default_visibility = ["//visibility:public"])
+
+cuda_library(
+    name = "prescribed_shake",
+    srcs = ["prescribed_shake.cu"],
+    hdrs = ["prescribed_shake.h"],
+    copts = ["--std=c++17"],
+    linkopts = ["-lcudart"],
+)
 
 cc_binary(
     name = "test_vase",
@@ -19,6 +28,7 @@ cc_binary(
         "//:data_meshes",
     ],
     deps = [
+        ":prescribed_shake",
         "//lib_src/collision:deme_mesh_collision_system",
         "//lib_src/elements:FEAT10Data",
         "//lib_src/solvers:solvers_syncednewton",

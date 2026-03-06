@@ -5,6 +5,8 @@
 #include <string>
 #include <vector>
 
+#include "../lib_src/materials/SolidMaterialProperties.h"
+
 namespace ANCFCPUUtils {
 
 inline Eigen::Matrix4d rotationX(double angle_rad) {
@@ -77,6 +79,35 @@ class MeshManager {
    */
   int LoadMesh(const std::string& node_file, const std::string& elem_file,
                const std::string& name = "");
+
+  /**
+   * Load a mesh and assign a material to this mesh instance.
+   * @param node_file Path to the .node file
+   * @param elem_file Path to the .ele file
+   * @param name Optional name for the mesh instance
+   * @param material Material properties to associate with this mesh
+   * @return Mesh instance ID (>= 0 on success, -1 on failure)
+   */
+  int LoadMesh(const std::string& node_file, const std::string& elem_file,
+               const std::string& name,
+               const SolidMaterialProperties& material);
+
+  /**
+   * Assign (or update) material properties for an already-loaded mesh.
+   */
+  void SetMeshMaterial(int mesh_id, const SolidMaterialProperties& material);
+
+  /**
+   * Check whether a mesh has an assigned material.
+   */
+  bool MeshHasMaterial(int mesh_id) const;
+
+  /**
+   * Get the assigned material for a mesh.
+   * @throws std::out_of_range if mesh_id is invalid
+   * @throws std::runtime_error if no material is assigned
+   */
+  const SolidMaterialProperties& GetMeshMaterial(int mesh_id) const;
 
   /**
    * Apply a 4x4 transformation matrix to a specific mesh instance
@@ -223,6 +254,8 @@ class MeshManager {
   std::vector<Eigen::MatrixXi>
       elem_buffers_;  // Per-mesh elements (local indices)
   std::vector<Eigen::VectorXd> scalar_field_buffers_;  // Per-mesh scalar fields
+  std::vector<SolidMaterialProperties> mesh_materials_;  // Per-mesh materials
+  std::vector<bool> mesh_has_material_;                  // Per-mesh flag
 
   Eigen::MatrixXd all_nodes_;  // Unified node array
   Eigen::MatrixXi

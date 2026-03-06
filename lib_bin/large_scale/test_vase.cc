@@ -60,6 +60,8 @@
 #include "../../lib_utils/surface_trimesh_extract.h"
 #include "../../lib_utils/visualization_utils.h"
 
+#include "prescribed_shake.h"
+
 // ============================================================================
 // Material Model Selection
 //   MAT_SVK: Saint Venant-Kirchhoff — suitable when strains remain moderate
@@ -77,18 +79,20 @@ static constexpr MaterialOption MATERIAL_OPTION = MAT_SVK;  // <-- change here
 //   nu = 0.35  — slightly compressible foam
 //   rho0 = 50 kg/m3 — typical low-density packaging foam
 const SolidMaterialProperties mat_foam_svk = SolidMaterialProperties::SVK(
-    1e7,    // E:           50 kPa
+    1e6,    // E:           50 kPa
     0.35,   // nu
-    500.0,  // rho0:        50 kg/m3
-    5e4,    // eta_damp:    Kelvin-Voigt shear damping
-    5e4     // lambda_damp: Kelvin-Voigt volumetric damping
+    250.0,  // rho0:        50 kg/m3
+    5e3,    // eta_damp:    Kelvin-Voigt shear damping
+    5e3     // lambda_damp: Kelvin-Voigt volumetric damping
 );
 
-// Vase density override (per-element, applied after Setup):
-//   rho = 2400 kg/m3 — ceramic / porcelain
-//   (E and nu are inherited from the global foam stiffness above; the vase
-//   behaves effectively rigid relative to the foam under gravity loads)
-static constexpr double rho_vase_svk = 2400.0;  // kg/m3
+// Vase (ceramic / porcelain). You can lower E if the Newton solve becomes
+// stiff.
+const SolidMaterialProperties mat_vase_svk =
+    SolidMaterialProperties::SVK(5e10,   // E:   ~50 GPa
+                                 0.25,   // nu:  ceramic-like
+                                 2400.0  // rho: kg/m3
+    );
 
 // ----------------------------------------------------------------------------
 // Mooney-Rivlin material parameters (equivalent foam stiffness)
@@ -118,10 +122,21 @@ static constexpr double rho_vase_mr = 2400.0;  // kg/m3 (ceramic)
 // ============================================================================
 // Simulation parameters
 // ============================================================================
-static constexpr double gravity      = -9.81;  // m/s^2, applied in -Z
-static constexpr double dt           = 1e-4;   // Time step (s)
-static constexpr int num_steps       = 4000;   // Total simulation steps
-static constexpr int export_interval = 20;     // VTU output every N steps
+static constexpr double gravity = -9.81;  // m/s^2, applied in -Z
+static constexpr double dt      = 1e-4;   // Time step (s)
+// Schedule: 1000 static -> 1000 shaking -> 1000 static
+static constexpr int static_pre_steps  = 1000;
+static constexpr int shake_steps       = 2000;
+static constexpr int static_post_steps = 1000;
+static constexpr int num_steps =
+    static_pre_steps + shake_steps + static_post_steps;  // Total steps
+static constexpr int export_interval = 20;  // VTU output every N steps
+
+// Shaking (prescribed motion on fixed foam nodes)
+static constexpr int shake_start_step = static_pre_steps;
+static constexpr int shake_end_step   = static_pre_steps + shake_steps;
+static constexpr double shake_amp_x   = 0.005;  // meters (±)
+static constexpr double shake_speed_x = 0.25;   // m/s (piecewise-constant)
 
 // DEME contact parameters
 //   mu_s = 0.6: ceramic-on-foam static friction (moderate)
@@ -131,9 +146,9 @@ static constexpr int export_interval = 20;     // VTU output every N steps
 static constexpr double contact_mu_s = 0.6;
 static constexpr double contact_mu_k = 0.5;
 static constexpr double contact_stiffness =
-    5e5;  // reduced: stable with dt=1e-4 and m~1 kg
+    8e6;  // reduced: stable with dt=1e-4 and m~1 kg
 static constexpr double contact_cor =
-    0.05;  // near-zero CoR: highly inelastic (foam absorbs impact)
+    0.1;  // near-zero CoR: highly inelastic (foam absorbs impact)
 
 using ANCFCPUUtils::VisualizationUtils;
 
@@ -266,6 +281,14 @@ int main(int argc, char** argv) {
             << fix_z_threshold << " m)\n";
   gpu_t10_data.SetNodalFixed(h_fixed);
 
+  // Demo-specific: build a device list of the fixed (clamped) foam nodes so we
+  // can apply prescribed base motion without adding demo logic to FEAT10Data.
+  int* d_fixed_node_ids = nullptr;
+  const int n_fixed     = static_cast<int>(fixed_indices.size());
+  HANDLE_ERROR(cudaMalloc(&d_fixed_node_ids, n_fixed * sizeof(int)));
+  HANDLE_ERROR(cudaMemcpy(d_fixed_node_ids, fixed_indices.data(),
+                          n_fixed * sizeof(int), cudaMemcpyHostToDevice));
+
   // =========================================================================
   // FE setup: quadrature, material, mass matrix
   // =========================================================================
@@ -273,24 +296,35 @@ int main(int argc, char** argv) {
                      Quadrature::tet5pt_z, Quadrature::tet5pt_weights, h_x12,
                      h_y12, h_z12, elements);
 
-  // Apply foam stiffness globally, then override vase element density
+  // Assign per-mesh materials (same model across all meshes).
+  // This keeps the original behavior (uniform stiffness, per-mesh density),
+  // but now the API supports per-mesh stiffness too (e.g., different E/nu).
   if (MATERIAL_OPTION == MAT_SVK) {
-    gpu_t10_data.ApplyMaterial(mat_foam_svk);
-    std::cout << "Material: SVK  E=" << mat_foam_svk.E
-              << " Pa, nu=" << mat_foam_svk.nu
-              << ", rho_foam=" << mat_foam_svk.rho0 << " kg/m3\n";
-    gpu_t10_data.SetDensityForElementRange(
-        inst_vase.element_offset, inst_vase.num_elements, rho_vase_svk);
-    std::cout << "Vase density (ceramic): " << rho_vase_svk << " kg/m3\n";
+    mesh_manager.SetMeshMaterial(mesh_foam, mat_foam_svk);
+    mesh_manager.SetMeshMaterial(mesh_vase, mat_vase_svk);
+    gpu_t10_data.ApplyMaterialsFromMeshManager(mesh_manager);
+
+    std::cout << "Material model: SVK\n";
+    std::cout << "  Foam: E=" << mat_foam_svk.E << " Pa, nu=" << mat_foam_svk.nu
+              << ", rho=" << mat_foam_svk.rho0 << " kg/m3\n";
+    std::cout << "  Vase: E=" << mat_vase_svk.E << " Pa, nu=" << mat_vase_svk.nu
+              << ", rho=" << mat_vase_svk.rho0 << " kg/m3\n";
   } else {
-    gpu_t10_data.ApplyMaterial(mat_foam_mr);
-    std::cout << "Material: Mooney-Rivlin  mu10=" << mat_foam_mr.mu10
+    SolidMaterialProperties mat_vase_mr = mat_foam_mr;
+    mat_vase_mr.rho0                    = rho_vase_mr;
+    mesh_manager.SetMeshMaterial(mesh_foam, mat_foam_mr);
+    mesh_manager.SetMeshMaterial(mesh_vase, mat_vase_mr);
+    gpu_t10_data.ApplyMaterialsFromMeshManager(mesh_manager);
+
+    std::cout << "Material model: Mooney-Rivlin\n";
+    std::cout << "  Foam: mu10=" << mat_foam_mr.mu10
               << " Pa, mu01=" << mat_foam_mr.mu01
               << " Pa, kappa=" << mat_foam_mr.kappa
-              << " Pa, rho_foam=" << mat_foam_mr.rho0 << " kg/m3\n";
-    gpu_t10_data.SetDensityForElementRange(inst_vase.element_offset,
-                                           inst_vase.num_elements, rho_vase_mr);
-    std::cout << "Vase density (ceramic): " << rho_vase_mr << " kg/m3\n";
+              << " Pa, rho=" << mat_foam_mr.rho0 << " kg/m3\n";
+    std::cout << "  Vase: mu10=" << mat_vase_mr.mu10
+              << " Pa, mu01=" << mat_vase_mr.mu01
+              << " Pa, kappa=" << mat_vase_mr.kappa
+              << " Pa, rho=" << mat_vase_mr.rho0 << " kg/m3\n";
   }
   std::cout << "\n";
 
@@ -414,8 +448,37 @@ int main(int argc, char** argv) {
   std::cout << "Starting simulation (" << max_steps << " steps, dt=" << dt
             << " s)\n\n";
 
+  double shake_dx_prev = 0.0;
+
   for (int step = 0; step < max_steps; ++step) {
     auto t0 = std::chrono::high_resolution_clock::now();
+
+    // Prescribed shaking: move fixed foam nodes in ±X with |v|=shake_speed_x.
+    // Implemented as a triangular wave so velocity magnitude is constant except
+    // at direction reversals.
+    if (step >= shake_start_step && step < shake_end_step) {
+      const double t_shake = (step - shake_start_step) * dt;
+      const double t1      = shake_amp_x / shake_speed_x;  // 0 -> +A
+      const double period =
+          4.0 * shake_amp_x / shake_speed_x;  // 0 -> +A -> -A -> 0
+      const double phase = std::fmod(t_shake, period);
+
+      double dx = 0.0;
+      if (phase < t1) {
+        dx = shake_speed_x * phase;
+      } else if (phase < 3.0 * t1) {
+        dx = shake_amp_x - shake_speed_x * (phase - t1);
+      } else {
+        dx = -shake_amp_x + shake_speed_x * (phase - 3.0 * t1);
+      }
+
+      const double delta_dx = dx - shake_dx_prev;
+      PrescribedShake::OffsetNodesAndTargets(gpu_t10_data.GetX12DevicePtr(),
+                                             gpu_t10_data.GetX12JacDevicePtr(),
+                                             d_fixed_node_ids, n_fixed,
+                                             delta_dx);
+      shake_dx_prev = dx;
+    }
 
     // 1) Sync node positions to collision buffer (device -> device)
     HANDLE_ERROR(cudaMemcpy(d_nodes_col, gpu_t10_data.GetX12DevicePtr(),
@@ -497,6 +560,7 @@ int main(int argc, char** argv) {
   CheckCublas(cublasDestroy(cublas_handle), "cublasDestroy");
   HANDLE_ERROR(cudaFree(d_f_gravity));
   HANDLE_ERROR(cudaFree(d_nodes_col));
+  HANDLE_ERROR(cudaFree(d_fixed_node_ids));
   gpu_t10_data.Destroy();
 
   std::cout << "\n========================================\n";

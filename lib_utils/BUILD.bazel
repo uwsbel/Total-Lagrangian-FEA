@@ -41,6 +41,7 @@ cc_library(
     copts = ["--std=c++17"],
     deps = [
         ":cpu_utils",
+        "//lib_src/materials:materials",
         "@eigen//:eigen",
     ],
 )

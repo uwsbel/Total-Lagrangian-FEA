@@ -52,7 +52,7 @@ cuda_library(
         "//lib_src/materials:materials",
         "//lib_utils:cpu_utils",
         "//lib_utils:cuda_utils",
+        "//lib_utils:mesh_manager",
         "@eigen//:eigen",
     ],
 )
-
