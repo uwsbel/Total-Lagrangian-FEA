@@ -510,7 +510,7 @@ struct GPU_FEAT10_Data : public ElementBase {
 
   // Constructor
   GPU_FEAT10_Data(int num_elements, int num_nodes)
-      : n_elem(num_elements), n_coef(num_nodes) {
+      : n_elem(num_elements), n_coef(num_nodes), n_constraint(0) {
     type = TYPE_T10;
   }
 

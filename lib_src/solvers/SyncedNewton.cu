@@ -1065,9 +1065,11 @@ void SyncedNewtonSolver::OneStepNewtonCuDSS() {
                                              threadsPerBlock>>>(
             typed_data, d_newton_solver_);
 
-        cudss_solve_constraints_eval<<<numBlocks_constraints_eval,
-                                       threadsPerBlock>>>(typed_data,
-                                                          d_newton_solver_);
+        if (n_constraints_eval > 0) {
+          cudss_solve_constraints_eval<<<numBlocks_constraints_eval,
+                                         threadsPerBlock>>>(
+              typed_data, d_newton_solver_);
+        }
 
         cudss_solve_compute_grad_l<<<numBlocks_grad_l, threadsPerBlock>>>(
             typed_data, d_newton_solver_);
@@ -1137,13 +1139,17 @@ void SyncedNewtonSolver::OneStepNewtonCuDSS() {
       cudss_solve_update_v_prev<<<numBlocks_update_prev_v, threadsPerBlock>>>(
           d_newton_solver_);
 
-      cudss_solve_constraints_eval<<<numBlocks_constraints_eval,
-                                     threadsPerBlock>>>(typed_data,
-                                                        d_newton_solver_);
+      if (n_constraints_eval > 0) {
+        cudss_solve_constraints_eval<<<numBlocks_constraints_eval,
+                                       threadsPerBlock>>>(
+            typed_data, d_newton_solver_);
+      }
 
-      cudss_solve_update_dual_var<<<numBlocks_update_dual_var,
-                                    threadsPerBlock>>>(typed_data,
-                                                       d_newton_solver_);
+      if (n_constraints_ > 0) {
+        cudss_solve_update_dual_var<<<numBlocks_update_dual_var,
+                                      threadsPerBlock>>>(
+            typed_data, d_newton_solver_);
+      }
 
       HANDLE_ERROR(cudaDeviceSynchronize());
 
@@ -1183,9 +1189,11 @@ void SyncedNewtonSolver::OneStepNewtonCuDSS() {
                                              threadsPerBlock>>>(
             typed_data, d_newton_solver_);
 
-        cudss_solve_constraints_eval<<<numBlocks_constraints_eval,
-                                       threadsPerBlock>>>(typed_data,
-                                                          d_newton_solver_);
+        if (n_constraints_eval > 0) {
+          cudss_solve_constraints_eval<<<numBlocks_constraints_eval,
+                                         threadsPerBlock>>>(
+              typed_data, d_newton_solver_);
+        }
 
         cudss_solve_compute_grad_l<<<numBlocks_grad_l, threadsPerBlock>>>(
             typed_data, d_newton_solver_);
@@ -1255,13 +1263,17 @@ void SyncedNewtonSolver::OneStepNewtonCuDSS() {
       cudss_solve_update_v_prev<<<numBlocks_update_prev_v, threadsPerBlock>>>(
           d_newton_solver_);
 
-      cudss_solve_constraints_eval<<<numBlocks_constraints_eval,
-                                     threadsPerBlock>>>(typed_data,
-                                                        d_newton_solver_);
+      if (n_constraints_eval > 0) {
+        cudss_solve_constraints_eval<<<numBlocks_constraints_eval,
+                                       threadsPerBlock>>>(
+            typed_data, d_newton_solver_);
+      }
 
-      cudss_solve_update_dual_var<<<numBlocks_update_dual_var,
-                                    threadsPerBlock>>>(typed_data,
-                                                       d_newton_solver_);
+      if (n_constraints_ > 0) {
+        cudss_solve_update_dual_var<<<numBlocks_update_dual_var,
+                                      threadsPerBlock>>>(
+            typed_data, d_newton_solver_);
+      }
 
       HANDLE_ERROR(cudaDeviceSynchronize());
 
@@ -1301,9 +1313,11 @@ void SyncedNewtonSolver::OneStepNewtonCuDSS() {
                                              threadsPerBlock>>>(
             typed_data, d_newton_solver_);
 
-        cudss_solve_constraints_eval<<<numBlocks_constraints_eval,
-                                       threadsPerBlock>>>(typed_data,
-                                                          d_newton_solver_);
+        if (n_constraints_eval > 0) {
+          cudss_solve_constraints_eval<<<numBlocks_constraints_eval,
+                                         threadsPerBlock>>>(
+              typed_data, d_newton_solver_);
+        }
 
         cudss_solve_compute_grad_l<<<numBlocks_grad_l, threadsPerBlock>>>(
             typed_data, d_newton_solver_);
@@ -1373,13 +1387,17 @@ void SyncedNewtonSolver::OneStepNewtonCuDSS() {
       cudss_solve_update_v_prev<<<numBlocks_update_prev_v, threadsPerBlock>>>(
           d_newton_solver_);
 
-      cudss_solve_constraints_eval<<<numBlocks_constraints_eval,
-                                     threadsPerBlock>>>(typed_data,
-                                                        d_newton_solver_);
+      if (n_constraints_eval > 0) {
+        cudss_solve_constraints_eval<<<numBlocks_constraints_eval,
+                                       threadsPerBlock>>>(
+            typed_data, d_newton_solver_);
+      }
 
-      cudss_solve_update_dual_var<<<numBlocks_update_dual_var,
-                                    threadsPerBlock>>>(typed_data,
-                                                       d_newton_solver_);
+      if (n_constraints_ > 0) {
+        cudss_solve_update_dual_var<<<numBlocks_update_dual_var,
+                                      threadsPerBlock>>>(
+            typed_data, d_newton_solver_);
+      }
 
       HANDLE_ERROR(cudaDeviceSynchronize());
 

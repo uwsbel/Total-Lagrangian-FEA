@@ -1537,7 +1537,10 @@ void DemeMeshCollisionSystem::Step(const CollisionSystemInput& in,
     }
   }
 
-  solver_->DoDynamics(in.dt);
+  // We consume contact information (and potentially issue further DEME API
+  // calls) immediately after stepping. Use the synchronized stepping API to
+  // avoid races between kT/dT when coupled to an external solver.
+  solver_->DoDynamicsThenSync(in.dt);
 
   num_contacts_ = 0;
   HANDLE_ERROR(cudaMemset(d_f_contact_, 0,
