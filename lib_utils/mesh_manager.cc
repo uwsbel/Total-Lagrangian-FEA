@@ -212,11 +212,61 @@ int MeshManager::LoadMesh(const std::string& node_file,
 
   // Initialize empty scalar field buffer for this mesh
   scalar_field_buffers_.push_back(Eigen::VectorXd());
+  // Initialize empty material slot for this mesh
+  mesh_materials_.push_back(SolidMaterialProperties());
+  mesh_has_material_.push_back(false);
 
   // Rebuild unified arrays
   RebuildUnifiedArrays();
 
   return static_cast<int>(mesh_instances_.size()) - 1;
+}
+
+int MeshManager::LoadMesh(const std::string& node_file,
+                          const std::string& elem_file,
+                          const std::string& name,
+                          const SolidMaterialProperties& material) {
+  const int mesh_id = LoadMesh(node_file, elem_file, name);
+  if (mesh_id >= 0) {
+    SetMeshMaterial(mesh_id, material);
+  }
+  return mesh_id;
+}
+
+void MeshManager::SetMeshMaterial(int mesh_id,
+                                  const SolidMaterialProperties& material) {
+  if (mesh_id < 0 || mesh_id >= static_cast<int>(mesh_instances_.size())) {
+    std::cerr << "MeshManager: Invalid mesh_id " << mesh_id << std::endl;
+    return;
+  }
+  if (mesh_id >= static_cast<int>(mesh_materials_.size())) {
+    mesh_materials_.resize(mesh_instances_.size());
+    mesh_has_material_.resize(mesh_instances_.size(), false);
+  }
+  mesh_materials_[mesh_id]    = material;
+  mesh_has_material_[mesh_id] = true;
+}
+
+bool MeshManager::MeshHasMaterial(int mesh_id) const {
+  if (mesh_id < 0 || mesh_id >= static_cast<int>(mesh_instances_.size())) {
+    return false;
+  }
+  if (mesh_id >= static_cast<int>(mesh_has_material_.size())) {
+    return false;
+  }
+  return mesh_has_material_[mesh_id];
+}
+
+const SolidMaterialProperties& MeshManager::GetMeshMaterial(int mesh_id) const {
+  if (mesh_id < 0 || mesh_id >= static_cast<int>(mesh_instances_.size())) {
+    throw std::out_of_range("MeshManager: Invalid mesh_id " +
+                            std::to_string(mesh_id));
+  }
+  if (!MeshHasMaterial(mesh_id)) {
+    throw std::runtime_error("MeshManager: No material assigned for mesh_id " +
+                             std::to_string(mesh_id));
+  }
+  return mesh_materials_[mesh_id];
 }
 
 bool MeshManager::LoadScalarFieldFromNpz(int mesh_id,
@@ -559,6 +609,8 @@ void MeshManager::Clear() {
   node_buffers_.clear();
   elem_buffers_.clear();
   scalar_field_buffers_.clear();
+  mesh_materials_.clear();
+  mesh_has_material_.clear();
   all_nodes_.resize(0, 3);
   all_elements_.resize(0, 0);
   all_scalar_fields_.resize(0);

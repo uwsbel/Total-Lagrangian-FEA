@@ -481,7 +481,7 @@ int main(int argc, char** argv) {
     write_vtu(0, x12, y12, z12);
   }
 
-  SyncedNewtonParams params = {1e-4, 0.0, 1e-6, 1e14, 5, 10, opt.dt};
+  SyncedNewtonParams params = {1e-4, 0.0, 1e-6, 1e14, 5, 10, opt.dt, false};
   SyncedNewtonSolver solver(&data, data.get_n_constraint());
   solver.Setup();
   solver.SetParameters(&params);

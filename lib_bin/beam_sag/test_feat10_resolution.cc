@@ -38,13 +38,13 @@
 namespace {
 
 // Material properties (using SolidMaterialProperties)
-const SolidMaterialProperties mat_beam = SolidMaterialProperties::SVK(
-    7e8,    // E: Young's modulus (Pa)
-    0.33,   // nu: Poisson's ratio
-    2700,   // rho0: Density (kg/m³)
-    0.0,    // eta_damp
-    0.0     // lambda_damp
-);
+const SolidMaterialProperties mat_beam =
+    SolidMaterialProperties::SVK(7e8,   // E: Young's modulus (Pa)
+                                 0.33,  // nu: Poisson's ratio
+                                 2700,  // rho0: Density (kg/m³)
+                                 0.0,   // eta_damp
+                                 0.0    // lambda_damp
+    );
 
 enum class SolverKind { kNewton, kVbd, kAdamW };
 
@@ -365,7 +365,11 @@ int main(int argc, char** argv) {
 
   switch (opt.solver) {
     case SolverKind::kNewton: {
-      SyncedNewtonParams params = {1e-4, 1e-4, 1e-4, 1e14, 5, 10, opt.dt};
+      SyncedNewtonParams params = {1e-4, 1e-4, 1e-4, 1e14, 5, 10, opt.dt,
+                                   false};
+      if (opt.res == 32) {
+        params = {1e-3, 1e-3, 1e-3, 1e14, 5, 10, opt.dt, false};
+      }
       SyncedNewtonSolver solver(&data, data.get_n_constraint());
       solver.Setup();
       solver.SetParameters(&params);
@@ -396,20 +400,28 @@ int main(int argc, char** argv) {
     case SolverKind::kAdamW: {
       SyncedAdamWNocoopParams params;
       if (opt.res == 0) {
-        params = {2e-4, 0.9,  0.999, 1e-8, 1e-4,   0.995, 1e-1,
-                  1e-6, 1e14, 5,     800,  opt.dt, 20,    1e-4};
+        params = {2e-4, 0.9,  0.999, 1e-8, 1e-4,   0.995, 1e-4,
+                  1e-4, 1e14, 5,     800,  opt.dt, 40,    1e-4};
       } else if (opt.res == 2) {
-        params = {2e-4, 0.9,  0.999, 1e-8, 1e-4,   0.995, 1e-1,
-                  1e-6, 1e14, 5,     800,  opt.dt, 20,    1e-4};
+        // Tuned to keep <=300 inner iterations (tol fixed at 1e-4).
+        params = {2e-4, 0.85, 0.999, 1e-8, 1e-4,   0.995, 1e-4,
+                  1e-4, 1e14, 5,     800,  opt.dt, 40,    1e-4};
       } else if (opt.res == 4) {
-        params = {2e-4, 0.9,  0.999, 1e-8, 1e-4,   0.995, 1e-1,
-                  1e-6, 1e14, 5,     800,  opt.dt, 20,    1e-4};
+        // Tuned to keep <=300 inner iterations (tol fixed at 1e-4).
+        params = {2e-4, 0.78, 0.999, 1e-8, 1e-4,   0.997, 1e-4,
+                  1e-4, 1e14, 5,     800,  opt.dt, 50,    1e-4};
       } else if (opt.res == 8) {
-        params = {2.5e-4, 0.9,  0.999, 1e-8, 1e-4,   0.998, 1e-1,
-                  1e-6,   1e14, 5,     800,  opt.dt, 20,    1e-4};
+        // Tuned to keep <=500 inner iterations (tol fixed at 1e-4).
+        params = {2.5e-4, 0.85, 0.999, 1e-8, 1e-4,   0.998, 1e-4,
+                  1e-4,   1e14, 5,     800,  opt.dt, 50,    1e-4};
       } else if (opt.res == 16) {
-        params = {2.5e-4, 0.9,  0.999, 1e-8, 1e-4,   0.998, 1e-1,
-                  1e-6,   1e14, 5,     800,  opt.dt, 20,    1e-4};
+        // Tuned to keep <=800 inner iterations (tol fixed at 1e-4).
+        params = {3e-4, 0.85, 0.999, 1e-8, 0.0,    0.9985, 1e-4,
+                  1e-4, 1e14, 5,     1000, opt.dt, 50,     1e-4};
+      } else if (opt.res == 32) {
+        // Tuned to keep <=2000 inner iterations (tol fixed at 1e-4).
+        params = {2.5e-4, 0.88, 0.999, 1e-8, 0.0,    0.999, 1e-3,
+                  1e-3,   1e14, 10,    2500, opt.dt, 200,   1e-3};
       } else {
         std::cerr << "Unsupported resolution" << std::endl;
         return 1;

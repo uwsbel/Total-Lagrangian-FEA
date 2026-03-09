@@ -135,6 +135,23 @@ void ANCF3443_generate_beam_coordinates(int n_beam, Eigen::VectorXd &x12,
                                         Eigen::MatrixXi &element_connectivity);
 
 /**
+ * Generate a 2D ANCF3443 quad shell mesh on the XY plane.
+ *
+ * Creates a structured grid of `x_resolution` × `y_resolution` elements over
+ * a rectangle of size `x_size` × `y_size`. Node ordering per element matches
+ * the beam generator convention: (0,0), (1,0), (1,1), (0,1).
+ *
+ * Each node has 4 coefficients (position + 3 directors), so `x12/y12/z12`
+ * have size `n_nodes * 4`.
+ */
+void ANCF3443_generate_shell_coordinates(double x_size, double y_size,
+                                         int x_resolution, int y_resolution,
+                                         Eigen::VectorXd &x12,
+                                         Eigen::VectorXd &y12,
+                                         Eigen::VectorXd &z12,
+                                         Eigen::MatrixXi &element_connectivity);
+
+/**
  * Calculate offset indices for ANCF3443 shell elements
  * @param n_beam Number of 3D elements
  * @param offset_start Output start indices for each element's nodes

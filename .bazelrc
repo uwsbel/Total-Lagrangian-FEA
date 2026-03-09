@@ -6,3 +6,13 @@ build --host_cxxopt=-std=c++17
 # If supported by your rules_cuda:
 build --@rules_cuda//cuda:archs='compute_75:sm_75;compute_86:sm_86,compute_86'
 build --flag_alias=cuda_archs=@rules_cuda//cuda:archs
+
+# Optional CUDA arch configs (use one via `--config=...`).
+#
+# RTX 50xx / Blackwell (compute capability 12.0). Building native cubins avoids
+# long first-run PTX JIT times (often visible as "stuck" during the first heavy
+# Thrust/CUB call, e.g. Hessian sparsity setup).
+build:sm120 --@rules_cuda//cuda:archs='compute_120:sm_120,compute_120'
+
+# Multi-arch build (bigger + slower compile, fewer runtime surprises).
+build:multiarch --@rules_cuda//cuda:archs='compute_75:sm_75;compute_86:sm_86,compute_86;compute_120:sm_120,compute_120'

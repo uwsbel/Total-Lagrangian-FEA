@@ -1,0 +1,82 @@
+load("@rules_cc//cc:defs.bzl", "cc_binary")
+load("@rules_cuda//cuda:defs.bzl", "cuda_library")
+
+package(default_visibility = ["//visibility:public"])
+
+cuda_library(
+    name = "prescribed_shake",
+    srcs = ["prescribed_shake.cu"],
+    hdrs = ["prescribed_shake.h"],
+    copts = ["--std=c++17"],
+    linkopts = ["-lcudart"],
+)
+
+cuda_library(
+    name = "multiitem_collision_kernels",
+    srcs = ["multiitem_collision_kernels.cu"],
+    hdrs = ["multiitem_collision_kernels.h"],
+    copts = ["--std=c++17"],
+    linkopts = ["-lcudart"],
+)
+
+cc_binary(
+    name = "test_vase",
+    srcs = ["test_vase.cc"],
+    copts = ["--std=c++17"],
+    linkopts = [
+        "-L/usr/local/cuda/lib64",
+        "-lnvrtc",
+        "-lcuda",
+        "-lcublas",
+        "-lcusparse",
+        "-lcudart",
+        "-lcudss",
+    ],
+    data = [
+        "//:data_meshes",
+    ],
+    deps = [
+        ":prescribed_shake",
+        "//lib_src/collision:deme_mesh_collision_system",
+        "//lib_src/elements:FEAT10Data",
+        "//lib_src/solvers:solvers_syncednewton",
+        "//lib_utils:cpu_utils",
+        "//lib_utils:cuda_utils",
+        "//lib_utils:mesh_manager",
+        "//lib_utils:surface_trimesh_extract",
+        "//lib_utils:visualization_utils",
+        "@eigen//:eigen",
+    ],
+)
+
+cc_binary(
+    name = "test_multiitem_drop",
+    srcs = ["test_multiitem_drop.cc"],
+    copts = ["--std=c++17"],
+    linkopts = [
+        "-L/usr/local/cuda/lib64",
+        "-lnvrtc",
+        "-lcuda",
+        "-lcublas",
+        "-lcusparse",
+        "-lcudart",
+        "-lcudss",
+    ],
+    data = [
+        "//:data_meshes",
+    ],
+    deps = [
+        ":multiitem_collision_kernels",
+        "//lib_src/collision:deme_mesh_collision_system",
+        "//lib_src/elements:ANCF3443Data",
+        "//lib_src/elements:FEAT10Data",
+        "//lib_src/solvers:multi_element_newton",
+        "//lib_src/solvers:multi_element_problem",
+        "//lib_utils:cpu_utils",
+        "//lib_utils:cuda_utils",
+        "//lib_utils:mesh_manager",
+        "//lib_utils:surface_trimesh_extract",
+        "//lib_utils:visualization_utils",
+        "@eigen//:eigen",
+    ],
+)

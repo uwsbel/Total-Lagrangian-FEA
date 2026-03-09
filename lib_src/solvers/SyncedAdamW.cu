@@ -143,13 +143,15 @@ __global__ void one_step_adamw_kernel_impl(ElementType *d_data,
         t                        = 1.0;
       }
 
-      double norm_g0 = -1.0;
-      for (int inner_iter = 0; inner_iter < d_adamw_solver->solver_max_inner();
-           inner_iter++) {
+      const int max_inner = d_adamw_solver->solver_max_inner();
+      double norm_g0      = -1.0;
+      for (int inner_iter = 0; inner_iter < max_inner; inner_iter++) {
         grid.sync();
 
         if (*d_adamw_solver->inner_flag() == 0) {
-          if (tid == 0 && inner_iter % conv_check_interval == 0) {
+          if (tid == 0 &&
+              (inner_iter % conv_check_interval == 0 ||
+               inner_iter == max_inner - 1)) {
             printf("outer iter: %d, inner iter: %d\n", outer_iter, inner_iter);
           }
 
@@ -241,7 +243,9 @@ __global__ void one_step_adamw_kernel_impl(ElementType *d_data,
           grid.sync();
 
           // Check convergence
-          if (tid == 0 && inner_iter % conv_check_interval == 0) {
+          if (tid == 0 &&
+              (inner_iter % conv_check_interval == 0 ||
+               inner_iter == max_inner - 1)) {
             double norm_g = 0.0;
             for (int i = 0; i < 3 * d_adamw_solver->get_n_coef(); i++) {
               norm_g += d_adamw_solver->g()(i) * d_adamw_solver->g()(i);

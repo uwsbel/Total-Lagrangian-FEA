@@ -594,6 +594,75 @@ void ANCF3443_generate_beam_coordinates(int n_beam, Eigen::VectorXd &x12,
   }
 }
 
+void ANCF3443_generate_shell_coordinates(double x_size, double y_size,
+                                         int x_resolution, int y_resolution,
+                                         Eigen::VectorXd &x12,
+                                         Eigen::VectorXd &y12,
+                                         Eigen::VectorXd &z12,
+                                         Eigen::MatrixXi &element_connectivity) {
+  if (!(x_size > 0.0) || !(y_size > 0.0)) {
+    throw std::runtime_error(
+        "ANCF3443_generate_shell_coordinates: x_size and y_size must be > 0.");
+  }
+  if (x_resolution <= 0 || y_resolution <= 0) {
+    throw std::runtime_error(
+        "ANCF3443_generate_shell_coordinates: x_resolution and y_resolution "
+        "must be > 0.");
+  }
+
+  const int nx = x_resolution;
+  const int ny = y_resolution;
+  const int n_nodes = (nx + 1) * (ny + 1);
+  const int n_dof   = n_nodes * 4;
+
+  x12.resize(n_dof);
+  y12.resize(n_dof);
+  z12.resize(n_dof);
+  x12.setZero();
+  y12.setZero();
+  z12.setZero();
+
+  const double dx = x_size / static_cast<double>(nx);
+  const double dy = y_size / static_cast<double>(ny);
+
+  auto node_index = [nx](int ix, int iy) { return iy * (nx + 1) + ix; };
+
+  for (int iy = 0; iy <= ny; ++iy) {
+    for (int ix = 0; ix <= nx; ++ix) {
+      const int node = node_index(ix, iy);
+      const int base = node * 4;
+      const double x = static_cast<double>(ix) * dx;
+      const double y = static_cast<double>(iy) * dy;
+
+      // Position coefficient.
+      x12(base + 0) = x;
+      y12(base + 0) = y;
+      z12(base + 0) = 0.0;
+
+      // Directors (initialized to identity, matching the beam generator).
+      x12(base + 1) = 1.0;
+      y12(base + 2) = 1.0;
+      z12(base + 3) = 1.0;
+    }
+  }
+
+  const int n_elem = nx * ny;
+  element_connectivity.resize(n_elem, 4);
+  for (int ey = 0; ey < ny; ++ey) {
+    for (int ex = 0; ex < nx; ++ex) {
+      const int e = ey * nx + ex;
+      const int n0 = node_index(ex, ey);
+      const int n1 = node_index(ex + 1, ey);
+      const int n2 = node_index(ex + 1, ey + 1);
+      const int n3 = node_index(ex, ey + 1);
+      element_connectivity(e, 0) = n0;
+      element_connectivity(e, 1) = n1;
+      element_connectivity(e, 2) = n2;
+      element_connectivity(e, 3) = n3;
+    }
+  }
+}
+
 void ANCF3243_calculate_offsets(int n_beam, Eigen::VectorXi &offset_start,
                                 Eigen::VectorXi &offset_end) {
   offset_start.resize(n_beam);
@@ -710,6 +779,19 @@ int FEAT10_read_elements(const std::string &filename,
   elements.resize(n_elements, 10);
   elements.setZero();
 
+  // Detect element node ordering convention (TetGen vs already-standard).
+  // This project historically assumed TetGen's T10 ordering and remapped it to
+  // the "standard" ordering used by the FEAT10 element implementation.
+  //
+  // Some meshes (e.g., not produced by TetGen) may already be in the standard
+  // order. Remapping those will scramble the midside nodes, producing large
+  // spurious stresses at the reference configuration and often NaNs in the
+  // Newton solve.
+  //
+  // We heuristically detect the ordering by checking whether midside nodes are
+  // near the midpoint of their corresponding edge for a small element sample.
+  bool file_is_tetgen_order = true;  // default (backward compatible)
+
   // First pass: find minimum elem_id and node_id
   int min_elem_id = INT_MAX, min_node_id = INT_MAX;
   struct ElemData {
@@ -735,13 +817,131 @@ int FEAT10_read_elements(const std::string &filename,
     elem_data.push_back({elem_id, node_ids});
   }
 
+  // Try to load the companion .node file to detect ordering.
+  // If unavailable, fall back to the historical behavior (TetGen remap).
+  {
+    std::string node_filename = filename;
+    const std::string ele_ext = ".ele";
+    const std::string node_ext = ".node";
+    if (node_filename.size() >= ele_ext.size() &&
+        node_filename.compare(node_filename.size() - ele_ext.size(),
+                              ele_ext.size(), ele_ext) == 0) {
+      node_filename.replace(node_filename.size() - ele_ext.size(),
+                            ele_ext.size(), node_ext);
+    }
+
+    Eigen::MatrixXd nodes;
+    const int n_nodes = FEAT10_read_nodes(node_filename, nodes);
+    if (n_nodes > 0 && nodes.rows() == n_nodes && nodes.cols() >= 3 &&
+        !elem_data.empty()) {
+      // Edge definitions relative to the 4 vertices:
+      // - TetGen mid-node order: (2-3), (0-3), (0-1), (1-2), (1-3), (0-2)
+      // - Standard mid-node order: (0-1), (1-2), (0-2), (0-3), (1-3), (2-3)
+      const int tet_edges[6][2] = {
+          {2, 3}, {0, 3}, {0, 1}, {1, 2}, {1, 3}, {0, 2}};
+      const int std_edges[6][2] = {
+          {0, 1}, {1, 2}, {0, 2}, {0, 3}, {1, 3}, {2, 3}};
+
+      const int max_check =
+          std::min<int>(static_cast<int>(elem_data.size()), 200);
+      double err_tet_sum = 0.0;
+      double err_std_sum = 0.0;
+      int n_mid_checked  = 0;
+
+      const int node_offset = (min_node_id == 0 ? 0 : 1);
+
+      for (int ei = 0; ei < max_check; ++ei) {
+        const auto &ids = elem_data[static_cast<size_t>(ei)].node_ids;
+        if (static_cast<int>(ids.size()) != 10)
+          continue;
+
+        int v[4];
+        int m[6];
+        for (int j = 0; j < 4; ++j)
+          v[j] = ids[static_cast<size_t>(j)] - node_offset;
+        for (int j = 0; j < 6; ++j)
+          m[j] = ids[static_cast<size_t>(4 + j)] - node_offset;
+
+        bool ok = true;
+        for (int j = 0; j < 4; ++j) {
+          if (v[j] < 0 || v[j] >= n_nodes) {
+            ok = false;
+            break;
+          }
+        }
+        if (!ok)
+          continue;
+
+        for (int j = 0; j < 6; ++j) {
+          if (m[j] < 0 || m[j] >= n_nodes) {
+            ok = false;
+            break;
+          }
+        }
+        if (!ok)
+          continue;
+
+        for (int j = 0; j < 6; ++j) {
+          const int ta0 = tet_edges[j][0];
+          const int ta1 = tet_edges[j][1];
+          const int sa0 = std_edges[j][0];
+          const int sa1 = std_edges[j][1];
+
+          const double mid_tet_x =
+              0.5 * (nodes(v[ta0], 0) + nodes(v[ta1], 0));
+          const double mid_tet_y =
+              0.5 * (nodes(v[ta0], 1) + nodes(v[ta1], 1));
+          const double mid_tet_z =
+              0.5 * (nodes(v[ta0], 2) + nodes(v[ta1], 2));
+
+          const double mid_std_x =
+              0.5 * (nodes(v[sa0], 0) + nodes(v[sa1], 0));
+          const double mid_std_y =
+              0.5 * (nodes(v[sa0], 1) + nodes(v[sa1], 1));
+          const double mid_std_z =
+              0.5 * (nodes(v[sa0], 2) + nodes(v[sa1], 2));
+
+          const double dx = nodes(m[j], 0);
+          const double dy = nodes(m[j], 1);
+          const double dz = nodes(m[j], 2);
+
+          const double ex_t = dx - mid_tet_x;
+          const double ey_t = dy - mid_tet_y;
+          const double ez_t = dz - mid_tet_z;
+          const double ex_s = dx - mid_std_x;
+          const double ey_s = dy - mid_std_y;
+          const double ez_s = dz - mid_std_z;
+
+          err_tet_sum += std::sqrt(ex_t * ex_t + ey_t * ey_t + ez_t * ez_t);
+          err_std_sum += std::sqrt(ex_s * ex_s + ey_s * ey_s + ez_s * ez_s);
+          ++n_mid_checked;
+        }
+      }
+
+      if (n_mid_checked > 0) {
+        const double mean_tet = err_tet_sum / static_cast<double>(n_mid_checked);
+        const double mean_std = err_std_sum / static_cast<double>(n_mid_checked);
+        file_is_tetgen_order   = (mean_tet <= mean_std);
+        std::cout << "FEAT10 .ele order detected: "
+                  << (file_is_tetgen_order ? "TetGen" : "Standard")
+                  << " (mean edge-midpoint error tetgen=" << std::scientific
+                  << mean_tet << ", standard=" << mean_std << ")"
+                  << std::endl;
+      }
+    }
+  }
+
   // Second pass: fill elements matrix
   for (const auto &ed : elem_data) {
     Eigen::VectorXi tetgen_elem(10), standard_elem(10);
     for (int j = 0; j < 10; j++)
       tetgen_elem(j) =
           ed.node_ids[j] - (min_node_id == 0 ? 0 : 1);  // adaptive offset
-    FEAT10_remap_tetgen_indices(tetgen_elem, standard_elem);
+    if (file_is_tetgen_order) {
+      FEAT10_remap_tetgen_indices(tetgen_elem, standard_elem);
+    } else {
+      standard_elem = tetgen_elem;
+    }
     int elem_idx = ed.elem_id - (min_elem_id == 0 ? 0 : 1);  // adaptive offset
     if (elem_idx >= 0 && elem_idx < n_elements) {
       for (int j = 0; j < 10; j++)

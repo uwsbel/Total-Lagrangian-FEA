@@ -328,7 +328,7 @@ int main(int argc, char** argv) {
 
   // Note: very large rho can make the KKT/Hessian ill-conditioned and trigger
   // NaNs/overflow. Start moderate and increase only if needed.
-  SyncedNewtonParams params = {1e-4, 0.0, 1e-6, 1e12, 10, 10, opt.dt};
+  SyncedNewtonParams params = {1e-4, 0.0, 1e-6, 1e12, 10, 10, opt.dt, false};
   SyncedNewtonSolver solver(&data, data.get_n_constraint());
   solver.Setup();
   solver.SetParameters(&params);

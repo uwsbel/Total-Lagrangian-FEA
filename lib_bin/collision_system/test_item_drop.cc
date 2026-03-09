@@ -476,7 +476,7 @@ int main(int argc, char** argv) {
   // =========================================================================
   // Solver setup
   // =========================================================================
-  SyncedNewtonParams params = {1e-4, 0.0, 1e-6, 1e12, 3, 10, dt};
+  SyncedNewtonParams params = {1e-4, 0.0, 1e-6, 1e12, 3, 10, dt, false};
   auto newton_solver        = std::make_unique<SyncedNewtonSolver>(
       &gpu_t10_data, gpu_t10_data.get_n_constraint());
   newton_solver->Setup();
