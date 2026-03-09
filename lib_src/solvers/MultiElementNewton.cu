@@ -99,6 +99,7 @@ void MultiElementNewtonSolver::SetParameters(void* params) {
   block_params.max_outer  = params_.max_outer;
   block_params.max_inner  = params_.max_inner;
   block_params.time_step  = params_.time_step;
+  block_params.enable_line_search = params_.enable_line_search;
 
   for (auto& solver : block_solvers_) {
     solver->SetParameters(&block_params);

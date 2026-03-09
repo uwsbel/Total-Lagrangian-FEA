@@ -630,13 +630,14 @@ int main(int argc, char** argv) {
 
   MultiElementNewtonSolver solver(&problem);
   MultiElementNewtonParams params;
-  params.inner_atol = 1e-4;
-  params.inner_rtol = 1e-4;
-  params.outer_tol  = 1e-5;
-  params.rho        = 1e12;
-  params.max_outer  = 3;
-  params.max_inner  = 10;
-  params.time_step  = dt;
+  params.inner_atol         = 1e-4;
+  params.inner_rtol         = 1e-4;
+  params.outer_tol          = 1e-5;
+  params.enable_line_search = true;
+  params.rho                = 1e12;
+  params.max_outer          = 3;
+  params.max_inner          = 10;
+  params.time_step          = dt;
   solver.SetParameters(&params);
   solver.Setup();
 

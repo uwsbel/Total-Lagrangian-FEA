@@ -447,9 +447,10 @@ int main(int argc, char** argv) {
 
   switch (opt.solver) {
     case SolverKind::kNewton: {
-      SyncedNewtonParams params = {1e-4, 1e-4, 1e-4, 1e14, 5, 10, opt.dt};
+      SyncedNewtonParams params = {1e-4, 1e-4, 1e-4, 1e14, 5, 10, opt.dt,
+                                   false};
       if (opt.res == 8 || opt.res == 16 || opt.res == 32) {
-        params = {1e-3, 1e-3, 1e-3, 1e14, 5, 10, opt.dt};
+        params = {1e-3, 1e-3, 1e-3, 1e14, 5, 10, opt.dt, false};
       }
       SyncedNewtonSolver solver(&data, data.get_n_constraint());
       solver.Setup();

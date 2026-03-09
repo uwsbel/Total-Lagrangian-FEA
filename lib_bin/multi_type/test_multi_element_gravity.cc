@@ -274,14 +274,14 @@ int main(int argc, char** argv) {
   // =========================================================================
   // Setup solvers
   // =========================================================================
-  SyncedNewtonParams dragon_params = {1e-4, 0.0, 1e-4, 1e12, 3, 5, dt};
+  SyncedNewtonParams dragon_params = {1e-4, 0.0, 1e-4, 1e12, 3, 5, dt, false};
   auto dragon_solver = std::make_unique<SyncedNewtonSolver>(
       &gpu_dragon, dragon_n_constraints);
   dragon_solver->Setup();
   dragon_solver->SetParameters(&dragon_params);
   dragon_solver->AnalyzeHessianSparsity();
 
-  SyncedNewtonParams net_params = {1e-4, 0.0, 1e-4, 1e12, 3, 5, dt};
+  SyncedNewtonParams net_params = {1e-4, 0.0, 1e-4, 1e12, 3, 5, dt, false};
   SyncedNewtonSolver net_solver(&gpu_net, gpu_net.get_n_constraint());
   net_solver.Setup();
   net_solver.SetParameters(&net_params);

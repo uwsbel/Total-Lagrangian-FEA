@@ -59,7 +59,6 @@
 #include "../../lib_utils/quadrature_utils.h"
 #include "../../lib_utils/surface_trimesh_extract.h"
 #include "../../lib_utils/visualization_utils.h"
-
 #include "prescribed_shake.h"
 
 // ============================================================================
@@ -358,7 +357,7 @@ int main(int argc, char** argv) {
   // =========================================================================
   // Newton solver
   // =========================================================================
-  SyncedNewtonParams params = {1e-3, 0.0, 1e-5, 1e12, 3, 10, dt};
+  SyncedNewtonParams params = {1e-3, 0.0, 1e-5, 1e12, 3, 10, dt, false};
   SyncedNewtonSolver newton(&gpu_t10_data, gpu_t10_data.get_n_constraint());
   newton.Setup();
   newton.SetParameters(&params);
@@ -473,10 +472,9 @@ int main(int argc, char** argv) {
       }
 
       const double delta_dx = dx - shake_dx_prev;
-      PrescribedShake::OffsetNodesAndTargets(gpu_t10_data.GetX12DevicePtr(),
-                                             gpu_t10_data.GetX12JacDevicePtr(),
-                                             d_fixed_node_ids, n_fixed,
-                                             delta_dx);
+      PrescribedShake::OffsetNodesAndTargets(
+          gpu_t10_data.GetX12DevicePtr(), gpu_t10_data.GetX12JacDevicePtr(),
+          d_fixed_node_ids, n_fixed, delta_dx);
       shake_dx_prev = dx;
     }
 

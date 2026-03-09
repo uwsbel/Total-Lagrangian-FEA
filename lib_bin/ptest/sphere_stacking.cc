@@ -464,7 +464,7 @@ int main(int argc, char** argv) {
   // =========================================================================
   // Initialize Newton solver
   // =========================================================================
-  SyncedNewtonParams params = {1e-6, 0.0, 1e-6, 1e12, 3, 10, dt};
+  SyncedNewtonParams params = {1e-6, 0.0, 1e-6, 1e12, 3, 10, dt, false};
   SyncedNewtonSolver solver(&gpu_t10_data, gpu_t10_data.get_n_constraint());
   solver.Setup();
   solver.SetParameters(&params);

@@ -30,6 +30,7 @@ struct MultiElementNewtonParams {
   int max_outer      = 10;
   int max_inner      = 100;
   double time_step   = 1e-4;
+  bool enable_line_search = false;
 };
 
 // Multi-element Newton solver using block-diagonal Jacobi approach.

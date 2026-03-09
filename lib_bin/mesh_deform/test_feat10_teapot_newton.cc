@@ -126,7 +126,7 @@ int main() {
   gpu_t10_data.CalcInternalForce();
 
   // Newton solve
-  SyncedNewtonParams params = {1e-4, 1e-4, 1e-4, 1e14, 5, 10, 5e-4};
+  SyncedNewtonParams params = {1e-4, 1e-4, 1e-4, 1e14, 5, 10, 5e-4, false};
   SyncedNewtonSolver solver(&gpu_t10_data, gpu_t10_data.get_n_constraint());
   solver.Setup();
   solver.SetParameters(&params);
