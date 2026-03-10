@@ -266,6 +266,25 @@ __global__ void calc_p_kernel(GPU_ANCF3443_Data *d_data) {
   compute_p(elem_idx, qp_idx, d_data, nullptr, 0.0);
 }
 
+__global__ void compute_von_mises_kernel(GPU_ANCF3443_Data *d_data) {
+  int elem_idx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (elem_idx >= d_data->gpu_n_beam()) return;
+  compute_element_von_mises(elem_idx, d_data);
+}
+
+void GPU_ANCF3443_Data::ComputeVonMises() {
+  int threads = 128;
+  int blocks  = (n_beam + threads - 1) / threads;
+  compute_von_mises_kernel<<<blocks, threads>>>(d_data);
+  cudaDeviceSynchronize();
+}
+
+void GPU_ANCF3443_Data::RetrieveVonMisesToCPU(Eigen::VectorXd &vm) {
+  vm.resize(n_beam);
+  HANDLE_ERROR(cudaMemcpy(vm.data(), d_vm_stress, n_beam * sizeof(double),
+                           cudaMemcpyDeviceToHost));
+}
+
 void GPU_ANCF3443_Data::CalcP() {
   int threads = 128;
   int blocks  = (n_beam * Quadrature::N_TOTAL_QP_4_4_3 + threads - 1) / threads;

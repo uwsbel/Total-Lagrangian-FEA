@@ -411,6 +411,65 @@ __device__ __forceinline__ void compute_p(int elem_idx, int qp_idx,
   // clang-format on
 }
 
+__device__ __forceinline__ void compute_element_von_mises(
+    int elem_idx, GPU_ANCF3243_Data *d_data) {
+  double vm_sum = 0.0;
+
+  // clang-format off
+  #pragma unroll
+  for (int qp_idx = 0; qp_idx < Quadrature::N_TOTAL_QP_3_2_2; qp_idx++) {
+    // Load deformation gradient F and first Piola-Kirchhoff stress P
+    double F[3][3], P[3][3];
+    #pragma unroll
+    for (int i = 0; i < 3; i++) {
+      #pragma unroll
+      for (int j = 0; j < 3; j++) {
+        F[i][j] = d_data->F(elem_idx, qp_idx)(i, j);
+        P[i][j] = d_data->P(elem_idx, qp_idx)(i, j);
+      }
+    }
+
+    // det(F)
+    double J = F[0][0] * (F[1][1] * F[2][2] - F[1][2] * F[2][1])
+             - F[0][1] * (F[1][0] * F[2][2] - F[1][2] * F[2][0])
+             + F[0][2] * (F[1][0] * F[2][1] - F[1][1] * F[2][0]);
+
+    if (fabs(J) < 1e-12) {
+      d_data->vm_stress(elem_idx) = 0.0;
+      return;
+    }
+
+    // Cauchy stress: sigma = (1/J) * P * F^T
+    double sigma[3][3] = {{0.0}};
+    double inv_J = 1.0 / J;
+    #pragma unroll
+    for (int i = 0; i < 3; i++) {
+      #pragma unroll
+      for (int j = 0; j < 3; j++) {
+        #pragma unroll
+        for (int k = 0; k < 3; k++) {
+          sigma[i][j] += P[i][k] * F[j][k];
+        }
+        sigma[i][j] *= inv_J;
+      }
+    }
+
+    // Von Mises stress from Cauchy components
+    double s00 = sigma[0][0], s11 = sigma[1][1], s22 = sigma[2][2];
+    double s01 = sigma[0][1], s02 = sigma[0][2], s12 = sigma[1][2];
+    double vm2 = 0.5 * ((s00 - s11) * (s00 - s11) +
+                         (s11 - s22) * (s11 - s22) +
+                         (s22 - s00) * (s22 - s00)) +
+                 3.0 * (s01 * s01 + s02 * s02 + s12 * s12);
+    vm_sum += sqrt(fabs(vm2));
+  }
+  // clang-format on
+
+  // Store average over quadrature points
+  d_data->vm_stress(elem_idx) =
+      vm_sum / static_cast<double>(Quadrature::N_TOTAL_QP_3_2_2);
+}
+
 __device__ __forceinline__ void compute_internal_force(
     int elem_idx, int node_idx, GPU_ANCF3243_Data *d_data) {
   double f_i[3] = {0};
