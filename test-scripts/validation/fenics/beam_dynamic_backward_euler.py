@@ -2,6 +2,7 @@
 Nonlinear 3D beam dynamic analysis using Backward Euler time integration.
 Matches C++ implementation: uses nodal forces, Backward Euler, and same tolerances.
 """
+import argparse
 import os
 import sys
 import numpy as np
@@ -11,14 +12,15 @@ from mpi4py import MPI
 from dolfinx import fem, default_scalar_type
 from dolfinx.fem.petsc import NonlinearProblem, assemble_residual
 from petsc4py import PETSc
-from tetgen_mesh_loader import load_tetgen_mesh_from_files, write_vtk_frame
+from tetgen_mesh_loader import load_tetgen_mesh_from_files
+from dolfinx.io import VTKFile
 
 rank = MPI.COMM_WORLD.rank
 
 # ---------------------------------------------------------------------------
 # FLAGS
 # ---------------------------------------------------------------------------
-WRITE_VTK = True
+WRITE_VTK = False
 DEBUG = False
 
 # Line-buffer stdout on rank 0 so prints show under MPI (stdout is not a TTY).
@@ -29,7 +31,10 @@ if rank == 0:
 # GEOMETRY AND MESH SETUP
 # ============================================================================
 # Resolution selection: 0, 2, 4, 8, 16
-RES = 4
+parser = argparse.ArgumentParser()
+parser.add_argument("--res", type=int, default=0)
+args = parser.parse_args()
+RES = args.res
 
 # Construct mesh file paths
 script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -285,6 +290,7 @@ nu = default_scalar_type(nu_val)
 # Function space setup for dynamics
 v = ufl.TestFunction(V)
 u = fem.Function(V)  # displacement field (unknown)
+u.name = "displacement"
 u_old = fem.Function(V)  # Previous displacement
 v_old = fem.Function(V)  # Previous velocity
 
@@ -444,12 +450,12 @@ if rank == 0:
 # VTK AND CSV OUTPUT
 # ============================================================================
 root_output_dir = os.path.join(project_root, "output")
-vtk_output_dir = os.path.join(root_output_dir, "beam_fenics_vtk")
-if rank == 0:
-    os.makedirs(root_output_dir, exist_ok=True)
-    if WRITE_VTK:
-        os.makedirs(vtk_output_dir, exist_ok=True)
-output_frame = 0
+vtk_output_dir = os.path.join(root_output_dir, "beam_fenics_vtu")
+os.makedirs(vtk_output_dir, exist_ok=True)
+vtk_file = None
+if WRITE_VTK:
+    vtk_file = VTKFile(domain.comm,
+                       os.path.join(vtk_output_dir, "beam_fenics.pvd"), "w")
 
 # ============================================================================
 # TIME STEPPING LOOP
@@ -480,11 +486,9 @@ for n in range(n_steps):
     assert converged > 0, f"Newton solver did not converge (reason {converged})."
     u.x.scatter_forward()
 
-    # VTK output when WRITE_VTK is True
-    if WRITE_VTK and n % vtk_interval == 0:
-        vtk_path = os.path.join(vtk_output_dir, f"beam_fenics_frame_{output_frame:04d}.vtk")
-        write_vtk_frame(domain, V, u, vtk_path)
-        output_frame += 1
+    # VTK output
+    if vtk_file is not None and n % vtk_interval == 0:
+        vtk_file.write_function([u], t)
     
     # Update velocity using Backward Euler
     v_new = (u.x.array - u_old.x.array) / dt
@@ -526,6 +530,9 @@ for n in range(n_steps):
             print(f"Step {n}: tracked node position = ({x_pos:.17f}, {y_pos:.17f}, {z_pos:.17f})")
         print(f"  Time {t:.4f}, Iterations {num_its}")
         print(f"  Max displacement: {max_disp:.6e}, Max velocity: {max_vel:.6e}")
+
+if vtk_file is not None:
+    vtk_file.close()
 
 if rank == 0:
     print("\nDYNAMIC ANALYSIS COMPLETE")

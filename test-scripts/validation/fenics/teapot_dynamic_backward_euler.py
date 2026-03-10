@@ -12,14 +12,15 @@ from mpi4py import MPI
 from dolfinx import fem, default_scalar_type
 from dolfinx.fem.petsc import NonlinearProblem, assemble_residual
 from petsc4py import PETSc
-from tetgen_mesh_loader import load_tetgen_mesh_from_files, write_vtk_frame
+from tetgen_mesh_loader import load_tetgen_mesh_from_files
+from dolfinx.io import VTKFile
 
 rank = MPI.COMM_WORLD.rank
 
 # ---------------------------------------------------------------------------
 # FLAGS
 # ---------------------------------------------------------------------------
-WRITE_VTK = True
+WRITE_VTK = False
 DEBUG = False
 
 # Line-buffer stdout on rank 0 so prints show under MPI (stdout is not a TTY).
@@ -183,6 +184,7 @@ if rank == 0:
 # ============================================================================
 v_test = ufl.TestFunction(V)
 u      = fem.Function(V)   # current displacement (unknown)
+u.name = "displacement"
 u_old  = fem.Function(V)   # previous displacement
 v_old  = fem.Function(V)   # previous velocity
 B      = fem.Constant(domain, default_scalar_type((0, 0, 0)))
@@ -273,12 +275,12 @@ if rank == 0:
 # VTK AND CSV OUTPUT
 # ============================================================================
 root_output_dir = os.path.join(project_root, "output")
-vtk_output_dir = os.path.join(root_output_dir, "teapot_fenics_vtk")
-if rank == 0:
-    os.makedirs(root_output_dir, exist_ok=True)
-    if WRITE_VTK:
-        os.makedirs(vtk_output_dir, exist_ok=True)
-output_frame = 0
+vtk_output_dir = os.path.join(root_output_dir, "teapot_fenics_vtu")
+os.makedirs(vtk_output_dir, exist_ok=True)
+vtk_file = None
+if WRITE_VTK:
+    vtk_file = VTKFile(domain.comm,
+                       os.path.join(vtk_output_dir, "teapot_fenics.pvd"), "w")
 
 # ============================================================================
 # TIME STEPPING LOOP
@@ -312,10 +314,8 @@ for n in range(n_steps):
     u.x.scatter_forward()
 
     # VTK output
-    if WRITE_VTK and n % vtk_interval == 0:
-        vtk_path = os.path.join(vtk_output_dir, f"teapot_fenics_frame_{output_frame:04d}.vtk")
-        write_vtk_frame(domain, V, u, vtk_path)
-        output_frame += 1
+    if vtk_file is not None and n % vtk_interval == 0:
+        vtk_file.write_function([u], t)
 
     # Update velocity (Backward Euler)
     v_new = (u.x.array - u_old.x.array) / dt_val
@@ -361,6 +361,9 @@ for n in range(n_steps):
             print(f"Step {n:4d}: nodeA=({row[0]:.6f}, {row[1]:.6f}, {row[2]:.6f})  "
                   f"nodeB=({row[3]:.6f}, {row[4]:.6f}, {row[5]:.6f})  "
                   f"max_disp={max_disp:.4e}  iters={num_its}")
+
+if vtk_file is not None:
+    vtk_file.close()
 
 if rank == 0:
     print("\nDYNAMIC ANALYSIS COMPLETE")

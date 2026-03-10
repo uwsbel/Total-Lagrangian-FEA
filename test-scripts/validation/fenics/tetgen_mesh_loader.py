@@ -140,6 +140,11 @@ def load_tetgen_mesh_from_files(node_file, ele_file, tetgen_order=True):
 def write_vtk_frame(domain, V, u, filename):
     """Write deformed T10 mesh as ASCII VTK (matches C++ demo format).
 
+    .. deprecated::
+        Use ``dolfinx.io.VTKFile`` instead, which produces modern .pvd/.vtu
+        output, handles MPI and node reordering internally, and writes
+        displacement as a proper field.
+
     Deformed position = reference coord + displacement, baked into geometry.
     VTK cell type 24 = VTK_QUADRATIC_TETRA (10-node quadratic tetrahedron).
     Safe for MPI runs: gathers mesh to rank-0 before writing.
