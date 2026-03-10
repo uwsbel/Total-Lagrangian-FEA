@@ -521,7 +521,6 @@ int main(int argc, char** argv) {
       std::ostringstream fn;
       fn << "output/vase_drop/mesh_" << std::setfill('0') << std::setw(4)
          << step << ".vtu";
-      gpu_t10_data.ComputeVonMises();
       gpu_t10_data.WriteOutputVTU(fn.str());
     }
 

@@ -193,7 +193,6 @@ int main() {
   for (int i = 0; i < 20000; i++) {
     solver.Solve();
     if (i % output_interval == 0) {
-      gpu_t10_data.ComputeVonMises();
       gpu_t10_data.WriteOutputVTU("output/bunny_adamw_step_" +
                                   std::to_string(output_frame) + ".vtu");
       output_frame++;

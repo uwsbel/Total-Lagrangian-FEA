@@ -784,6 +784,8 @@ void GPU_FEAT10_Data::RetrieveVonMisesToCPU(Eigen::VectorXd &vm) {
 }
 
 void GPU_FEAT10_Data::WriteOutputVTU(const std::string &filename) {
+  ComputeVonMises();
+
   Eigen::VectorXd x12, y12, z12;
   this->RetrievePositionToCPU(x12, y12, z12);
 
