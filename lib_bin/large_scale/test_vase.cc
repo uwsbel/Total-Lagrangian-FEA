@@ -58,7 +58,6 @@
 #include "../../lib_utils/mesh_manager.h"
 #include "../../lib_utils/quadrature_utils.h"
 #include "../../lib_utils/surface_trimesh_extract.h"
-#include "../../lib_utils/visualization_utils.h"
 #include "prescribed_shake.h"
 
 // ============================================================================
@@ -149,7 +148,6 @@ static constexpr double contact_stiffness =
 static constexpr double contact_cor =
     0.1;  // near-zero CoR: highly inelastic (foam absorbs impact)
 
-using ANCFCPUUtils::VisualizationUtils;
 
 static void CheckCublas(cublasStatus_t status, const char* what) {
   if (status != CUBLAS_STATUS_SUCCESS) {
@@ -520,25 +518,11 @@ int main(int argc, char** argv) {
 
     // 5) Export VTU
     if (exp_interval > 0 && step % exp_interval == 0) {
-      Eigen::VectorXd xc, yc, zc;
-      gpu_t10_data.RetrievePositionToCPU(xc, yc, zc);
-
-      Eigen::MatrixXd cur_nodes(n_nodes, 3);
-      Eigen::VectorXd displacement(n_nodes * 3);
-      for (int i = 0; i < n_nodes; ++i) {
-        cur_nodes(i, 0)         = xc(i);
-        cur_nodes(i, 1)         = yc(i);
-        cur_nodes(i, 2)         = zc(i);
-        displacement(3 * i + 0) = xc(i) - initial_nodes(i, 0);
-        displacement(3 * i + 1) = yc(i) - initial_nodes(i, 1);
-        displacement(3 * i + 2) = zc(i) - initial_nodes(i, 2);
-      }
-
       std::ostringstream fn;
       fn << "output/vase_drop/mesh_" << std::setfill('0') << std::setw(4)
          << step << ".vtu";
-      VisualizationUtils::ExportMeshWithDisplacement(cur_nodes, elements,
-                                                     displacement, fn.str());
+      gpu_t10_data.ComputeVonMises();
+      gpu_t10_data.WriteOutputVTU(fn.str());
     }
 
     // 6) Progress report every 20 steps

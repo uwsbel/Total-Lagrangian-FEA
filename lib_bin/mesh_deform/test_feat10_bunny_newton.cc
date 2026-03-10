@@ -8,7 +8,7 @@
  * applies strong downward loads on nodes near the ears, and advances the
  * configuration with the synchronized Newton solver. It is used to stress
  * test FEAT10 internal force assembly, constraint handling, Newton
- * convergence, and VTK output under large deformations.
+ * convergence, and VTU output under large deformations.
  */
 
 #include <cuda_runtime.h>
@@ -212,7 +212,7 @@ int main() {
   solver.SetFixedSparsityPattern(
       true);  // Enable analysis reuse for fixed structure
 
-  int output_interval = 10;  // 10 vtk per seconds
+  int output_interval = 10;  // 10 vtu per seconds
   int output_frame    = 0;
 
   for (int i = 0; i < 8000; i++) {
@@ -226,8 +226,9 @@ int main() {
 
     solver.Solve();
     if (i % output_interval == 0) {
-      gpu_t10_data.WriteOutputVTK("output/bunny_newton_step_" +
-                                  std::to_string(output_frame) + ".vtk");
+      gpu_t10_data.ComputeVonMises();
+      gpu_t10_data.WriteOutputVTU("output/bunny_newton_step_" +
+                                  std::to_string(output_frame) + ".vtu");
       output_frame++;
     }
   }

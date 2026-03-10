@@ -5,6 +5,7 @@
 #include <thrust/sort.h>
 #include <thrust/unique.h>
 
+#include <cmath>
 #include <cstdlib>
 #include <fstream>
 #include <iomanip>
@@ -14,8 +15,8 @@
 /*==============================================================
  *==============================================================
  * Project: RoboDyna
- * Author:  Json Zhou
- * Email:   zzhou292@wisc.edu
+ * Author:  Json Zhou, Ganesh Arivoli
+ * Email:   zzhou292@wisc.edu, arivoli@wisc.edu
  * File:    FEAT10Data.cu
  * Brief:   Implements GPU-side data management and element kernels for
  *          10-node tetrahedral FEAT10 elements. Handles allocation,
@@ -308,6 +309,19 @@ void GPU_FEAT10_Data::CalcP() {
   int threads = 128;
   int blocks  = (n_elem * Quadrature::N_QP_T10_5 + threads - 1) / threads;
   calc_p_kernel<<<blocks, threads>>>(d_data);
+  cudaDeviceSynchronize();
+}
+
+__global__ void compute_von_mises_kernel(GPU_FEAT10_Data *d_data) {
+  int elem_idx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (elem_idx >= d_data->gpu_n_elem()) return;
+  compute_element_von_mises(elem_idx, d_data);
+}
+
+void GPU_FEAT10_Data::ComputeVonMises() {
+  int threads = 128;
+  int blocks  = (n_elem + threads - 1) / threads;
+  compute_von_mises_kernel<<<blocks, threads>>>(d_data);
   cudaDeviceSynchronize();
 }
 
@@ -723,6 +737,131 @@ void GPU_FEAT10_Data::RetrievePositionToCPU(Eigen::VectorXd &x12,
                           cudaMemcpyDeviceToHost));
   HANDLE_ERROR(cudaMemcpy(z12.data(), d_h_z12, total_nodes * sizeof(double),
                           cudaMemcpyDeviceToHost));
+}
+
+void GPU_FEAT10_Data::RetrieveReferencePositionToCPU(Eigen::VectorXd &x_ref,
+                                                     Eigen::VectorXd &y_ref,
+                                                     Eigen::VectorXd &z_ref) {
+  int total_nodes = n_coef;
+  x_ref.resize(total_nodes);
+  y_ref.resize(total_nodes);
+  z_ref.resize(total_nodes);
+
+  HANDLE_ERROR(cudaMemcpy(x_ref.data(), d_h_x12_jac,
+                           total_nodes * sizeof(double),
+                           cudaMemcpyDeviceToHost));
+  HANDLE_ERROR(cudaMemcpy(y_ref.data(), d_h_y12_jac,
+                           total_nodes * sizeof(double),
+                           cudaMemcpyDeviceToHost));
+  HANDLE_ERROR(cudaMemcpy(z_ref.data(), d_h_z12_jac,
+                           total_nodes * sizeof(double),
+                           cudaMemcpyDeviceToHost));
+}
+
+void GPU_FEAT10_Data::RetrieveVonMisesToCPU(Eigen::VectorXd &vm) {
+  vm.resize(n_elem);
+  HANDLE_ERROR(cudaMemcpy(vm.data(), d_vm_stress, n_elem * sizeof(double),
+                           cudaMemcpyDeviceToHost));
+}
+
+void GPU_FEAT10_Data::WriteOutputVTU(const std::string &filename) {
+  Eigen::VectorXd x12, y12, z12;
+  this->RetrievePositionToCPU(x12, y12, z12);
+
+  Eigen::VectorXd x_ref, y_ref, z_ref;
+  this->RetrieveReferencePositionToCPU(x_ref, y_ref, z_ref);
+
+  Eigen::MatrixXi connectivity;
+  this->RetrieveConnectivityToCPU(connectivity);
+
+  Eigen::VectorXd vm;
+  this->RetrieveVonMisesToCPU(vm);
+
+  const int n_nodes = static_cast<int>(x12.size());
+  const int n_cells = static_cast<int>(connectivity.rows());
+
+  std::ofstream out(filename);
+  out << std::scientific << std::setprecision(8);
+
+  out << "<?xml version=\"1.0\"?>\n";
+  out << "<VTKFile type=\"UnstructuredGrid\" version=\"0.1\" "
+         "byte_order=\"LittleEndian\">\n";
+  out << "<UnstructuredGrid>\n";
+  out << "<Piece NumberOfPoints=\"" << n_nodes << "\" NumberOfCells=\""
+      << n_cells << "\">\n";
+
+  // Points
+  out << "<Points>\n";
+  out << "<DataArray type=\"Float64\" NumberOfComponents=\"3\" "
+         "format=\"ascii\">\n";
+  for (int i = 0; i < n_nodes; ++i) {
+    out << x12(i) << " " << y12(i) << " " << z12(i) << "\n";
+  }
+  out << "</DataArray>\n";
+  out << "</Points>\n";
+
+  // Pre-compute displacement vectors
+  Eigen::VectorXd disp_x = x12 - x_ref;
+  Eigen::VectorXd disp_y = y12 - y_ref;
+  Eigen::VectorXd disp_z = z12 - z_ref;
+
+  // PointData
+  out << "<PointData Scalars=\"displacement_magnitude\" "
+         "Vectors=\"displacement\">\n";
+  out << "<DataArray type=\"Float64\" Name=\"displacement_magnitude\" "
+         "format=\"ascii\">\n";
+  for (int i = 0; i < n_nodes; ++i) {
+    out << std::sqrt(disp_x(i) * disp_x(i) + disp_y(i) * disp_y(i) +
+                     disp_z(i) * disp_z(i))
+        << "\n";
+  }
+  out << "</DataArray>\n";
+  out << "<DataArray type=\"Float64\" Name=\"displacement\" "
+         "NumberOfComponents=\"3\" format=\"ascii\">\n";
+  for (int i = 0; i < n_nodes; ++i) {
+    out << disp_x(i) << " " << disp_y(i) << " " << disp_z(i) << "\n";
+  }
+  out << "</DataArray>\n";
+  out << "</PointData>\n";
+
+  // CellData
+  out << "<CellData Scalars=\"von_mises_stress\">\n";
+  out << "<DataArray type=\"Float64\" Name=\"von_mises_stress\" "
+         "format=\"ascii\">\n";
+  for (int i = 0; i < n_cells; ++i) {
+    out << vm(i) << "\n";
+  }
+  out << "</DataArray>\n";
+  out << "</CellData>\n";
+
+  // Cells
+  out << "<Cells>\n";
+  out << "<DataArray type=\"Int32\" Name=\"connectivity\" format=\"ascii\">\n";
+  for (int i = 0; i < n_cells; ++i) {
+    for (int j = 0; j < Quadrature::N_NODE_T10_10; ++j) {
+      out << connectivity(i, j);
+      if (j < Quadrature::N_NODE_T10_10 - 1) out << " ";
+    }
+    out << "\n";
+  }
+  out << "</DataArray>\n";
+  out << "<DataArray type=\"Int32\" Name=\"offsets\" format=\"ascii\">\n";
+  for (int i = 0; i < n_cells; ++i) {
+    out << (i + 1) * Quadrature::N_NODE_T10_10 << "\n";
+  }
+  out << "</DataArray>\n";
+  out << "<DataArray type=\"UInt8\" Name=\"types\" format=\"ascii\">\n";
+  for (int i = 0; i < n_cells; ++i) {
+    out << "24\n";
+  }
+  out << "</DataArray>\n";
+  out << "</Cells>\n";
+
+  out << "</Piece>\n";
+  out << "</UnstructuredGrid>\n";
+  out << "</VTKFile>\n";
+
+  out.close();
 }
 
 void GPU_FEAT10_Data::SetNodalFixed(const Eigen::VectorXi &fixed_nodes) {

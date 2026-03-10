@@ -8,7 +8,7 @@
  * fixes nodes near the base, applies distributed loads on nodes above a
  * height threshold, and advances the model using the synchronized AdamW
  * solver. It is used to probe large-deformation behavior and stability of
- * the AdamW integrator on a complex solid geometry, with periodic VTK
+ * the AdamW integrator on a complex solid geometry, with periodic VTU
  * output for visualization.
  */
 
@@ -187,14 +187,15 @@ int main() {
   solver.Setup();
   solver.SetParameters(&params);
 
-  int output_interval = 100;  // 10 vtk per seconds
+  int output_interval = 100;  // 10 vtu per seconds
   int output_frame    = 0;
 
   for (int i = 0; i < 20000; i++) {
     solver.Solve();
     if (i % output_interval == 0) {
-      gpu_t10_data.WriteOutputVTK("output/bunny_adamw_step_" +
-                                  std::to_string(output_frame) + ".vtk");
+      gpu_t10_data.ComputeVonMises();
+      gpu_t10_data.WriteOutputVTU("output/bunny_adamw_step_" +
+                                  std::to_string(output_frame) + ".vtu");
       output_frame++;
     }
   }

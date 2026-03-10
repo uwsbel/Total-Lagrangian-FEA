@@ -395,6 +395,14 @@ struct GPU_FEAT10_Data : public ElementBase {
     return n_constraint;
   }
 
+  __device__ double &vm_stress(int elem_idx) {
+    return d_vm_stress[elem_idx];
+  }
+
+  __device__ double vm_stress(int elem_idx) const {
+    return d_vm_stress[elem_idx];
+  }
+
   // ======================================================
 
   __device__ int *csr_offsets() {
@@ -508,6 +516,16 @@ struct GPU_FEAT10_Data : public ElementBase {
 
   void WriteOutputVTK(const std::string &filename);
 
+  void ComputeVonMises();
+
+  void RetrieveVonMisesToCPU(Eigen::VectorXd &vm);
+
+  void RetrieveReferencePositionToCPU(Eigen::VectorXd &x_ref,
+                                      Eigen::VectorXd &y_ref,
+                                      Eigen::VectorXd &z_ref);
+
+  void WriteOutputVTU(const std::string &filename);
+
   // Constructor
   GPU_FEAT10_Data(int num_elements, int num_nodes)
       : n_elem(num_elements), n_coef(num_nodes), n_constraint(0) {
@@ -547,6 +565,7 @@ struct GPU_FEAT10_Data : public ElementBase {
         &d_Fdot, n_elem * Quadrature::N_QP_T10_5 * 3 * 3 * sizeof(double)));
     HANDLE_ERROR(cudaMalloc(
         &d_P_vis, n_elem * Quadrature::N_QP_T10_5 * 3 * 3 * sizeof(double)));
+    HANDLE_ERROR(cudaMalloc(&d_vm_stress, n_elem * sizeof(double)));
     HANDLE_ERROR(cudaMalloc(&d_f_int, n_coef * 3 * sizeof(double)));
     HANDLE_ERROR(cudaMalloc(&d_f_ext, n_coef * 3 * sizeof(double)));
 
@@ -625,6 +644,7 @@ struct GPU_FEAT10_Data : public ElementBase {
                n_elem * Quadrature::N_QP_T10_5 * 3 * 3 * sizeof(double));
     cudaMemset(d_P_vis, 0,
                n_elem * Quadrature::N_QP_T10_5 * 3 * 3 * sizeof(double));
+    cudaMemset(d_vm_stress, 0, n_elem * sizeof(double));
 
     double rho0 = 0.0;
     double nu   = 0.0;
@@ -1119,6 +1139,7 @@ struct GPU_FEAT10_Data : public ElementBase {
     HANDLE_ERROR(cudaFree(d_P));
     HANDLE_ERROR(cudaFree(d_Fdot));
     HANDLE_ERROR(cudaFree(d_P_vis));
+    HANDLE_ERROR(cudaFree(d_vm_stress));
     HANDLE_ERROR(cudaFree(d_f_int));
     HANDLE_ERROR(cudaFree(d_f_ext));
 
@@ -1202,6 +1223,9 @@ struct GPU_FEAT10_Data : public ElementBase {
   // Time-derivative of deformation gradient and viscous Piola
   double *d_Fdot;   // (n_elem, n_qp, 3, 3)
   double *d_P_vis;  // (n_elem, n_qp, 3, 3)
+
+  // Per-element von Mises stress (averaged over QPs)
+  double *d_vm_stress = nullptr;  // (n_elem)
 
   // Material properties
   double *d_E, *d_nu, *d_rho0, *d_lambda, *d_mu;
