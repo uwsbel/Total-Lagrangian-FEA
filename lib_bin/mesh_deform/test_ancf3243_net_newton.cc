@@ -471,8 +471,12 @@ int main(int argc, char** argv) {
     std::ostringstream oss;
     oss << "output/ancf3243_net/" << kVtuPrefix << "_" << std::setw(6)
         << std::setfill('0') << step << ".vtu";
+    data.ComputeVonMises();
+    Eigen::VectorXd vm;
+    data.RetrieveVonMisesToCPU(vm);
     ANCFCPUUtils::VisualizationUtils::ExportANCF3243ToVTU(
-        x12, y12, z12, mesh.element_connectivity, opt.W, opt.H, oss.str());
+        x12, y12, z12, mesh.element_connectivity, opt.W, opt.H, oss.str(),
+        &vm);
   };
 
   if (want_vtu(0)) {
