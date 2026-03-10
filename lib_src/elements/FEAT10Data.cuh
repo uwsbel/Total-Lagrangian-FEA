@@ -502,7 +502,7 @@ struct GPU_FEAT10_Data : public ElementBase {
 
   void RetrieveDeformationGradientToCPU(
       std::vector<std::vector<Eigen::MatrixXd>> &deformation_gradient)
-      override {}
+      override;
 
   void RetrievePFromFToCPU(
       std::vector<std::vector<Eigen::MatrixXd>> &p_from_F) override;

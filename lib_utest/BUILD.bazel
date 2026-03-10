@@ -101,6 +101,24 @@ cc_test(
 )
 
 cc_test(
+    name = "utest_feat10_von_mises",
+    srcs = ["utest_feat10_von_mises.cc"],
+    copts = ["--std=c++17"],
+    linkopts = [
+        "-L/usr/local/cuda/lib64",
+        "-lcusparse",
+        "-lcudart",
+    ],
+    data = ["//:data_meshes"],
+    deps = [
+        "//lib_src/elements:FEAT10Data",
+        "//lib_utils:cpu_utils",
+        "@eigen//:eigen",
+        "@googletest//:gtest_main",
+    ],
+)
+
+cc_test(
     name = "utest_feat10_cudss",
     srcs = ["utest_feat10_cudss.cc"],
     copts = ["--std=c++17"],
