@@ -124,39 +124,37 @@ f_ext_vector = f_temp.x.petsc_vec.copy()
 f_ext_vector.ghostUpdate(addv=PETSc.InsertMode.INSERT, mode=PETSc.ScatterMode.FORWARD)
 
 # ============================================================================
-# TRACKED NODE — highest-z DOF (in force region)
+# TRACKED NODE — coordinate-based matching (verified vertex node)
 # ============================================================================
 if rank == 0:
     print("\nTRACKED NODE SETUP")
 
-max_z_local = -np.inf
-tracked_node_dof = None
-tracked_node_coord = None
-tracked_node_rank = -1
+def find_dof_by_coord(dof_coords, num_owned, target, tol=1e-4):
+    """Find owned DOF index closest to target coordinate."""
+    for i, coord in enumerate(dof_coords):
+        if i < num_owned:
+            if (abs(coord[0] - target[0]) < tol and
+                abs(coord[1] - target[1]) < tol and
+                abs(coord[2] - target[2]) < tol):
+                return i, coord.copy()
+    return None, None
 
-for i, coord in enumerate(dof_coords):
-    if i < num_owned_dofs and coord[2] > max_z_local:
-        max_z_local = coord[2]
-        tracked_node_dof = i
-        tracked_node_coord = coord.copy()
-        tracked_node_rank = rank
+# Target coordinate (from TetGen .node file, 1-based index 2657)
+target = np.array([-0.02020, 0.00580, 0.83730])  # Crown vertex
 
-# Find the rank with the globally maximum z (all ranks participate in gather)
-all_max_z = domain.comm.gather(max_z_local, root=0)
+tracked_node_dof, tracked_node_coord = find_dof_by_coord(
+    dof_coords, num_owned_dofs, target)
 
+# Verify node is found exactly once across all ranks
+all_ranks = domain.comm.gather(1 if tracked_node_dof is not None else 0, root=0)
 if rank == 0:
-    global_max_z = max(all_max_z)
-    owner_rank = all_max_z.index(global_max_z)
-    print(f"Tracked node: highest-z DOF (global max z = {global_max_z:.6f})")
-    print(f"  Owned by rank: {owner_rank}")
-
-# Broadcast global max z so every rank can decide if it owns the tracked node
-global_max_z_bcast = domain.comm.bcast(
-    max(all_max_z) if rank == 0 else None, root=0
-)
-if max_z_local < global_max_z_bcast - 1e-12:
-    tracked_node_dof = None
-    tracked_node_coord = None
+    owner = next((r for r, v in enumerate(all_ranks) if v), -1)
+    print(f"Tracked node (crown):")
+    print(f"  Owner rank: {owner}")
+if tracked_node_dof is not None:
+    print(f"  DOF index: {tracked_node_dof}")
+    print(f"  Coordinates: ({tracked_node_coord[0]:.6f}, "
+          f"{tracked_node_coord[1]:.6f}, {tracked_node_coord[2]:.6f})")
 
 # ============================================================================
 # MATERIAL MODEL — SVK + Kelvin-Voigt damping
@@ -360,6 +358,7 @@ if rank == 0:
 if rank == 0 and len(node_xyz_history) > 0:
     csv_path = os.path.join(root_output_dir, "node_xyz_history_fenics_tire_svk.csv")
     with open(csv_path, 'w') as f:
+        f.write("# node: crown (idx 2657)\n")
         f.write("step,x_position,y_position,z_position\n")
         for i, (x_val, y_val, z_val) in enumerate(node_xyz_history):
             f.write(f"{i},{x_val:.17f},{y_val:.17f},{z_val:.17f}\n")

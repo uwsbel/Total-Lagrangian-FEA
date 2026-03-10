@@ -124,39 +124,39 @@ f_ext_vector = f_temp.x.petsc_vec.copy()
 f_ext_vector.ghostUpdate(addv=PETSc.InsertMode.INSERT, mode=PETSc.ScatterMode.FORWARD)
 
 # ============================================================================
-# TRACKED NODE — highest-z DOF (in force region)
+# TRACKED NODES — coordinate-based matching (verified vertex nodes)
 # ============================================================================
 if rank == 0:
     print("\nTRACKED NODE SETUP")
 
-max_z_local = -np.inf
-tracked_node_dof = None
-tracked_node_coord = None
-tracked_node_rank = -1
+def find_dof_by_coord(dof_coords, num_owned, target, tol=1e-4):
+    """Find owned DOF index closest to target coordinate."""
+    for i, coord in enumerate(dof_coords):
+        if i < num_owned:
+            if (abs(coord[0] - target[0]) < tol and
+                abs(coord[1] - target[1]) < tol and
+                abs(coord[2] - target[2]) < tol):
+                return i, coord.copy()
+    return None, None
 
-for i, coord in enumerate(dof_coords):
-    if i < num_owned_dofs and coord[2] > max_z_local:
-        max_z_local = coord[2]
-        tracked_node_dof = i
-        tracked_node_coord = coord.copy()
-        tracked_node_rank = rank
+# Target coordinates (from TetGen .node file, 1-based indices 1184 and 242)
+target_A = np.array([0.10940, 0.00000, 0.07870])      # Spout tip
+target_B = np.array([-0.000004, 0.000004, 0.10050])    # Lid knob
 
-# Find the rank with the globally maximum z
-all_max_z = domain.comm.gather(max_z_local, root=0)
+nodeA_dof, nodeA_coord = find_dof_by_coord(dof_coords, num_owned_dofs, target_A)
+nodeB_dof, nodeB_coord = find_dof_by_coord(dof_coords, num_owned_dofs, target_B)
 
-if rank == 0:
-    global_max_z = max(all_max_z)
-    owner_rank = all_max_z.index(global_max_z)
-    print(f"Tracked node: highest-z DOF (global max z = {global_max_z:.6f})")
-    print(f"  Owned by rank: {owner_rank}")
-
-# Broadcast global max z so every rank can decide if it owns the tracked node
-global_max_z_bcast = domain.comm.bcast(
-    max(all_max_z) if rank == 0 else None, root=0
-)
-if max_z_local < global_max_z_bcast - 1e-12:
-    tracked_node_dof = None
-    tracked_node_coord = None
+# Verify each node is found exactly once across all ranks
+for label, dof, coord in [("nodeA (spout)", nodeA_dof, nodeA_coord),
+                           ("nodeB (lid knob)", nodeB_dof, nodeB_coord)]:
+    all_ranks = domain.comm.gather(1 if dof is not None else 0, root=0)
+    if rank == 0:
+        owner = next((r for r, v in enumerate(all_ranks) if v), -1)
+        print(f"Tracked {label}:")
+        print(f"  Owner rank: {owner}")
+    if dof is not None:
+        print(f"  DOF index: {dof}")
+        print(f"  Coordinates: ({coord[0]:.6f}, {coord[1]:.6f}, {coord[2]:.6f})")
 
 # ============================================================================
 # MATERIAL MODEL — SVK + Kelvin-Voigt damping
@@ -320,22 +320,32 @@ for n in range(n_steps):
     # Update velocity (Backward Euler)
     v_new = (u.x.array - u_old.x.array) / dt_val
 
-    # Track node position
-    local_position = None
-    if tracked_node_dof is not None:
-        u_x = u.x.array[tracked_node_dof * block_size + 0]
-        u_y = u.x.array[tracked_node_dof * block_size + 1]
-        u_z = u.x.array[tracked_node_dof * block_size + 2]
-        x_pos = tracked_node_coord[0] + u_x
-        y_pos = tracked_node_coord[1] + u_y
-        z_pos = tracked_node_coord[2] + u_z
-        local_position = [float(x_pos), float(y_pos), float(z_pos)]
+    # Track node positions (dual nodes)
+    local_posA = None
+    if nodeA_dof is not None:
+        u_x = u.x.array[nodeA_dof * block_size + 0]
+        u_y = u.x.array[nodeA_dof * block_size + 1]
+        u_z = u.x.array[nodeA_dof * block_size + 2]
+        local_posA = [float(nodeA_coord[0] + u_x),
+                      float(nodeA_coord[1] + u_y),
+                      float(nodeA_coord[2] + u_z)]
 
-    all_positions = domain.comm.gather(local_position, root=0)
+    local_posB = None
+    if nodeB_dof is not None:
+        u_x = u.x.array[nodeB_dof * block_size + 0]
+        u_y = u.x.array[nodeB_dof * block_size + 1]
+        u_z = u.x.array[nodeB_dof * block_size + 2]
+        local_posB = [float(nodeB_coord[0] + u_x),
+                      float(nodeB_coord[1] + u_y),
+                      float(nodeB_coord[2] + u_z)]
+
+    all_posA = domain.comm.gather(local_posA, root=0)
+    all_posB = domain.comm.gather(local_posB, root=0)
     if rank == 0:
-        node_position = next((pos for pos in all_positions if pos is not None), None)
-        if node_position is not None:
-            node_xyz_history.append(node_position)
+        posA = next((p for p in all_posA if p is not None), None)
+        posB = next((p for p in all_posB if p is not None), None)
+        if posA is not None and posB is not None:
+            node_xyz_history.append(posA + posB)
 
     # Update state
     u_old.x.array[:] = u.x.array[:]
@@ -347,8 +357,9 @@ for n in range(n_steps):
     if rank == 0 and (n % 10 == 0 or n < 5):
         max_disp = np.max(np.linalg.norm(u.x.array.reshape(-1, 3), axis=1))
         if len(node_xyz_history) > 0:
-            xp, yp, zp = node_xyz_history[-1]
-            print(f"Step {n:4d}: tracked=({xp:.6f}, {yp:.6f}, {zp:.6f})  "
+            row = node_xyz_history[-1]
+            print(f"Step {n:4d}: nodeA=({row[0]:.6f}, {row[1]:.6f}, {row[2]:.6f})  "
+                  f"nodeB=({row[3]:.6f}, {row[4]:.6f}, {row[5]:.6f})  "
                   f"max_disp={max_disp:.4e}  iters={num_its}")
 
 if rank == 0:
@@ -360,8 +371,11 @@ if rank == 0:
 if rank == 0 and len(node_xyz_history) > 0:
     csv_path = os.path.join(root_output_dir, "node_xyz_history_fenics_teapot_svk.csv")
     with open(csv_path, 'w') as f:
-        f.write("step,x_position,y_position,z_position\n")
-        for i, (x_val, y_val, z_val) in enumerate(node_xyz_history):
-            f.write(f"{i},{x_val:.17f},{y_val:.17f},{z_val:.17f}\n")
+        f.write("# nodeA: spout (idx 1184)\n")
+        f.write("# nodeB: lid_knob (idx 242)\n")
+        f.write("step,nodeA_x,nodeA_y,nodeA_z,nodeB_x,nodeB_y,nodeB_z\n")
+        for i, row in enumerate(node_xyz_history):
+            f.write(f"{i},{row[0]:.17f},{row[1]:.17f},{row[2]:.17f},"
+                    f"{row[3]:.17f},{row[4]:.17f},{row[5]:.17f}\n")
     print(f"Wrote tracked node history to {csv_path}")
     print(f"  Total steps: {len(node_xyz_history)}")
