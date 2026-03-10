@@ -44,7 +44,6 @@ cc_binary(
         "//lib_utils:cuda_utils",
         "//lib_utils:mesh_manager",
         "//lib_utils:surface_trimesh_extract",
-        "//lib_utils:visualization_utils",
         "@eigen//:eigen",
     ],
 )
