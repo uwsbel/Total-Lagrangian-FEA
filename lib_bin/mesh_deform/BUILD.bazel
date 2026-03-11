@@ -78,6 +78,7 @@ cc_binary(
         "//lib_src/solvers:solvers_syncedadamw",
         "//lib_src/solvers:solvers_syncednesterov",
         "//lib_src/solvers:solvers_syncednewton",
+        "//lib_utils:cli_utils",
         "//lib_utils:cpu_utils",
         "@eigen//:eigen",
     ],
