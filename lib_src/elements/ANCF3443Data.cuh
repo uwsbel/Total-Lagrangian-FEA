@@ -235,6 +235,14 @@ struct GPU_ANCF3443_Data : public ElementBase {
         d_P + (elem_idx * Quadrature::N_TOTAL_QP_4_4_3 + qp_idx) * 9, 3, 3);
   }
 
+  __device__ double &vm_stress(int elem_idx) {
+    return d_vm_stress[elem_idx];
+  }
+
+  __device__ double vm_stress(int elem_idx) const {
+    return d_vm_stress[elem_idx];
+  }
+
   // Time-derivative of deformation gradient (viscous computation)
   __device__ Eigen::Map<Eigen::MatrixXd> Fdot(int elem_idx, int qp_idx) {
     return Eigen::Map<Eigen::MatrixXd>(
@@ -506,6 +514,7 @@ struct GPU_ANCF3443_Data : public ElementBase {
                                          3 * sizeof(double)));
     HANDLE_ERROR(cudaMalloc(&d_P_vis, n_beam * Quadrature::N_TOTAL_QP_4_4_3 *
                                           3 * 3 * sizeof(double)));
+    HANDLE_ERROR(cudaMalloc(&d_vm_stress, n_beam * sizeof(double)));
     HANDLE_ERROR(cudaMalloc(&d_f_int, n_coef * 3 * sizeof(double)));
     HANDLE_ERROR(cudaMalloc(&d_f_ext, n_coef * 3 * sizeof(double)));
     // damping parameters (single scalar copied to device)
@@ -635,6 +644,7 @@ struct GPU_ANCF3443_Data : public ElementBase {
                n_beam * Quadrature::N_TOTAL_QP_4_4_3 * 3 * 3 * sizeof(double));
     cudaMemset(d_P_vis, 0,
                n_beam * Quadrature::N_TOTAL_QP_4_4_3 * 3 * 3 * sizeof(double));
+    cudaMemset(d_vm_stress, 0, n_beam * sizeof(double));
 
     HANDLE_ERROR(cudaMemcpy(d_H, height.data(), n_beam * sizeof(double),
                             cudaMemcpyHostToDevice));
@@ -1051,6 +1061,7 @@ struct GPU_ANCF3443_Data : public ElementBase {
     HANDLE_ERROR(cudaFree(d_P));
     HANDLE_ERROR(cudaFree(d_Fdot));
     HANDLE_ERROR(cudaFree(d_P_vis));
+    HANDLE_ERROR(cudaFree(d_vm_stress));
     HANDLE_ERROR(cudaFree(d_f_int));
     HANDLE_ERROR(cudaFree(d_f_ext));
     HANDLE_ERROR(cudaFree(d_eta_damp));
@@ -1133,6 +1144,10 @@ struct GPU_ANCF3443_Data : public ElementBase {
   void RetrievePositionToCPU(Eigen::VectorXd &x12, Eigen::VectorXd &y12,
                              Eigen::VectorXd &z12);
 
+  void ComputeVonMises();
+
+  void RetrieveVonMisesToCPU(Eigen::VectorXd &vm);
+
   double *Get_Constraint_Ptr() {
     return d_constraint;
   }
@@ -1185,6 +1200,9 @@ struct GPU_ANCF3443_Data : public ElementBase {
 
   double *d_F, *d_P;
   double *d_Fdot, *d_P_vis;
+
+  // Per-element von Mises stress (averaged over QPs)
+  double *d_vm_stress = nullptr;  // (n_beam)
 
   // per-element damping parameters
   double *d_eta_damp, *d_lambda_damp;

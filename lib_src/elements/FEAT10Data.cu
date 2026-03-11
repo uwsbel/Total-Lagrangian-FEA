@@ -699,6 +699,25 @@ void GPU_FEAT10_Data::RetrievePFromFToCPU(
   }
 }
 
+void GPU_FEAT10_Data::RetrieveDeformationGradientToCPU(
+    std::vector<std::vector<Eigen::MatrixXd>> &deformation_gradient) {
+  deformation_gradient.resize(n_elem);
+
+  for (int elem_idx = 0; elem_idx < n_elem; elem_idx++) {
+    deformation_gradient[elem_idx].resize(Quadrature::N_QP_T10_5);
+
+    for (int qp_idx = 0; qp_idx < Quadrature::N_QP_T10_5; qp_idx++) {
+      deformation_gradient[elem_idx][qp_idx].resize(3, 3);
+
+      int offset = (elem_idx * Quadrature::N_QP_T10_5 + qp_idx) * 3 * 3;
+      int size   = 3 * 3 * sizeof(double);
+
+      HANDLE_ERROR(cudaMemcpy(deformation_gradient[elem_idx][qp_idx].data(),
+                              d_F + offset, size, cudaMemcpyDeviceToHost));
+    }
+  }
+}
+
 void GPU_FEAT10_Data::RetrieveInternalForceToCPU(
     Eigen::VectorXd &internal_force) {
   // Resize to total DOFs (3 * number of nodes)
@@ -765,6 +784,8 @@ void GPU_FEAT10_Data::RetrieveVonMisesToCPU(Eigen::VectorXd &vm) {
 }
 
 void GPU_FEAT10_Data::WriteOutputVTU(const std::string &filename) {
+  ComputeVonMises();
+
   Eigen::VectorXd x12, y12, z12;
   this->RetrievePositionToCPU(x12, y12, z12);
 

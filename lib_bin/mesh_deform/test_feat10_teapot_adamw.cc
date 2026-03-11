@@ -142,7 +142,6 @@ int main() {
   for (int step = 0; step < 6; ++step) {
     solver.Solve();
     if (step % output_interval == 0) {
-      gpu_t10_data.ComputeVonMises();
       gpu_t10_data.WriteOutputVTU("output/teapot_adamw_step_" +
                                   std::to_string(output_frame) + ".vtu");
       ++output_frame;

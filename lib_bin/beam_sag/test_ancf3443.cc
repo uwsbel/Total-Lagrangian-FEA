@@ -422,8 +422,11 @@ int main(int argc, char** argv) {
     std::ostringstream oss;
     oss << vtu_out_dir << "/" << kVtuPrefix << "_" << SolverName(opt.solver)
         << "_" << std::setw(6) << std::setfill('0') << step << ".vtu";
+    data.ComputeVonMises();
+    Eigen::VectorXd vm;
+    data.RetrieveVonMisesToCPU(vm);
     ANCFCPUUtils::VisualizationUtils::ExportANCF3443ToVTU(
-        x12, y12, z12, element_connectivity, H, oss.str());
+        x12, y12, z12, element_connectivity, H, oss.str(), &vm);
   };
 
   if (want_vtu(0)) {

@@ -322,8 +322,11 @@ int main(int argc, char** argv) {
     if (!(thickness > 0.0)) {
       thickness = 1e-3;
     }
+    data.ComputeVonMises();
+    Eigen::VectorXd vm;
+    data.RetrieveVonMisesToCPU(vm);
     ANCFCPUUtils::VisualizationUtils::ExportANCF3443ToVTU(
-        x12, y12, z12, mesh.element_connectivity, thickness, oss.str());
+        x12, y12, z12, mesh.element_connectivity, thickness, oss.str(), &vm);
   };
 
   // Note: very large rho can make the KKT/Hessian ill-conditioned and trigger
