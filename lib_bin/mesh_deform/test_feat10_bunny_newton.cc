@@ -14,14 +14,17 @@
 #include <cuda_runtime.h>
 
 #include <Eigen/Dense>
+#include <array>
 #include <iomanip>
 #include <iostream>
+#include <string>
 #include <vector>
 
 #include "../../lib_src/elements/FEAT10Data.cuh"
 #include "../../lib_src/solvers/SyncedNewton.cuh"
 #include "../../lib_utils/cpu_utils.h"
 #include "../../lib_utils/quadrature_utils.h"
+#include "lib_utils/cli_utils.h"
 
 // Material properties (using SolidMaterialProperties)
 const SolidMaterialProperties mat_bunny = SolidMaterialProperties::SVK(
@@ -34,24 +37,60 @@ const SolidMaterialProperties mat_bunny = SolidMaterialProperties::SVK(
 
 enum MATERIAL_MODEL { MAT_SVK, MAT_MOONEY_RIVLIN };
 
-int main() {
+int main(int argc, char** argv) {
+  ANCFCPUUtils::Cli cli(argv[0]);
+  cli.SetDescription(
+      "FEAT10 bunny Newton test with selectable mesh resolution.");
+  cli.AddInt("res", 26,
+             "bunny mesh resolution (26 uses legacy bunny_ascii_26; allowed: "
+             "0, 2, 4, 8, 16, 26)");
+
+  std::string cli_err;
+  if (!cli.Parse(argc, argv, &cli_err) || cli.HelpRequested()) {
+    if (!cli_err.empty()) {
+      std::cerr << cli_err << "\n\n";
+    }
+    cli.PrintUsage(std::cout);
+    return cli.HelpRequested() ? 0 : 1;
+  }
+
+  const int res                            = cli.GetInt("res");
+  constexpr std::array<int, 6> kAllowedRes = {0, 2, 4, 8, 16, 26};
+  bool valid_res                           = false;
+  for (const int allowed_res : kAllowedRes) {
+    if (res == allowed_res) {
+      valid_res = true;
+      break;
+    }
+  }
+  if (!valid_res) {
+    std::cerr << "Invalid --res=" << res << " (allowed: 0, 2, 4, 8, 16, 26)"
+              << std::endl;
+    return 1;
+  }
+
+  const std::string mesh_prefix =
+      (res == 26) ? "data/meshes/T10/bunny_ascii_26.1"
+                  : "data/meshes/T10/bunny_scaling/bunny_res" +
+                        std::to_string(res) + ".1";
+
   // Read mesh data
   Eigen::MatrixXd nodes;
   Eigen::MatrixXi elements;
 
-  int n_nodes = ANCFCPUUtils::FEAT10_read_nodes(
-      "data/meshes/T10/bunny_ascii_26.1.node", nodes);
-  int n_elems = ANCFCPUUtils::FEAT10_read_elements(
-      "data/meshes/T10/bunny_ascii_26.1.ele", elements);
+  int n_nodes = ANCFCPUUtils::FEAT10_read_nodes(mesh_prefix + ".node", nodes);
+  int n_elems =
+      ANCFCPUUtils::FEAT10_read_elements(mesh_prefix + ".ele", elements);
 
+  std::cout << "mesh: " << mesh_prefix << std::endl;
   std::cout << "mesh read nodes: " << n_nodes << std::endl;
   std::cout << "mesh read elements: " << n_elems << std::endl;
 
-  // print nodes and elements matrix
-  std::cout << "nodes matrix:" << std::endl;
-  std::cout << nodes << std::endl;
-  std::cout << "elements matrix:" << std::endl;
-  std::cout << elements << std::endl;
+  // // print nodes and elements matrix
+  // std::cout << "nodes matrix:" << std::endl;
+  // std::cout << nodes << std::endl;
+  // std::cout << "elements matrix:" << std::endl;
+  // std::cout << elements << std::endl;
 
   MATERIAL_MODEL material = MAT_SVK;
 
@@ -74,7 +113,7 @@ int main() {
   // Find all nodes with z < -4
   std::vector<int> fixed_node_indices;
   for (int i = 0; i < h_z12.size(); ++i) {
-    if (h_z12(i) < -4.0) {  // Fix nodes with z coordinate less than -4
+    if (h_z12(i) < -0.4) {  // Fix nodes with z coordinate less than -4
       fixed_node_indices.push_back(i);
     }
   }
@@ -95,15 +134,28 @@ int main() {
   // Set fixed nodes
   gpu_t10_data.SetNodalFixed(h_fixed_nodes);
 
-  // set external force: -1000N in z direction for all nodes above z=4
+  // Preserve the original total load from bunny_ascii_26.1:
+  // 582 nodes with z > 4.0, each receiving -35000 N => -20,370,000 N total.
   Eigen::VectorXd h_f_ext(gpu_t10_data.get_n_coef() * 3);
   h_f_ext.setZero();
 
+  std::vector<int> force_node_indices;
+  force_node_indices.reserve(static_cast<size_t>(n_nodes));
   for (int i = 0; i < h_z12.size(); ++i) {
-    if (h_z12(i) > 4.0) {
-      h_f_ext(3 * i + 2) = -35000.0;  // z direction
+    if (h_z12(i) > 0.4) {
+      force_node_indices.push_back(i);
     }
   }
+
+  constexpr double total_force_z = -100000.0;  // N
+  if (!force_node_indices.empty()) {
+    const double force_per_node = total_force_z / force_node_indices.size();
+    for (int idx : force_node_indices) {
+      h_f_ext(3 * idx + 2) = force_per_node;
+    }
+  }
+  // std::cout << "Force nodes (z > 4.0): " << force_node_indices.size()
+  //           << " total_force_z=" << total_force_z << std::endl;
   gpu_t10_data.SetExternalForce(h_f_ext);
 
   // Get quadrature data from quadrature_utils.h
@@ -134,30 +186,30 @@ int main() {
 
   gpu_t10_data.CalcDnDuPre();
 
-  std::cout << "gpu_t10_data dndu pre complete" << std::endl;
+  // std::cout << "gpu_t10_data dndu pre complete" << std::endl;
 
-  // 2. Retrieve results
-  std::vector<std::vector<Eigen::MatrixXd>> ref_grads;
-  gpu_t10_data.RetrieveDnDuPreToCPU(ref_grads);
+  // // 2. Retrieve results
+  // std::vector<std::vector<Eigen::MatrixXd>> ref_grads;
+  // gpu_t10_data.RetrieveDnDuPreToCPU(ref_grads);
 
-  std::cout << "ref_grads:" << std::endl;
-  for (size_t i = 0; i < ref_grads.size(); i++) {
-    for (size_t j = 0; j < ref_grads[i].size(); j++) {
-      std::cout << ref_grads[i][j] << std::endl;
-    }
-  }
-  std::cout << "done retrieving ref_grads" << std::endl;
+  // std::cout << "ref_grads:" << std::endl;
+  // for (size_t i = 0; i < ref_grads.size(); i++) {
+  //   for (size_t j = 0; j < ref_grads[i].size(); j++) {
+  //     std::cout << ref_grads[i][j] << std::endl;
+  //   }
+  // }
+  // std::cout << "done retrieving ref_grads" << std::endl;
 
-  std::vector<std::vector<double>> detJ;
-  gpu_t10_data.RetrieveDetJToCPU(detJ);
+  // std::vector<std::vector<double>> detJ;
+  // gpu_t10_data.RetrieveDetJToCPU(detJ);
 
-  std::cout << "detJ:" << std::endl;
-  for (size_t i = 0; i < detJ.size(); i++) {
-    for (size_t j = 0; j < detJ[i].size(); j++) {
-      std::cout << detJ[i][j] << std::endl;
-    }
-  }
-  std::cout << "done retrieving detJ" << std::endl;
+  // std::cout << "detJ:" << std::endl;
+  // for (size_t i = 0; i < detJ.size(); i++) {
+  //   for (size_t j = 0; j < detJ[i].size(); j++) {
+  //     std::cout << detJ[i][j] << std::endl;
+  //   }
+  // }
+  // std::cout << "done retrieving detJ" << std::endl;
 
   gpu_t10_data.CalcMassMatrix();
 
@@ -179,17 +231,17 @@ int main() {
   std::cout << "done CalcP" << std::endl;
 
   // retrieve p
-  std::vector<std::vector<Eigen::MatrixXd>> p_from_F;
-  gpu_t10_data.RetrievePFromFToCPU(p_from_F);
+  // std::vector<std::vector<Eigen::MatrixXd>> p_from_F;
+  // gpu_t10_data.RetrievePFromFToCPU(p_from_F);
 
-  std::cout << "P matrices (First Piola-Kirchhoff stress):" << std::endl;
-  for (size_t elem = 0; elem < p_from_F.size(); elem++) {
-    std::cout << "Element " << elem << ":" << std::endl;
-    for (size_t qp = 0; qp < p_from_F[elem].size(); qp++) {
-      std::cout << "  Quadrature Point " << qp << ":" << std::endl;
-      std::cout << p_from_F[elem][qp] << std::endl;
-    }
-  }
+  // std::cout << "P matrices (First Piola-Kirchhoff stress):" << std::endl;
+  // for (size_t elem = 0; elem < p_from_F.size(); elem++) {
+  //   std::cout << "Element " << elem << ":" << std::endl;
+  //   for (size_t qp = 0; qp < p_from_F[elem].size(); qp++) {
+  //     std::cout << "  Quadrature Point " << qp << ":" << std::endl;
+  //     std::cout << p_from_F[elem][qp] << std::endl;
+  //   }
+  // }
   std::cout << "done retrieving P matrices" << std::endl;
 
   // calculate internal force
@@ -197,13 +249,13 @@ int main() {
   std::cout << "done CalcInternalForce" << std::endl;
 
   // retrieve internal force
-  Eigen::VectorXd f_int;
-  gpu_t10_data.RetrieveInternalForceToCPU(f_int);
-  std::cout << "Internal force vector (size: " << f_int.size()
-            << "):" << std::endl;
-  std::cout << f_int.transpose() << std::endl;
-  std::cout << "done retrieving internal force vector" << std::endl;
-  SyncedNewtonParams params = {1e-4, 1e-6, 1e-4, 1e14, 5, 10, 1e-3, false};
+  // Eigen::VectorXd f_int;
+  // gpu_t10_data.RetrieveInternalForceToCPU(f_int);
+  // std::cout << "Internal force vector (size: " << f_int.size()
+  //           << "):" << std::endl;
+  // std::cout << f_int.transpose() << std::endl;
+  // std::cout << "done retrieving internal force vector" << std::endl;
+  SyncedNewtonParams params = {1e-3, 1e-4, 1e-4, 1e14, 5, 10, 1e-3, false};
   SyncedNewtonSolver solver(&gpu_t10_data, gpu_t10_data.get_n_constraint());
   solver.Setup();
   solver.SetParameters(&params);
@@ -226,7 +278,9 @@ int main() {
 
     solver.Solve();
     if (i % output_interval == 0) {
-      gpu_t10_data.WriteOutputVTU("output/bunny_newton_step_" +
+      gpu_t10_data.ComputeVonMises();
+      gpu_t10_data.WriteOutputVTU("output/bunny_newton_res" +
+                                  std::to_string(res) + "_step_" +
                                   std::to_string(output_frame) + ".vtu");
       output_frame++;
     }
