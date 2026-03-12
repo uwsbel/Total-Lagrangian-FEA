@@ -33,6 +33,7 @@ if rank == 0:
 # Resolution selection: 0, 2, 4, 8, 16
 parser = argparse.ArgumentParser()
 parser.add_argument("--res", type=int, default=0)
+parser.add_argument("--mr", action="store_true", help="Use Mooney-Rivlin material")
 args = parser.parse_args()
 RES = args.res
 
@@ -277,7 +278,7 @@ if rank == 0:
 # MATERIAL MODEL AND KINEMATICS
 # ============================================================================
 # Select material model: "SVK" or "MOONEY_RIVLIN"
-MATERIAL_MODEL = "SVK"
+MATERIAL_MODEL = "MOONEY_RIVLIN" if args.mr else "SVK"
 
 # Base material properties (matching C++ exactly)
 E_val = 7.0e8     # Young's modulus: 7×10⁸ Pa
@@ -421,6 +422,8 @@ class PointLoadProblem(NonlinearProblem):
         self.solver.setFunction(residual_callback, self.b)
 
 # Initialize the custom problem
+snes_tol = 1e-3 if RES == 32 else 1e-4
+
 problem = PointLoadProblem(
     F_form,
     u,
@@ -428,8 +431,8 @@ problem = PointLoadProblem(
     bcs=[bc_fixed],
     petsc_options={
         "snes_type": "newtonls",
-        "snes_atol": 1e-4,
-        "snes_rtol": 1e-4,
+        "snes_atol": snes_tol,
+        "snes_rtol": snes_tol,
         "snes_stol": 1e-6,
         "ksp_type": "preonly",
         "pc_type": "lu",
@@ -442,8 +445,8 @@ if rank == 0:
     print("\nNONLINEAR SOLVER SETUP")
     print(f"Solver type: Newton line search (SNES)")
     print(f"Linear solver: Direct LU (MUMPS)")
-    print(f"Absolute tolerance: 1e-4")
-    print(f"Relative tolerance: 1e-4")
+    print(f"Absolute tolerance: {snes_tol}")
+    print(f"Relative tolerance: {snes_tol}")
 
 
 # ============================================================================
