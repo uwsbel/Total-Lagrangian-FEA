@@ -32,6 +32,7 @@
 #include "../../lib_src/elements/FEAT10Data.cuh"
 #include "../../lib_src/solvers/SyncedAdamWNocoop.cuh"
 #include "../../lib_src/solvers/SyncedNewton.cuh"
+#include "../../lib_src/solvers/SyncedPCG.cuh"
 #include "../../lib_src/solvers/SyncedVBD.cuh"
 #include "../../lib_utils/cpu_utils.h"
 #include "../../lib_utils/quadrature_utils.h"
@@ -70,7 +71,7 @@ const SolidMaterialProperties mat_beam_mr =
                                           kBeamLambdaDamp  // lambda_damp
     );
 
-enum class SolverKind { kNewton, kVbd, kAdamW };
+enum class SolverKind { kNewton, kVbd, kAdamW, kPCG };
 enum class MaterialKind { kSvk, kMr };
 
 struct Options {
@@ -90,7 +91,7 @@ void PrintUsage(const char* argv0) {
       << " [--solver=SOLVER] [--res=R] [--steps=N] [--dt=DT]\n"
       << "                 [--omega=W] [--svk_mat|--mr_mat] [--csv[=PATH]]"
       << " [--help]\n\n"
-      << "  --solver=SOLVER   newton | vbd | adamw (default: adamw)\n"
+      << "  --solver=SOLVER   newton | vbd | adamw | pcg (default: adamw)\n"
       << "                   (adamw uses SyncedAdamWNocoopSolver)\n"
       << "  --res=R            0 | 2 | 4 | 8 | 16 | 32 (default: 8)\n"
       << "  --steps=N          number of Solve() calls (default: 50)\n"
@@ -144,6 +145,10 @@ bool ParseSolver(const std::string& s, SolverKind& out) {
     out = SolverKind::kAdamW;
     return true;
   }
+  if (s == "pcg") {
+    out = SolverKind::kPCG;
+    return true;
+  }
   return false;
 }
 
@@ -155,6 +160,8 @@ std::string SolverName(SolverKind solver) {
       return "vbd";
     case SolverKind::kAdamW:
       return "adamw";
+    case SolverKind::kPCG:
+      return "pcg";
   }
   return "unknown";
 }
@@ -412,7 +419,7 @@ int main(int argc, char** argv) {
     }
     csv_file.open(out_path);
     csv_file << std::fixed << std::setprecision(17);
-    csv_file << "step,x_position\n";
+    csv_file << "step,x_position,y_position,z_position\n";
     std::cout << "Writing CSV: " << out_path << std::endl;
   }
 
@@ -421,10 +428,12 @@ int main(int argc, char** argv) {
     data.RetrievePositionToCPU(x12_current, y12_current, z12_current);
     if (plot_target_node < x12_current.size()) {
       const double x = x12_current(plot_target_node);
+      const double y = y12_current(plot_target_node);
+      const double z = z12_current(plot_target_node);
       std::cout << "Step " << step << ": node " << plot_target_node
                 << " x = " << std::setprecision(17) << x << std::endl;
       if (opt.write_csv) {
-        csv_file << step << "," << x << "\n";
+        csv_file << step << "," << x << "," << y << "," << z << "\n";
         csv_file.flush();
       }
     }
@@ -458,6 +467,23 @@ int main(int argc, char** argv) {
       solver.InitializeColoring();
       solver.InitializeMassDiagBlocks();
       solver.InitializeFixedMap();
+      for (int step = 0; step < opt.steps; ++step) {
+        solver.Solve();
+        record_step(step);
+      }
+      break;
+    }
+    case SolverKind::kPCG: {
+      SyncedPCGParams params = {1e-4, 1e-4, 1e-4, 1e14, 5,
+                                10,   opt.dt, 200, 1e-4, 1e-8};
+      if (opt.res == 32) {
+        params = {1e-3, 1e-3, 1e-3, 1e14, 5,
+                  10,   opt.dt, 500, 1e-3, 1e-8};
+      }
+      SyncedPCGSolver solver(&data, data.get_n_constraint());
+      solver.Setup();
+      solver.SetParameters(&params);
+      solver.AnalyzeHessianSparsity();
       for (int step = 0; step < opt.steps; ++step) {
         solver.Solve();
         record_step(step);

@@ -85,6 +85,7 @@ cc_binary(
         "//lib_src/solvers:FEAT10ConstraintManager",
         "//lib_src/solvers:solvers_syncedadamwnocoop",
         "//lib_src/solvers:solvers_syncednewton",
+        "//lib_src/solvers:solvers_syncedpcg",
         "//lib_src/solvers:solvers_syncedvbd",
         "//lib_utils:cpu_utils",
         "@eigen//:eigen",
