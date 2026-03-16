@@ -144,3 +144,27 @@ cc_test(
         "@googletest//:gtest_main",
     ],
 )
+
+cc_test(
+    name = "utest_feat10_pcg",
+    srcs = ["utest_feat10_pcg.cc"],
+    copts = ["--std=c++17"],
+    linkopts = [
+        "-L/usr/local/cuda/lib64",
+        "-lcusparse",
+        "-lcudart",
+        "-lcublas",
+    ],
+    data = [
+        "//:data_meshes",
+        "//:data_utest",
+    ],
+    deps = [
+        "//lib_src/elements:FEAT10Data",
+        "//lib_src/solvers:solvers_syncedpcg",
+        "//lib_utils:cpu_utils",
+        "//lib_utils:csv_utils",
+        "@eigen//:eigen",
+        "@googletest//:gtest_main",
+    ],
+)
