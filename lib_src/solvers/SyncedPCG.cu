@@ -1127,7 +1127,8 @@ void SyncedPCGSolver::PCGSolve(int n_dofs) {
 
   // 6. PCG loop
   double alpha_spmv = 1.0, beta_spmv = 0.0;
-  for (int pcg_it = 0; pcg_it < h_max_pcg_iter_; ++pcg_it) {
+  int pcg_it = 0;
+  for (; pcg_it < h_max_pcg_iter_; ++pcg_it) {
     // 6a. Ap = H @ p
     CHECK_CUSPARSE(cusparseSpMV(
         cusparse_handle_, CUSPARSE_OPERATION_NON_TRANSPOSE, &alpha_spmv,
@@ -1149,6 +1150,7 @@ void SyncedPCGSolver::PCGSolve(int n_dofs) {
     HANDLE_ERROR(cudaDeviceSynchronize());
     double r_norm = compute_l2_norm_cublas(d_r_, n_dofs);
     if (r_norm < h_pcg_rtol_ * r_norm0 || r_norm < 1e-15) {
+      ++pcg_it;
       break;
     }
 
@@ -1167,6 +1169,10 @@ void SyncedPCGSolver::PCGSolve(int n_dofs) {
     pcg_update_search_direction<<<blocks_dof, threads>>>(
         d_beta_cg_, d_z_pcg_, d_p_pcg_, n_dofs);
   }
+  std::cout << "    PCG iters: " << pcg_it << std::endl;
+  if (pcg_it >= h_max_pcg_iter_)
+    std::cerr << "    WARNING: PCG hit max iters (" << h_max_pcg_iter_
+              << ")\n";
 }
 
 // =====================================================
@@ -1273,7 +1279,8 @@ void SyncedPCGSolver::OneStepPCG() {
 
       double norm_g0 = -1.0;
 
-      for (int newton_iter = 0; newton_iter < h_max_inner_; ++newton_iter) {
+      int newton_iter = 0;
+      for (; newton_iter < h_max_inner_; ++newton_iter) {
         std::cout << "  Newton iter " << newton_iter << std::endl;
 
         pcg_solve_compute_p<<<numBlocks_compute_p, threadsPerBlock>>>(
@@ -1339,6 +1346,9 @@ void SyncedPCGSolver::OneStepPCG() {
         pcg_solve_update_pos<<<numBlocks_update_pos, threadsPerBlock>>>(
             d_pcg_solver_, typed_data);
       }
+      if (newton_iter == h_max_inner_)
+        std::cerr << "  WARNING: Newton hit max inner iters ("
+                  << h_max_inner_ << ")\n";
 
       pcg_solve_update_pos<<<numBlocks_update_pos, threadsPerBlock>>>(
           d_pcg_solver_, typed_data);
@@ -1379,7 +1389,8 @@ void SyncedPCGSolver::OneStepPCG() {
 
       double norm_g0 = -1.0;
 
-      for (int newton_iter = 0; newton_iter < h_max_inner_; ++newton_iter) {
+      int newton_iter = 0;
+      for (; newton_iter < h_max_inner_; ++newton_iter) {
         std::cout << "  Newton iter " << newton_iter << std::endl;
 
         pcg_solve_compute_p<<<numBlocks_compute_p, threadsPerBlock>>>(
@@ -1445,6 +1456,9 @@ void SyncedPCGSolver::OneStepPCG() {
         pcg_solve_update_pos<<<numBlocks_update_pos, threadsPerBlock>>>(
             d_pcg_solver_, typed_data);
       }
+      if (newton_iter == h_max_inner_)
+        std::cerr << "  WARNING: Newton hit max inner iters ("
+                  << h_max_inner_ << ")\n";
 
       pcg_solve_update_pos<<<numBlocks_update_pos, threadsPerBlock>>>(
           d_pcg_solver_, typed_data);
@@ -1485,7 +1499,8 @@ void SyncedPCGSolver::OneStepPCG() {
 
       double norm_g0 = -1.0;
 
-      for (int newton_iter = 0; newton_iter < h_max_inner_; ++newton_iter) {
+      int newton_iter = 0;
+      for (; newton_iter < h_max_inner_; ++newton_iter) {
         std::cout << "  Newton iter " << newton_iter << std::endl;
 
         pcg_solve_compute_p<<<numBlocks_compute_p, threadsPerBlock>>>(
@@ -1551,6 +1566,9 @@ void SyncedPCGSolver::OneStepPCG() {
         pcg_solve_update_pos<<<numBlocks_update_pos, threadsPerBlock>>>(
             d_pcg_solver_, typed_data);
       }
+      if (newton_iter == h_max_inner_)
+        std::cerr << "  WARNING: Newton hit max inner iters ("
+                  << h_max_inner_ << ")\n";
 
       pcg_solve_update_pos<<<numBlocks_update_pos, threadsPerBlock>>>(
           d_pcg_solver_, typed_data);

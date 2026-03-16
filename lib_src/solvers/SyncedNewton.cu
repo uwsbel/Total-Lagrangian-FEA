@@ -1423,7 +1423,8 @@ void SyncedNewtonSolver::OneStepNewtonCuDSS() {
       bool inner_converged    = false;
       bool line_search_failed = false;
 
-      for (int newton_iter = 0; newton_iter < h_max_inner_; ++newton_iter) {
+      int newton_iter = 0;
+      for (; newton_iter < h_max_inner_; ++newton_iter) {
         std::cout << "  Newton iter " << newton_iter << std::endl;
 
         const double norm_g = evaluate_state(typed_data);
@@ -1498,6 +1499,9 @@ void SyncedNewtonSolver::OneStepNewtonCuDSS() {
               d_newton_solver_, typed_data);
         }
       }
+      if (newton_iter == h_max_inner_)
+        std::cerr << "  WARNING: Newton hit max inner iters ("
+                  << h_max_inner_ << ")\n";
 
       if (!inner_converged) {
         if (line_search_failed) {
