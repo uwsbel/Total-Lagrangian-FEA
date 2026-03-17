@@ -1042,7 +1042,7 @@ void SyncedNewtonSolver::OneStepNewtonCuDSS() {
 
   const double armijo_c1          = 1e-4;
   const double armijo_shrink      = 0.5;
-  const int max_armijo_backtracks = 8;
+  const int max_armijo_backtracks = 16;
 
   auto cublas_ok = [](cublasStatus_t status, const char *label) {
     if (status != CUBLAS_STATUS_SUCCESS) {
@@ -1165,12 +1165,16 @@ void SyncedNewtonSolver::OneStepNewtonCuDSS() {
     for (int outer_iter = 0; outer_iter < h_max_outer_; ++outer_iter) {
       std::cout << "Outer iter " << outer_iter << std::endl;
 
-      double norm_g0 = -1.0;
+      double norm_g0          = -1.0;
+      double last_norm_g      = std::numeric_limits<double>::infinity();
+      bool inner_converged    = false;
+      bool line_search_failed = false;
 
       for (int newton_iter = 0; newton_iter < h_max_inner_; ++newton_iter) {
         std::cout << "  Newton iter " << newton_iter << std::endl;
 
         const double norm_g = evaluate_state(typed_data);
+        last_norm_g         = norm_g;
         std::cout << "    ||g|| = " << std::scientific << norm_g << std::endl;
 
         if (norm_g0 < 0.0) {
@@ -1179,6 +1183,7 @@ void SyncedNewtonSolver::OneStepNewtonCuDSS() {
 
         if (norm_g < h_inner_atol_ || (h_inner_rtol_ > 0.0 && norm_g0 > 0.0 &&
                                        norm_g <= h_inner_rtol_ * norm_g0)) {
+          inner_converged = true;
           break;
         }
 
@@ -1221,6 +1226,7 @@ void SyncedNewtonSolver::OneStepNewtonCuDSS() {
 
         if (h_enable_line_search_) {
           if (!armijo_line_search(typed_data, norm_g)) {
+            line_search_failed = true;
             break;
           }
         } else {
@@ -1228,6 +1234,20 @@ void SyncedNewtonSolver::OneStepNewtonCuDSS() {
                                        threadsPerBlock>>>(d_newton_solver_);
           cudss_solve_update_pos<<<numBlocks_update_pos, threadsPerBlock>>>(
               d_newton_solver_, typed_data);
+        }
+      }
+
+      if (!inner_converged) {
+        if (line_search_failed) {
+          std::cout
+              << "  Outer iter " << outer_iter
+              << ": inner Newton did not converge because line search failed"
+              << std::endl;
+        } else {
+          std::cout << "  Outer iter " << outer_iter
+                    << ": inner Newton did not satisfy tolerance"
+                    << " (last ||g|| = " << std::scientific << last_norm_g
+                    << ")" << std::endl;
         }
       }
 
@@ -1251,16 +1271,24 @@ void SyncedNewtonSolver::OneStepNewtonCuDSS() {
 
       HANDLE_ERROR(cudaDeviceSynchronize());
 
+      bool constraints_converged = (n_constraints_ == 0);
       if (n_constraints_ > 0) {
         const double norm_constraint =
             compute_l2_norm_cublas(d_constraint_ptr_, n_constraints_);
         std::cout << "  Outer iter " << outer_iter
                   << ": ||c|| = " << std::scientific << norm_constraint
                   << std::endl;
+        constraints_converged = (norm_constraint < h_outer_tol_);
 
-        if (norm_constraint < h_outer_tol_) {
-          break;
+        if (constraints_converged && !inner_converged) {
+          std::cout << "  Outer iter " << outer_iter
+                    << ": constraints converged but inner Newton did not;"
+                    << " continuing" << std::endl;
         }
+      }
+
+      if (inner_converged && constraints_converged) {
+        break;
       }
     }
   };

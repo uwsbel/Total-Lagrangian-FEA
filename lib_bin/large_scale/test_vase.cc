@@ -2,43 +2,28 @@
  * Vase Drop Onto Protective Foam Simulation
  * Author: Json Zhou (zzhou292@wisc.edu)
  *
- * A ceramic bouquet vase is dropped into a protective packaging foam with a
- * matching hollow cavity. The foam is clamped at its bottom face. The vase
- * falls under gravity (-Z) and settles into the foam hollow. Contact is
- * resolved by the DEME mesh-mesh collision system.
+ * A ceramic bouquet vase is dropped into a protective foam insert with a
+ * matching hollow cavity. The foam and vase are solved as separate FEAT10
+ * blocks and coupled through the multi-element Newton solver plus DEME mesh
+ * contact.
  *
- * Two material model options are provided:
- *   MAT_SVK: Saint Venant-Kirchhoff (geometrically nonlinear linear elasticity)
- *   MAT_MR:  Mooney-Rivlin (hyperelastic, suitable for soft foam behavior)
+ * This split is required for mixed constitutive models:
+ *   - Vase: Saint Venant-Kirchhoff (SVK)
+ *   - Foam: Mooney-Rivlin
  *
- * Meshes (coordinate system: Z up, gravity = -Z):
- *   Foam: data/meshes/T10/vase/protect_foam_ascii.1.{node,ele}
- *         Bounds: X=[-0.10,0.10], Y=[0,0.29], Z=[-0.10,0.00]
- *         Hollow opens at Z=0 (top face); bottom face at Z=-0.10 is clamped.
- *   Vase: data/meshes/T10/vase/bouquet_vase_ascii.1.{node,ele}
- *         Bounds (as loaded): X=[-0.07,0.07], Y=[0,0.25], Z=[-0.07,0.07]
- *         Translated by (+y=0.02, +z=0.03) to center over the foam hollow.
- *         After translation: Y=[0.02,0.27], Z=[-0.04,0.10]
+ * The single FEAT10 object supports per-mesh material parameters, but not a
+ * mix of constitutive models inside one object.
  *
- * Material notes:
- *   The FE solver uses a single global stiffness (E/nu or mu10/mu01/kappa).
- *   Foam stiffness parameters are applied globally; vase element density is
- *   separately overridden to the ceramic value (2400 kg/m3) so the vase mass
- *   is physically realistic while foam deformation is captured accurately.
- *
- *   SVK ceramic reference:  E ~ 50-100 GPa, nu ~ 0.25, rho ~ 2400 kg/m3
- *   SVK foam reference:     E ~ 50 kPa,     nu ~ 0.35, rho ~ 50 kg/m3
- *   MR foam reference:      mu10 ~ 11 kPa, mu01 ~ 7.4 kPa, kappa ~ 83 kPa
- *
- * Solver: Newton (cuDSS), dt = 5e-4 s
- * Collision: DemeMeshCollisionSystem (DEME mesh-mesh contact)
- * Output: output/vase_drop/mesh_XXXX.vtu  (ParaView compatible)
+ * Output:
+ *   output/vase_drop/foam_XXXX.vtu
+ *   output/vase_drop/vase_XXXX.vtu
  */
 
 #include <cublas_v2.h>
 #include <cuda_runtime.h>
 
 #include <Eigen/Dense>
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
@@ -46,13 +31,15 @@
 #include <iomanip>
 #include <iostream>
 #include <memory>
+#include <numeric>
 #include <sstream>
 #include <string>
 #include <vector>
 
 #include "../../lib_src/collision/DemeMeshCollisionSystem.h"
 #include "../../lib_src/elements/FEAT10Data.cuh"
-#include "../../lib_src/solvers/SyncedNewton.cuh"
+#include "../../lib_src/solvers/FEMultiElementProblem.h"
+#include "../../lib_src/solvers/MultiElementNewton.cuh"
 #include "../../lib_utils/cpu_utils.h"
 #include "../../lib_utils/cuda_utils.h"
 #include "../../lib_utils/mesh_manager.h"
@@ -60,96 +47,161 @@
 #include "../../lib_utils/surface_trimesh_extract.h"
 #include "prescribed_shake.h"
 
-// ============================================================================
-// Material Model Selection
-//   MAT_SVK: Saint Venant-Kirchhoff — suitable when strains remain moderate
-//   MAT_MR:  Mooney-Rivlin          — better captures large-deformation foam
-//            behaviour; mu10 ~ 0.6*G, mu01 ~ 0.4*G (NeoHookean-like split)
-// ============================================================================
-enum MaterialOption { MAT_SVK, MAT_MR };
-static constexpr MaterialOption MATERIAL_OPTION = MAT_SVK;  // <-- change here
-
-// ----------------------------------------------------------------------------
-// SVK material parameters
-// ----------------------------------------------------------------------------
-// Foam (global stiffness applied to all elements):
-//   E = 50 kPa — soft packaging polyurethane foam
-//   nu = 0.35  — slightly compressible foam
-//   rho0 = 50 kg/m3 — typical low-density packaging foam
-const SolidMaterialProperties mat_foam_svk = SolidMaterialProperties::SVK(
-    1e6,    // E:           50 kPa
-    0.35,   // nu
-    250.0,  // rho0:        50 kg/m3
-    5e3,    // eta_damp:    Kelvin-Voigt shear damping
-    5e3     // lambda_damp: Kelvin-Voigt volumetric damping
-);
-
-// Vase (ceramic / porcelain). You can lower E if the Newton solve becomes
-// stiff.
-const SolidMaterialProperties mat_vase_svk =
-    SolidMaterialProperties::SVK(5e10,   // E:   ~50 GPa
-                                 0.25,   // nu:  ceramic-like
-                                 2400.0  // rho: kg/m3
-    );
-
-// ----------------------------------------------------------------------------
-// Mooney-Rivlin material parameters (equivalent foam stiffness)
-//   Derived from E = 50 kPa, nu = 0.35:
-//     G     = E / (2*(1+nu))       = 18518 Pa
-//     K     = E / (3*(1-2*nu))     = 55556 Pa
-//     mu10  = 0.6 * G              = 11111 Pa  (NeoHookean-dominant)
-//     mu01  = 0.4 * G              =  7407 Pa
-//     kappa = 1.5 * K              = 83333 Pa  (bulk penalty)
-// ----------------------------------------------------------------------------
 namespace {
-constexpr double MR_E  = 5e4;
-constexpr double MR_nu = 0.35;
-constexpr double MR_G  = MR_E / (2.0 * (1.0 + MR_nu));
-constexpr double MR_K  = MR_E / (3.0 * (1.0 - 2.0 * MR_nu));
-}  // namespace
 
-const SolidMaterialProperties mat_foam_mr =
-    SolidMaterialProperties::MooneyRivlin(0.6 * MR_G,  // mu10: 11111 Pa
-                                          0.4 * MR_G,  // mu01:  7407 Pa
-                                          1.5 * MR_K,  // kappa: 83333 Pa
-                                          50.0         // rho0:  50 kg/m3
+enum class FoamMaterialType {
+  kNeoprene50A     = 0,
+  kPolyurethane50A = 1,
+  kEva80           = 2,
+  kEva95           = 3,
+  kNeoprene60A     = 4,
+};
+
+struct FoamMaterialPreset {
+  const char* cli_name;
+  const char* label;
+  SolidMaterialProperties material;
+};
+
+static constexpr double kFoamEtaDamp          = 5e3;
+static constexpr double kFoamLambdaDamp       = 5e3;
+static constexpr double kNearIncompressibleNu = 0.499;
+
+// Vase (ceramic / porcelain). Keep SVK to avoid forcing a hyperelastic fit on
+// a stiff, small-strain body.
+const SolidMaterialProperties kVaseMaterial =
+    SolidMaterialProperties::SVK(5e10,   // E: ~50 GPa
+                                 0.25,   // nu
+                                 2400.0  // rho0: kg/m^3
     );
 
-static constexpr double rho_vase_mr = 2400.0;  // kg/m3 (ceramic)
+double MrBulkFromD1(double d1) {
+  return 2.0 / d1;
+}
 
-// ============================================================================
-// Simulation parameters
-// ============================================================================
-static constexpr double gravity = -9.81;  // m/s^2, applied in -Z
-static constexpr double dt      = 1e-4;   // Time step (s)
-// Schedule: 1000 static -> 1000 shaking -> 1000 static
-static constexpr int static_pre_steps  = 1000;
-static constexpr int shake_steps       = 2000;
-static constexpr int static_post_steps = 1000;
-static constexpr int num_steps =
-    static_pre_steps + shake_steps + static_post_steps;  // Total steps
-static constexpr int export_interval = 20;  // VTU output every N steps
+double MrBulkFromNu(double c10, double c01, double nu) {
+  const double shear = 2.0 * (c10 + c01);
+  return (2.0 * shear * (1.0 + nu)) / (3.0 * (1.0 - 2.0 * nu));
+}
 
-// Shaking (prescribed motion on fixed foam nodes)
-static constexpr int shake_start_step = static_pre_steps;
-static constexpr int shake_end_step   = static_pre_steps + shake_steps;
-static constexpr double shake_amp_x   = 0.005;  // meters (±)
-static constexpr double shake_speed_x = 0.25;   // m/s (piecewise-constant)
+SolidMaterialProperties MakeFoamMaterial(double c10, double c01, double kappa,
+                                         double rho0) {
+  return SolidMaterialProperties::MooneyRivlin(c10, c01, kappa, rho0,
+                                               kFoamEtaDamp, kFoamLambdaDamp);
+}
 
-// DEME contact parameters
-//   mu_s = 0.6: ceramic-on-foam static friction (moderate)
-//   mu_k = 0.5: kinetic friction
-//   stiffness = 1e6 N/m: soft contact (foam surface compliance)
-//   restitution = 0.3: inelastic impact (energy absorbed by foam)
-static constexpr double contact_mu_s = 0.6;
-static constexpr double contact_mu_k = 0.5;
-static constexpr double contact_stiffness =
-    8e6;  // reduced: stable with dt=1e-4 and m~1 kg
-static constexpr double contact_cor =
-    0.1;  // near-zero CoR: highly inelastic (foam absorbs impact)
+FoamMaterialPreset GetFoamMaterialPreset(FoamMaterialType type) {
+  switch (type) {
+    case FoamMaterialType::kNeoprene50A:
+      return {"neoprene50a", "Neoprene / chloroprene rubber (50A)",
+              MakeFoamMaterial(0.302e6, 0.076e6,
+                               MrBulkFromNu(0.302e6, 0.076e6, 0.49), 1230.0)};
+    case FoamMaterialType::kPolyurethane50A:
+      return {"polyurethane50a", "Polyurethane elastomer (50A)",
+              MakeFoamMaterial(0.302e6, 0.076e6,
+                               MrBulkFromNu(0.302e6, 0.076e6, 0.499), 2000.0)};
+    case FoamMaterialType::kEva80:
+      return {"eva80", "EVA foam 80 kg/m^3",
+              MakeFoamMaterial(0.417e6, 0.104e6, MrBulkFromD1(0.736e-6), 80.0)};
+    case FoamMaterialType::kEva95:
+      return {"eva95", "EVA foam 95 kg/m^3",
+              MakeFoamMaterial(0.641e6, 0.160e6, MrBulkFromD1(0.478e-6), 95.0)};
+    case FoamMaterialType::kNeoprene60A:
+      return {"neoprene60a", "Neoprene / chloroprene rubber (60A)",
+              MakeFoamMaterial(0.382e6, 0.096e6,
+                               MrBulkFromNu(0.382e6, 0.096e6, 0.49), 1230.0)};
+  }
 
+  return GetFoamMaterialPreset(FoamMaterialType::kEva95);
+}
 
-static void CheckCublas(cublasStatus_t status, const char* what) {
+bool ParseFoamMaterialType(std::string arg, FoamMaterialType* type_out) {
+  std::transform(arg.begin(), arg.end(), arg.begin(),
+                 [](unsigned char c) { return std::tolower(c); });
+
+  if (arg == "0" || arg == "neoprene50a" || arg == "neoprene_50a" ||
+      arg == "neoprene-50a" || arg == "neoprene" || arg == "chloroprene") {
+    *type_out = FoamMaterialType::kNeoprene50A;
+    return true;
+  }
+  if (arg == "1" || arg == "polyurethane50a" || arg == "polyurethane_50a" ||
+      arg == "polyurethane-50a" || arg == "polyurethane" || arg == "pu") {
+    *type_out = FoamMaterialType::kPolyurethane50A;
+    return true;
+  }
+  if (arg == "2" || arg == "eva80" || arg == "eva_80" || arg == "eva-80") {
+    *type_out = FoamMaterialType::kEva80;
+    return true;
+  }
+  if (arg == "3" || arg == "eva95" || arg == "eva_95" || arg == "eva-95") {
+    *type_out = FoamMaterialType::kEva95;
+    return true;
+  }
+  if (arg == "4" || arg == "neoprene60a" || arg == "neoprene_60a" ||
+      arg == "neoprene-60a" || arg == "chloroprene60a" ||
+      arg == "chloroprene_60a" || arg == "chloroprene-60a") {
+    *type_out = FoamMaterialType::kNeoprene60A;
+    return true;
+  }
+  return false;
+}
+
+void PrintUsage(const char* argv0) {
+  std::cout << "Usage: " << argv0
+            << " [mu_s] [mu_k] [self_collision] [steps] [export_interval]"
+               " --mat <neoprene50a|neoprene60a|polyurethane50a|eva80|eva95>\n"
+            << "       " << argv0
+            << " --mat=<neoprene50a|neoprene60a|polyurethane50a|eva80|eva95>\n"
+            << "\n"
+            << "Examples:\n"
+            << "  " << argv0 << " --mat polyurethane50a\n"
+            << "  " << argv0 << " 0.6 0.5 0 4000 20 --mat eva80\n";
+}
+
+Eigen::MatrixXd ExtractLocalNodes(const Eigen::MatrixXd& global_nodes,
+                                  const ANCFCPUUtils::MeshInstance& inst) {
+  return global_nodes.middleRows(inst.node_offset, inst.num_nodes);
+}
+
+Eigen::MatrixXi ExtractLocalElements(const Eigen::MatrixXi& global_elements,
+                                     const ANCFCPUUtils::MeshInstance& inst) {
+  Eigen::MatrixXi local =
+      global_elements.middleRows(inst.element_offset, inst.num_elements);
+  local.array() -= inst.node_offset;
+  return local;
+}
+
+Eigen::VectorXd ExtractAxis(const Eigen::MatrixXd& nodes, int axis) {
+  Eigen::VectorXd v(nodes.rows());
+  for (int i = 0; i < nodes.rows(); ++i) {
+    v(i) = nodes(i, axis);
+  }
+  return v;
+}
+
+std::vector<double> LumpedMassFromFeat10(GPU_FEAT10_Data& data, int n_nodes) {
+  std::vector<int> offsets;
+  std::vector<int> columns;
+  std::vector<double> values;
+  data.RetrieveMassCSRToCPU(offsets, columns, values);
+
+  std::vector<double> lump(static_cast<size_t>(n_nodes), 0.0);
+  if (static_cast<int>(offsets.size()) != n_nodes + 1) {
+    std::cerr
+        << "Warning: unexpected FEAT10 mass CSR size; using unit masses.\n";
+    std::fill(lump.begin(), lump.end(), 1.0);
+    return lump;
+  }
+
+  for (int i = 0; i < n_nodes; ++i) {
+    for (int k = offsets[i]; k < offsets[i + 1]; ++k) {
+      lump[static_cast<size_t>(i)] += values[static_cast<size_t>(k)];
+    }
+  }
+  return lump;
+}
+
+void CheckCublas(cublasStatus_t status, const char* what) {
   if (status != CUBLAS_STATUS_SUCCESS) {
     std::cerr << "cuBLAS error (" << what << "): status=" << int(status)
               << "\n";
@@ -157,46 +209,145 @@ static void CheckCublas(cublasStatus_t status, const char* what) {
   }
 }
 
+}  // namespace
+
+// ============================================================================
+// Simulation parameters
+// ============================================================================
+static constexpr double gravity        = -9.81;
+static constexpr double dt             = 1e-4;
+static constexpr int static_pre_steps  = 1000;
+static constexpr int shake_steps       = 4000;
+static constexpr int static_post_steps = 1000;
+static constexpr int num_steps =
+    static_pre_steps + shake_steps + static_post_steps;
+static constexpr int export_interval = 10;
+
+// Shaking (prescribed motion on fixed foam nodes)
+static constexpr int shake_start_step = static_pre_steps;
+static constexpr int shake_end_step   = static_pre_steps + shake_steps;
+static constexpr double shake_amp_x   = 0.005;
+static constexpr double shake_speed_x = 0.2;
+
+// DEME contact parameters
+static constexpr double contact_mu_s                = 0.6;
+static constexpr double contact_mu_k                = 0.5;
+static constexpr double contact_stiffness           = 8e6;
+static constexpr double contact_cor                 = 0.1;
+static constexpr double contact_force_clamp_default = 5e4;
+static constexpr int contact_force_knn_default      = 8;
+
 int main(int argc, char** argv) {
   std::cout << "========================================\n";
   std::cout << "Vase Drop Onto Protective Foam\n";
   std::cout << "========================================\n";
 
-  // Optional positional args: [mu_s] [mu_k] [self_collision] [steps]
-  // [export_interval]
-  double mu_s         = contact_mu_s;
-  double mu_k         = contact_mu_k;
-  bool self_collision = false;
-  int max_steps       = num_steps;
-  int exp_interval    = export_interval;
+  // Optional positional args:
+  //   [mu_s] [mu_k] [self_collision] [steps] [export_interval]
+  //
+  // Optional named arg:
+  //   --mat <foam_material>
+  //   --mat=<foam_material>
+  double mu_s                = contact_mu_s;
+  double mu_k                = contact_mu_k;
+  bool self_collision        = false;
+  int max_steps              = num_steps;
+  int exp_interval           = export_interval;
+  FoamMaterialType foam_type = FoamMaterialType::kEva95;
 
-  if (argc > 1)
-    mu_s = std::atof(argv[1]);
-  if (argc > 2)
-    mu_k = std::atof(argv[2]);
-  if (argc > 3)
-    self_collision = (std::atoi(argv[3]) != 0);
-  if (argc > 4) {
-    int v = std::atoi(argv[4]);
+  std::vector<std::string> positional_args;
+  positional_args.reserve(static_cast<size_t>(argc > 1 ? argc - 1 : 0));
+
+  for (int i = 1; i < argc; ++i) {
+    const std::string arg(argv[i]);
+    if (arg == "--help" || arg == "-h") {
+      PrintUsage(argv[0]);
+      return 0;
+    }
+    if (arg == "--mat") {
+      if (i + 1 >= argc) {
+        std::cerr << "Missing value after --mat.\n";
+        PrintUsage(argv[0]);
+        return 1;
+      }
+      if (!ParseFoamMaterialType(argv[++i], &foam_type)) {
+        std::cerr << "Unknown foam material '" << argv[i]
+                  << "'. Expected one of: neoprene50a, neoprene60a, "
+                     "polyurethane50a, eva80, eva95.\n";
+        return 1;
+      }
+      continue;
+    }
+    if (arg.rfind("--mat=", 0) == 0) {
+      const std::string value = arg.substr(6);
+      if (!ParseFoamMaterialType(value, &foam_type)) {
+        std::cerr << "Unknown foam material '" << value
+                  << "'. Expected one of: neoprene50a, neoprene60a, "
+                     "polyurethane50a, eva80, eva95.\n";
+        return 1;
+      }
+      continue;
+    }
+    if (!arg.empty() && arg[0] == '-') {
+      std::cerr << "Unknown option '" << arg << "'.\n";
+      PrintUsage(argv[0]);
+      return 1;
+    }
+    positional_args.push_back(arg);
+  }
+
+  if (positional_args.size() > 0)
+    mu_s = std::atof(positional_args[0].c_str());
+  if (positional_args.size() > 1)
+    mu_k = std::atof(positional_args[1].c_str());
+  if (positional_args.size() > 2)
+    self_collision = (std::atoi(positional_args[2].c_str()) != 0);
+  if (positional_args.size() > 3) {
+    const int v = std::atoi(positional_args[3].c_str());
     if (v > 0)
       max_steps = v;
   }
-  if (argc > 5)
-    exp_interval = std::atoi(argv[5]);
+  if (positional_args.size() > 4)
+    exp_interval = std::atoi(positional_args[4].c_str());
 
-  std::cout << "Material:         "
-            << (MATERIAL_OPTION == MAT_SVK ? "SVK" : "Mooney-Rivlin") << "\n";
+  if (positional_args.size() > 5) {
+    std::cerr << "Unexpected extra positional argument '" << positional_args[5]
+              << "'. Foam material must be selected with --mat.\n";
+    PrintUsage(argv[0]);
+    return 1;
+  }
+
+  const FoamMaterialPreset foam_preset = GetFoamMaterialPreset(foam_type);
+  setenv("DEME_FORCE_CLAMP",
+         std::to_string(contact_force_clamp_default).c_str(), 1);
+  setenv("DEME_FORCE_DISTRIB_K",
+         std::to_string(contact_force_knn_default).c_str(), 1);
+  setenv("DEME_CONTACT_E", std::to_string(contact_stiffness).c_str(), 1);
+  setenv("DEME_CONTACT_COR", std::to_string(contact_cor).c_str(), 1);
+
+  std::cout << "Vase material:    SVK\n";
+  std::cout << "Foam material:    " << foam_preset.label
+            << " (Mooney-Rivlin)\n";
   std::cout << "dt:               " << dt << " s\n";
   std::cout << "mu_s:             " << mu_s << "\n";
   std::cout << "mu_k:             " << mu_k << "\n";
   std::cout << "self_collision:   " << (self_collision ? "yes" : "no") << "\n";
   std::cout << "max_steps:        " << max_steps << "\n";
-  std::cout << "export_interval:  " << exp_interval << "\n\n";
+  std::cout << "export_interval:  " << exp_interval << "\n";
+  std::cout << "contact_E:        " << contact_stiffness << " Pa\n";
+  std::cout << "contact_CoR:      " << contact_cor << "\n";
+  std::cout << "contact_clamp:    " << contact_force_clamp_default << " N\n";
+  std::cout << "contact_knn:      " << contact_force_knn_default << "\n";
+  std::cout << "foam mu10:        " << foam_preset.material.mu10 << " Pa\n";
+  std::cout << "foam mu01:        " << foam_preset.material.mu01 << " Pa\n";
+  std::cout << "foam kappa:       " << foam_preset.material.kappa << " Pa\n";
+  std::cout << "foam rho0:        " << foam_preset.material.rho0
+            << " kg/m^3\n\n";
 
   std::filesystem::create_directories("output/vase_drop");
 
   // =========================================================================
-  // Load meshes: foam (base/container) first, then vase (drop body)
+  // Load meshes: foam first, then vase
   // =========================================================================
   ANCFCPUUtils::MeshManager mesh_manager;
 
@@ -217,224 +368,190 @@ int main(int argc, char** argv) {
     return 1;
   }
 
-  const auto& inst_foam = mesh_manager.GetMeshInstance(mesh_foam);
-  const auto& inst_vase = mesh_manager.GetMeshInstance(mesh_vase);
+  mesh_manager.TranslateMesh(mesh_vase, 0.0, 0.025, 0.01);
+
+  const auto& inst_foam               = mesh_manager.GetMeshInstance(mesh_foam);
+  const auto& inst_vase               = mesh_manager.GetMeshInstance(mesh_vase);
+  const Eigen::MatrixXd& all_nodes    = mesh_manager.GetAllNodes();
+  const Eigen::MatrixXi& all_elements = mesh_manager.GetAllElements();
 
   std::cout << "Loaded meshes:\n";
   std::cout << "  Foam: " << inst_foam.num_nodes << " nodes, "
             << inst_foam.num_elements << " elements\n";
   std::cout << "  Vase: " << inst_vase.num_nodes << " nodes, "
             << inst_vase.num_elements << " elements\n";
+  std::cout << "  Vase translation: (+x=0, +y=0.025, +z=0.01) m\n\n";
 
-  // Translate vase to align with the foam hollow cavity:
-  //   +y = 0.02 m: center vase in Y over the foam hollow
-  //   +z = 0.03 m: position vase at the hollow opening in Z
-  // After translation: vase Y=[0.02,0.27], Z=[-0.04,0.10]
-  // The vase bottom (Z=-0.04) sits just inside the foam opening (Z=0) so
-  // gravity gently pulls it down into the hollow.
-  mesh_manager.TranslateMesh(mesh_vase, 0.0, 0.025, 0.01);
-  std::cout << "Translated vase: (+x=0, +y=0.02, +z=0.03) m\n\n";
+  const Eigen::MatrixXd foam_nodes = ExtractLocalNodes(all_nodes, inst_foam);
+  const Eigen::MatrixXi foam_elements =
+      ExtractLocalElements(all_elements, inst_foam);
+  const Eigen::MatrixXd vase_nodes = ExtractLocalNodes(all_nodes, inst_vase);
+  const Eigen::MatrixXi vase_elements =
+      ExtractLocalElements(all_elements, inst_vase);
 
-  // =========================================================================
-  // Build unified node/element arrays
-  // =========================================================================
-  const Eigen::MatrixXd& initial_nodes = mesh_manager.GetAllNodes();
-  const Eigen::MatrixXi& elements      = mesh_manager.GetAllElements();
-  const int n_nodes                    = mesh_manager.GetTotalNodes();
-  const int n_elems                    = mesh_manager.GetTotalElements();
+  auto foam_data = std::make_unique<GPU_FEAT10_Data>(inst_foam.num_elements,
+                                                     inst_foam.num_nodes);
+  auto vase_data = std::make_unique<GPU_FEAT10_Data>(inst_vase.num_elements,
+                                                     inst_vase.num_nodes);
+  foam_data->Initialize();
+  vase_data->Initialize();
 
-  std::cout << "Total: " << n_nodes << " nodes, " << n_elems << " elements\n\n";
+  const Eigen::VectorXd foam_x = ExtractAxis(foam_nodes, 0);
+  const Eigen::VectorXd foam_y = ExtractAxis(foam_nodes, 1);
+  const Eigen::VectorXd foam_z = ExtractAxis(foam_nodes, 2);
+  const Eigen::VectorXd vase_x = ExtractAxis(vase_nodes, 0);
+  const Eigen::VectorXd vase_y = ExtractAxis(vase_nodes, 1);
+  const Eigen::VectorXd vase_z = ExtractAxis(vase_nodes, 2);
 
-  // =========================================================================
-  // GPU element data initialization
-  // =========================================================================
-  GPU_FEAT10_Data gpu_t10_data(n_elems, n_nodes);
-  gpu_t10_data.Initialize();
-
-  Eigen::VectorXd h_x12(n_nodes), h_y12(n_nodes), h_z12(n_nodes);
-  for (int i = 0; i < n_nodes; i++) {
-    h_x12(i) = initial_nodes(i, 0);
-    h_y12(i) = initial_nodes(i, 1);
-    h_z12(i) = initial_nodes(i, 2);
-  }
-
-  // Clamp foam nodes below Z = -0.05 m (lower half of foam, Z in [-0.10, 0.00])
-  static constexpr double fix_z_threshold = -0.05;
-
+  // Clamp foam nodes below Z = -0.05 m.
+  static constexpr double fix_z_threshold = -0.09;
   std::vector<int> fixed_indices;
   fixed_indices.reserve(inst_foam.num_nodes / 2);
   for (int i = 0; i < inst_foam.num_nodes; ++i) {
-    const int idx = inst_foam.node_offset + i;
-    if (initial_nodes(idx, 2) < fix_z_threshold) {
-      fixed_indices.push_back(idx);
+    if (foam_nodes(i, 2) < fix_z_threshold) {
+      fixed_indices.push_back(i);
     }
   }
 
   Eigen::VectorXi h_fixed(static_cast<int>(fixed_indices.size()));
   for (int i = 0; i < static_cast<int>(fixed_indices.size()); ++i) {
-    h_fixed(i) = fixed_indices[i];
+    h_fixed(i) = fixed_indices[static_cast<size_t>(i)];
   }
+  foam_data->SetNodalFixed(h_fixed);
   std::cout << "Fixed " << h_fixed.size() << " foam nodes (Z < "
             << fix_z_threshold << " m)\n";
-  gpu_t10_data.SetNodalFixed(h_fixed);
 
-  // Demo-specific: build a device list of the fixed (clamped) foam nodes so we
-  // can apply prescribed base motion without adding demo logic to FEAT10Data.
   int* d_fixed_node_ids = nullptr;
   const int n_fixed     = static_cast<int>(fixed_indices.size());
-  HANDLE_ERROR(cudaMalloc(&d_fixed_node_ids, n_fixed * sizeof(int)));
-  HANDLE_ERROR(cudaMemcpy(d_fixed_node_ids, fixed_indices.data(),
-                          n_fixed * sizeof(int), cudaMemcpyHostToDevice));
-
-  // =========================================================================
-  // FE setup: quadrature, material, mass matrix
-  // =========================================================================
-  gpu_t10_data.Setup(Quadrature::tet5pt_x, Quadrature::tet5pt_y,
-                     Quadrature::tet5pt_z, Quadrature::tet5pt_weights, h_x12,
-                     h_y12, h_z12, elements);
-
-  // Assign per-mesh materials (same model across all meshes).
-  // This keeps the original behavior (uniform stiffness, per-mesh density),
-  // but now the API supports per-mesh stiffness too (e.g., different E/nu).
-  if (MATERIAL_OPTION == MAT_SVK) {
-    mesh_manager.SetMeshMaterial(mesh_foam, mat_foam_svk);
-    mesh_manager.SetMeshMaterial(mesh_vase, mat_vase_svk);
-    gpu_t10_data.ApplyMaterialsFromMeshManager(mesh_manager);
-
-    std::cout << "Material model: SVK\n";
-    std::cout << "  Foam: E=" << mat_foam_svk.E << " Pa, nu=" << mat_foam_svk.nu
-              << ", rho=" << mat_foam_svk.rho0 << " kg/m3\n";
-    std::cout << "  Vase: E=" << mat_vase_svk.E << " Pa, nu=" << mat_vase_svk.nu
-              << ", rho=" << mat_vase_svk.rho0 << " kg/m3\n";
-  } else {
-    SolidMaterialProperties mat_vase_mr = mat_foam_mr;
-    mat_vase_mr.rho0                    = rho_vase_mr;
-    mesh_manager.SetMeshMaterial(mesh_foam, mat_foam_mr);
-    mesh_manager.SetMeshMaterial(mesh_vase, mat_vase_mr);
-    gpu_t10_data.ApplyMaterialsFromMeshManager(mesh_manager);
-
-    std::cout << "Material model: Mooney-Rivlin\n";
-    std::cout << "  Foam: mu10=" << mat_foam_mr.mu10
-              << " Pa, mu01=" << mat_foam_mr.mu01
-              << " Pa, kappa=" << mat_foam_mr.kappa
-              << " Pa, rho=" << mat_foam_mr.rho0 << " kg/m3\n";
-    std::cout << "  Vase: mu10=" << mat_vase_mr.mu10
-              << " Pa, mu01=" << mat_vase_mr.mu01
-              << " Pa, kappa=" << mat_vase_mr.kappa
-              << " Pa, rho=" << mat_vase_mr.rho0 << " kg/m3\n";
-  }
-  std::cout << "\n";
-
-  gpu_t10_data.CalcDnDuPre();
-  gpu_t10_data.CalcMassMatrix();
-  gpu_t10_data.CalcConstraintData();
-  gpu_t10_data.ConvertToCSR_ConstraintJacT();
-  gpu_t10_data.BuildConstraintJacobianCSR();
-
-  // =========================================================================
-  // Lumped mass matrix (for gravity force computation)
-  // =========================================================================
-  Eigen::VectorXd lumped_mass(n_nodes);
-  lumped_mass.setZero();
-  {
-    std::vector<int> offs, cols;
-    std::vector<double> vals;
-    gpu_t10_data.RetrieveMassCSRToCPU(offs, cols, vals);
-    if (static_cast<int>(offs.size()) == n_nodes + 1) {
-      for (int i = 0; i < n_nodes; ++i) {
-        for (int k = offs[i]; k < offs[i + 1]; ++k) {
-          lumped_mass(i) += vals[k];
-        }
-      }
-    } else {
-      std::cerr << "Warning: unexpected mass CSR size; using unit mass.\n";
-      lumped_mass.setOnes();
-    }
+  if (n_fixed > 0) {
+    HANDLE_ERROR(cudaMalloc(&d_fixed_node_ids, n_fixed * sizeof(int)));
+    HANDLE_ERROR(cudaMemcpy(d_fixed_node_ids, fixed_indices.data(),
+                            n_fixed * sizeof(int), cudaMemcpyHostToDevice));
   }
 
   // =========================================================================
-  // Newton solver
+  // FE setup
   // =========================================================================
-  SyncedNewtonParams params = {1e-3, 0.0, 1e-5, 1e12, 3, 10, dt, false};
-  SyncedNewtonSolver newton(&gpu_t10_data, gpu_t10_data.get_n_constraint());
-  newton.Setup();
-  newton.SetParameters(&params);
-  newton.AnalyzeHessianSparsity();
+  foam_data->Setup(Quadrature::tet5pt_x, Quadrature::tet5pt_y,
+                   Quadrature::tet5pt_z, Quadrature::tet5pt_weights, foam_x,
+                   foam_y, foam_z, foam_elements);
+  vase_data->Setup(Quadrature::tet5pt_x, Quadrature::tet5pt_y,
+                   Quadrature::tet5pt_z, Quadrature::tet5pt_weights, vase_x,
+                   vase_y, vase_z, vase_elements);
 
-  double* d_vel_guess = newton.GetVelocityGuessDevicePtr();
-  HANDLE_ERROR(cudaMemset(d_vel_guess, 0, n_nodes * 3 * sizeof(double)));
+  foam_data->ApplyMaterial(foam_preset.material);
+  vase_data->ApplyMaterial(kVaseMaterial);
 
-  std::cout << "Newton solver initialized.\n\n";
+  foam_data->CalcDnDuPre();
+  foam_data->CalcMassMatrix();
+  foam_data->CalcConstraintData();
+  foam_data->ConvertToCSR_ConstraintJacT();
+  foam_data->BuildConstraintJacobianCSR();
+
+  vase_data->CalcDnDuPre();
+  vase_data->CalcMassMatrix();
+  vase_data->CalcConstraintData();
+  vase_data->ConvertToCSR_ConstraintJacT();
+  vase_data->BuildConstraintJacobianCSR();
+
+  const std::vector<double> foam_lumped_mass =
+      LumpedMassFromFeat10(*foam_data, inst_foam.num_nodes);
+  const std::vector<double> vase_lumped_mass =
+      LumpedMassFromFeat10(*vase_data, inst_vase.num_nodes);
+  const double foam_total_mass =
+      std::accumulate(foam_lumped_mass.begin(), foam_lumped_mass.end(), 0.0);
+  const double vase_total_mass =
+      std::accumulate(vase_lumped_mass.begin(), vase_lumped_mass.end(), 0.0);
+
+  std::cout << "Foam block: mass=" << foam_total_mass << " kg\n";
+  std::cout << "Vase block: mass=" << vase_total_mass << " kg\n\n";
+
+  // =========================================================================
+  // Multi-block FE solve setup
+  // =========================================================================
+  FEMultiElementProblem problem;
+  const int block_foam = problem.AddElementBlock(foam_data.get(), TYPE_T10);
+  const int block_vase = problem.AddElementBlock(vase_data.get(), TYPE_T10);
+  problem.Finalize();
+  problem.SyncPositionsFromElements();
+  problem.UpdateCollisionNodeBuffer();
+
+  MultiElementNewtonSolver solver(&problem);
+  MultiElementNewtonParams params;
+  params.inner_atol         = 1e-3;
+  params.inner_rtol         = 1e-4;
+  params.outer_tol          = 1e-6;
+  params.enable_line_search = true;
+  params.rho                = 1e12;
+  params.max_outer          = 5;
+  params.max_inner          = 10;
+  params.time_step          = dt;
+  solver.SetParameters(&params);
+  solver.Setup();
+
+  FEStateBuffer& state = problem.GetStateBuffer();
 
   // =========================================================================
   // DEME mesh-mesh collision system
   // =========================================================================
-  // Extract surface triangle meshes from the tet10 volumetric meshes
   ANCFCPUUtils::SurfaceTriMesh foam_surface =
-      ANCFCPUUtils::ExtractSurfaceTriMesh(initial_nodes, elements, inst_foam);
+      ANCFCPUUtils::ExtractSurfaceTriMesh(all_nodes, all_elements, inst_foam);
   ANCFCPUUtils::SurfaceTriMesh vase_surface =
-      ANCFCPUUtils::ExtractSurfaceTriMesh(initial_nodes, elements, inst_vase);
+      ANCFCPUUtils::ExtractSurfaceTriMesh(all_nodes, all_elements, inst_vase);
 
   std::vector<DemeMeshCollisionBody> bodies;
-
-  // Foam body (family 0): stationary container; no patch splitting needed
   {
-    DemeMeshCollisionBody b;
-    b.surface                  = std::move(foam_surface);
-    b.family                   = 0;
-    b.split_into_patches       = false;
-    b.skip_self_contact_forces = false;
-    bodies.push_back(std::move(b));
+    DemeMeshCollisionBody body;
+    body.surface                  = std::move(foam_surface);
+    body.family                   = 0;
+    body.split_into_patches       = true;
+    body.skip_self_contact_forces = false;
+    body.mass                     = static_cast<float>(foam_total_mass);
+    bodies.push_back(std::move(body));
+  }
+  {
+    DemeMeshCollisionBody body;
+    body.surface            = std::move(vase_surface);
+    body.family             = 1;
+    body.split_into_patches = true;
+    body.patch_angle_deg    = -1.0f;
+    body.mass               = static_cast<float>(vase_total_mass);
+    bodies.push_back(std::move(body));
   }
 
-  // Vase body (family 1): falling ceramic object; patch splitting improves
-  // contact resolution on curved surfaces
-  {
-    DemeMeshCollisionBody b;
-    b.surface            = std::move(vase_surface);
-    b.family             = 1;
-    b.split_into_patches = true;
-    b.patch_angle_deg    = -1.0f;  // use DEME default patch angle
-    bodies.push_back(std::move(b));
-  }
-
-  // Construct DEME system (7-arg: mu_s, mu_k, stiffness, CoR,
-  //                                enable_self_collision, dt)
   auto collision_system = std::make_unique<DemeMeshCollisionSystem>(
       std::move(bodies), mu_s, mu_k, contact_stiffness, contact_cor,
       self_collision, dt);
-
-  // Shared device node buffer for collision (column-major: [x... y... z...])
-  double* d_nodes_col = nullptr;
-  HANDLE_ERROR(cudaMalloc(&d_nodes_col, n_nodes * 3 * sizeof(double)));
-  HANDLE_ERROR(cudaMemcpy(d_nodes_col, gpu_t10_data.GetX12DevicePtr(),
-                          n_nodes * sizeof(double), cudaMemcpyDeviceToDevice));
-  HANDLE_ERROR(cudaMemcpy(d_nodes_col + n_nodes, gpu_t10_data.GetY12DevicePtr(),
-                          n_nodes * sizeof(double), cudaMemcpyDeviceToDevice));
-  HANDLE_ERROR(cudaMemcpy(d_nodes_col + 2 * n_nodes,
-                          gpu_t10_data.GetZ12DevicePtr(),
-                          n_nodes * sizeof(double), cudaMemcpyDeviceToDevice));
-  collision_system->BindNodesDevicePtr(d_nodes_col, n_nodes);
+  collision_system->BindNodesDevicePtr(state.d_nodes_collision,
+                                       state.total_coef);
 
   // =========================================================================
-  // Gravity: applied to all free nodes in -Z direction
-  //   Foam nodes have low mass (rho=50) so foam gravity is negligible but kept
-  //   for physical completeness. Fixed nodes are zeroed out.
+  // Gravity
   // =========================================================================
-  Eigen::VectorXd h_f_gravity = Eigen::VectorXd::Zero(n_nodes * 3);
-  for (int i = 0; i < n_nodes; ++i) {
-    h_f_gravity(3 * i + 2) += lumped_mass(i) * gravity;  // -Z component
+  const int total_dofs        = problem.GetTotalDofs();
+  Eigen::VectorXd h_f_gravity = Eigen::VectorXd::Zero(total_dofs);
+
+  const int foam_coef_off = state.blocks[block_foam].coef_offset;
+  const int vase_coef_off = state.blocks[block_vase].coef_offset;
+
+  for (int node = 0; node < inst_foam.num_nodes; ++node) {
+    if (foam_nodes(node, 2) < fix_z_threshold) {
+      continue;
+    }
+    const int coef = foam_coef_off + node;
+    h_f_gravity(3 * coef + 2) +=
+        foam_lumped_mass[static_cast<size_t>(node)] * gravity;
   }
-  // Zero gravity on clamped foam bottom nodes
-  for (int idx : fixed_indices) {
-    h_f_gravity(3 * idx + 2) = 0.0;
+  for (int node = 0; node < inst_vase.num_nodes; ++node) {
+    const int coef = vase_coef_off + node;
+    h_f_gravity(3 * coef + 2) +=
+        vase_lumped_mass[static_cast<size_t>(node)] * gravity;
   }
 
   double* d_f_gravity = nullptr;
-  HANDLE_ERROR(cudaMalloc(&d_f_gravity, n_nodes * 3 * sizeof(double)));
+  HANDLE_ERROR(cudaMalloc(&d_f_gravity, total_dofs * sizeof(double)));
   HANDLE_ERROR(cudaMemcpy(d_f_gravity, h_f_gravity.data(),
-                          n_nodes * 3 * sizeof(double),
-                          cudaMemcpyHostToDevice));
+                          total_dofs * sizeof(double), cudaMemcpyHostToDevice));
 
   cublasHandle_t cublas_handle = nullptr;
   CheckCublas(cublasCreate(&cublas_handle), "cublasCreate");
@@ -448,17 +565,13 @@ int main(int argc, char** argv) {
   double shake_dx_prev = 0.0;
 
   for (int step = 0; step < max_steps; ++step) {
-    auto t0 = std::chrono::high_resolution_clock::now();
+    const auto t0 = std::chrono::high_resolution_clock::now();
 
-    // Prescribed shaking: move fixed foam nodes in ±X with |v|=shake_speed_x.
-    // Implemented as a triangular wave so velocity magnitude is constant except
-    // at direction reversals.
-    if (step >= shake_start_step && step < shake_end_step) {
+    if (n_fixed > 0 && step >= shake_start_step && step < shake_end_step) {
       const double t_shake = (step - shake_start_step) * dt;
-      const double t1      = shake_amp_x / shake_speed_x;  // 0 -> +A
-      const double period =
-          4.0 * shake_amp_x / shake_speed_x;  // 0 -> +A -> -A -> 0
-      const double phase = std::fmod(t_shake, period);
+      const double t1      = shake_amp_x / shake_speed_x;
+      const double period  = 4.0 * shake_amp_x / shake_speed_x;
+      const double phase   = std::fmod(t_shake, period);
 
       double dx = 0.0;
       if (phase < t1) {
@@ -471,62 +584,56 @@ int main(int argc, char** argv) {
 
       const double delta_dx = dx - shake_dx_prev;
       PrescribedShake::OffsetNodesAndTargets(
-          gpu_t10_data.GetX12DevicePtr(), gpu_t10_data.GetX12JacDevicePtr(),
+          foam_data->GetX12DevicePtr(), foam_data->GetX12JacDevicePtr(),
           d_fixed_node_ids, n_fixed, delta_dx);
       shake_dx_prev = dx;
+
+      // Propagate prescribed-motion changes to the unified state buffer before
+      // collision and solve.
+      problem.SyncPositionsFromElements();
     }
 
-    // 1) Sync node positions to collision buffer (device -> device)
-    HANDLE_ERROR(cudaMemcpy(d_nodes_col, gpu_t10_data.GetX12DevicePtr(),
-                            n_nodes * sizeof(double),
-                            cudaMemcpyDeviceToDevice));
-    HANDLE_ERROR(
-        cudaMemcpy(d_nodes_col + n_nodes, gpu_t10_data.GetY12DevicePtr(),
-                   n_nodes * sizeof(double), cudaMemcpyDeviceToDevice));
-    HANDLE_ERROR(
-        cudaMemcpy(d_nodes_col + 2 * n_nodes, gpu_t10_data.GetZ12DevicePtr(),
-                   n_nodes * sizeof(double), cudaMemcpyDeviceToDevice));
+    problem.UpdateCollisionNodeBuffer();
 
-    // 2) Run DEME collision detection and compute contact forces
     CollisionSystemInput coll_in;
-    coll_in.d_nodes_xyz = d_nodes_col;
-    coll_in.n_nodes     = n_nodes;
-    coll_in.d_vel_xyz   = d_vel_guess;
+    coll_in.d_nodes_xyz = state.d_nodes_collision;
+    coll_in.n_nodes     = state.total_coef;
+    coll_in.d_vel_xyz   = nullptr;
     coll_in.dt          = dt;
 
+    // DemeMeshCollisionSystem currently takes its actual contact material from
+    // construction-time parameters / env overrides, not from per-step params.
     CollisionSystemParams coll_params;
-    coll_params.damping  = contact_cor;
-    coll_params.friction = mu_k;
-
     collision_system->Step(coll_in, coll_params);
     const int num_contacts = collision_system->GetNumContacts();
 
-    // 3) External forces = gravity + contact forces
-    HANDLE_ERROR(cudaMemcpy(gpu_t10_data.GetExternalForceDevicePtr(),
-                            d_f_gravity, n_nodes * 3 * sizeof(double),
+    double* d_f_ext = solver.GetExternalForceDevicePtr();
+    HANDLE_ERROR(cudaMemcpy(d_f_ext, d_f_gravity, total_dofs * sizeof(double),
                             cudaMemcpyDeviceToDevice));
     if (num_contacts > 0) {
       const double alpha = 1.0;
-      CheckCublas(cublasDaxpy(cublas_handle, n_nodes * 3, &alpha,
+      CheckCublas(cublasDaxpy(cublas_handle, total_dofs, &alpha,
                               collision_system->GetExternalForcesDevicePtr(), 1,
-                              gpu_t10_data.GetExternalForceDevicePtr(), 1),
+                              d_f_ext, 1),
                   "cublasDaxpy(contact + gravity)");
     }
 
-    // 4) Newton step
-    newton.Solve();
+    solver.Solve();
 
-    // 5) Export VTU
     if (exp_interval > 0 && step % exp_interval == 0) {
-      std::ostringstream fn;
-      fn << "output/vase_drop/mesh_" << std::setfill('0') << std::setw(4)
-         << step << ".vtu";
-      gpu_t10_data.WriteOutputVTU(fn.str());
+      std::ostringstream foam_fn;
+      foam_fn << "output/vase_drop/foam_" << std::setfill('0') << std::setw(4)
+              << step << ".vtu";
+      foam_data->WriteOutputVTU(foam_fn.str());
+
+      std::ostringstream vase_fn;
+      vase_fn << "output/vase_drop/vase_" << std::setfill('0') << std::setw(4)
+              << step << ".vtu";
+      vase_data->WriteOutputVTU(vase_fn.str());
     }
 
-    // 6) Progress report every 20 steps
     if (step % 20 == 0) {
-      auto t1 = std::chrono::high_resolution_clock::now();
+      const auto t1 = std::chrono::high_resolution_clock::now();
       const double ms =
           std::chrono::duration<double, std::milli>(t1 - t0).count();
       std::cout << "Step " << std::setw(4) << step
@@ -535,18 +642,19 @@ int main(int argc, char** argv) {
     }
   }
 
-  // =========================================================================
-  // Cleanup
-  // =========================================================================
   CheckCublas(cublasDestroy(cublas_handle), "cublasDestroy");
   HANDLE_ERROR(cudaFree(d_f_gravity));
-  HANDLE_ERROR(cudaFree(d_nodes_col));
-  HANDLE_ERROR(cudaFree(d_fixed_node_ids));
-  gpu_t10_data.Destroy();
+  if (d_fixed_node_ids != nullptr) {
+    HANDLE_ERROR(cudaFree(d_fixed_node_ids));
+  }
+
+  foam_data->Destroy();
+  vase_data->Destroy();
 
   std::cout << "\n========================================\n";
   std::cout << "Simulation complete.\n";
-  std::cout << "Output: output/vase_drop/mesh_XXXX.vtu\n";
+  std::cout << "Output: output/vase_drop/foam_XXXX.vtu\n";
+  std::cout << "        output/vase_drop/vase_XXXX.vtu\n";
   std::cout << "========================================\n";
   return 0;
 }
