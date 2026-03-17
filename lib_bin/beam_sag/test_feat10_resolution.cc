@@ -37,38 +37,67 @@
 
 namespace {
 
-// Material properties (using SolidMaterialProperties)
-const SolidMaterialProperties mat_beam =
-    SolidMaterialProperties::SVK(7e8,   // E: Young's modulus (Pa)
-                                 0.33,  // nu: Poisson's ratio
-                                 2700,  // rho0: Density (kg/m³)
-                                 0.0,   // eta_damp
-                                 0.0    // lambda_damp
+constexpr double kBeamE          = 7e8;
+constexpr double kBeamNu         = 0.33;
+constexpr double kBeamRho0       = 2700.0;
+constexpr double kBeamEtaDamp    = 0.0;
+constexpr double kBeamLambdaDamp = 0.0;
+
+const SolidMaterialProperties mat_beam_svk =
+    SolidMaterialProperties::SVK(kBeamE,          // E: Young's modulus (Pa)
+                                 kBeamNu,         // nu: Poisson's ratio
+                                 kBeamRho0,       // rho0: Density (kg/m³)
+                                 kBeamEtaDamp,    // eta_damp
+                                 kBeamLambdaDamp  // lambda_damp
+    );
+
+// FEAT10 Mooney-Rivlin test material derived from the current SVK beam
+// parameters. The split matches the existing FEAT10 bunny test so the
+// small-strain shear response stays comparable.
+constexpr double kBeamMu      = kBeamE / (2.0 * (1.0 + kBeamNu));
+constexpr double kBeamK       = kBeamE / (3.0 * (1.0 - 2.0 * kBeamNu));
+constexpr double kBeamMrMu10  = 0.30 * kBeamMu;
+constexpr double kBeamMrMu01  = 0.20 * kBeamMu;
+constexpr double kBeamMrKappa = 1.5 * kBeamK;
+
+const SolidMaterialProperties mat_beam_mr =
+    SolidMaterialProperties::MooneyRivlin(kBeamMrMu10,     // mu10
+                                          kBeamMrMu01,     // mu01
+                                          kBeamMrKappa,    // kappa
+                                          kBeamRho0,       // rho0
+                                          kBeamEtaDamp,    // eta_damp
+                                          kBeamLambdaDamp  // lambda_damp
     );
 
 enum class SolverKind { kNewton, kVbd, kAdamW };
+enum class MaterialKind { kSvk, kMr };
 
 struct Options {
-  SolverKind solver = SolverKind::kAdamW;
-  int steps         = 50;
-  double dt         = 1e-3;
-  double omega      = std::numeric_limits<double>::quiet_NaN();  // VBD only
-  int res           = 8;  // 0/2/4/8/16/32
-  bool write_csv    = false;
+  SolverKind solver     = SolverKind::kAdamW;
+  MaterialKind material = MaterialKind::kSvk;
+  int steps             = 50;
+  double dt             = 1e-3;
+  double omega          = std::numeric_limits<double>::quiet_NaN();  // VBD only
+  int res               = 8;  // 0/2/4/8/16/32
+  bool write_csv        = false;
   std::string csv_path;
 };
 
 void PrintUsage(const char* argv0) {
-  std::cout << "Usage: " << argv0
-            << " [--solver=SOLVER] [--res=R] [--steps=N] [--dt=DT]\n"
-            << "                 [--omega=W] [--csv[=PATH]] [--help]\n\n"
-            << "  --solver=SOLVER   newton | vbd | adamw (default: adamw)\n"
-            << "                   (adamw uses SyncedAdamWNocoopSolver)\n"
-            << "  --res=R            0 | 2 | 4 | 8 | 16 | 32 (default: 8)\n"
-            << "  --steps=N          number of Solve() calls (default: 50)\n"
-            << "  --dt=DT            time step (default: 1e-3)\n"
-            << "  --omega=W          VBD relaxation factor (default: 1.8)\n"
-            << "  --csv[=PATH]       write target-node x history CSV\n";
+  std::cout
+      << "Usage: " << argv0
+      << " [--solver=SOLVER] [--res=R] [--steps=N] [--dt=DT]\n"
+      << "                 [--omega=W] [--svk_mat|--mr_mat] [--csv[=PATH]]"
+      << " [--help]\n\n"
+      << "  --solver=SOLVER   newton | vbd | adamw (default: adamw)\n"
+      << "                   (adamw uses SyncedAdamWNocoopSolver)\n"
+      << "  --res=R            0 | 2 | 4 | 8 | 16 | 32 (default: 8)\n"
+      << "  --steps=N          number of Solve() calls (default: 50)\n"
+      << "  --dt=DT            time step (default: 1e-3)\n"
+      << "  --omega=W          VBD relaxation factor (default: 1.8)\n"
+      << "  --svk_mat          use the original SVK beam material (default)\n"
+      << "  --mr_mat           use the derived Mooney-Rivlin beam material\n"
+      << "  --csv[=PATH]       write target-node x history CSV\n";
 }
 
 bool StartsWith(const std::string& s, const std::string& prefix) {
@@ -129,6 +158,20 @@ std::string SolverName(SolverKind solver) {
   return "unknown";
 }
 
+std::string MaterialName(MaterialKind material) {
+  switch (material) {
+    case MaterialKind::kSvk:
+      return "svk";
+    case MaterialKind::kMr:
+      return "mr";
+  }
+  return "unknown";
+}
+
+const SolidMaterialProperties& BeamMaterial(MaterialKind material) {
+  return material == MaterialKind::kMr ? mat_beam_mr : mat_beam_svk;
+}
+
 bool ParseArgs(int argc, char** argv, Options& opt) {
   for (int i = 1; i < argc; ++i) {
     const std::string arg(argv[i]);
@@ -177,6 +220,14 @@ bool ParseArgs(int argc, char** argv, Options& opt) {
         std::cerr << "Invalid --omega: " << v << "\n";
         return false;
       }
+      continue;
+    }
+    if (arg == "--svk_mat") {
+      opt.material = MaterialKind::kSvk;
+      continue;
+    }
+    if (arg == "--mr_mat") {
+      opt.material = MaterialKind::kMr;
       continue;
     }
     if (arg == "--csv") {
@@ -273,7 +324,8 @@ int main(int argc, char** argv) {
   std::cout << "mesh read nodes: " << n_nodes << std::endl;
   std::cout << "mesh read elements: " << n_elems << std::endl;
   std::cout << "solver=" << SolverName(opt.solver) << " res=" << opt.res
-            << " steps=" << opt.steps << " dt=" << opt.dt << std::endl;
+            << " steps=" << opt.steps << " dt=" << opt.dt
+            << " material=" << MaterialName(opt.material) << std::endl;
 
   GPU_FEAT10_Data data(n_elems, n_nodes);
   data.Initialize();
@@ -321,7 +373,18 @@ int main(int argc, char** argv) {
   data.Setup(Quadrature::tet5pt_x, Quadrature::tet5pt_y, Quadrature::tet5pt_z,
              Quadrature::tet5pt_weights, h_x12, h_y12, h_z12, elements);
 
+  const SolidMaterialProperties& mat_beam = BeamMaterial(opt.material);
   data.ApplyMaterial(mat_beam);
+  if (opt.material == MaterialKind::kMr) {
+    std::cout << "Beam material: Mooney-Rivlin"
+              << " mu10=" << mat_beam.mu10 << " mu01=" << mat_beam.mu01
+              << " kappa=" << mat_beam.kappa << " rho0=" << mat_beam.rho0
+              << std::endl;
+  } else {
+    std::cout << "Beam material: SVK"
+              << " E=" << mat_beam.E << " nu=" << mat_beam.nu
+              << " rho0=" << mat_beam.rho0 << std::endl;
+  }
 
   // Common precomputations
   data.CalcDnDuPre();
@@ -340,7 +403,8 @@ int main(int argc, char** argv) {
     std::string out_path = opt.csv_path;
     if (out_path.empty()) {
       const std::string filename = "node_x_history_feat10_res" + res_str + "_" +
-                                   SolverName(opt.solver) + ".csv";
+                                   SolverName(opt.solver) + "_" +
+                                   MaterialName(opt.material) + ".csv";
       out_path = JoinPath(DefaultOutputDir(), filename);
     }
     csv_file.open(out_path);
@@ -365,8 +429,8 @@ int main(int argc, char** argv) {
 
   switch (opt.solver) {
     case SolverKind::kNewton: {
-      SyncedNewtonParams params = {1e-4, 1e-4, 1e-4, 1e14, 5, 10, opt.dt,
-                                   false};
+      SyncedNewtonParams params = {1e-4, 1e-4, 1e-4,   1e14,
+                                   5,    10,   opt.dt, false};
       if (opt.res == 32) {
         params = {1e-3, 1e-3, 1e-3, 1e14, 5, 10, opt.dt, false};
       }
@@ -417,7 +481,7 @@ int main(int argc, char** argv) {
       } else if (opt.res == 16) {
         // Tuned to keep <=800 inner iterations (tol fixed at 1e-4).
         params = {3e-4, 0.85, 0.999, 1e-8, 0.0,    0.9985, 1e-4,
-                  1e-4, 1e14, 5,     1000, opt.dt, 50,     1e-4};
+                  1e-4, 1e14, 5,     1500, opt.dt, 100,    1e-4};
       } else if (opt.res == 32) {
         // Tuned to keep <=2000 inner iterations (tol fixed at 1e-4).
         params = {2.5e-4, 0.88, 0.999, 1e-8, 0.0,    0.999, 1e-3,

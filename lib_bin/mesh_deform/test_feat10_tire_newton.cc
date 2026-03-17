@@ -10,39 +10,79 @@
 #include <cuda_runtime.h>
 
 #include <Eigen/Dense>
+#include <array>
 #include <iomanip>
 #include <iostream>
+#include <string>
 #include <vector>
 
 #include "../../lib_src/elements/FEAT10Data.cuh"
 #include "../../lib_src/solvers/SyncedNewton.cuh"
 #include "../../lib_utils/cpu_utils.h"
 #include "../../lib_utils/quadrature_utils.h"
+#include "lib_utils/cli_utils.h"
 
 // Material properties (using SolidMaterialProperties)
-const SolidMaterialProperties mat_tire = SolidMaterialProperties::SVK(
-    1.0e7,   // E: Young's modulus (Pa)
-    0.35,    // nu: Poisson's ratio
-    1000.0,  // rho0: Density (kg/m³)
-    5.0e3,   // eta_damp (Pa·s)
-    5.0e3    // lambda_damp (Pa·s)
-);
+const SolidMaterialProperties mat_tire =
+    SolidMaterialProperties::SVK(1.0e7,   // E: Young's modulus (Pa)
+                                 0.35,    // nu: Poisson's ratio
+                                 1000.0,  // rho0: Density (kg/m³)
+                                 5.0e3,   // eta_damp (Pa·s)
+                                 5.0e3    // lambda_damp (Pa·s)
+    );
 
-int main() {
+int main(int argc, char** argv) {
+  ANCFCPUUtils::Cli cli(argv[0]);
+  cli.SetDescription(
+      "FEAT10 tire Newton mesh deformation demo with selectable mesh "
+      "resolution.");
+  cli.AddInt("res", 0,
+             "tire mesh resolution in data/meshes/T10/tire_scaling "
+             "(allowed: 0, 2, 4, 8, 16)");
+
+  std::string cli_err;
+  if (!cli.Parse(argc, argv, &cli_err) || cli.HelpRequested()) {
+    if (!cli_err.empty()) {
+      std::cerr << cli_err << "\n\n";
+    }
+    cli.PrintUsage(std::cout);
+    return cli.HelpRequested() ? 0 : 1;
+  }
+
+  const int res                            = cli.GetInt("res");
+  constexpr std::array<int, 5> kAllowedRes = {0, 2, 4, 8, 16};
+  bool valid_res                           = false;
+  for (const int allowed_res : kAllowedRes) {
+    if (res == allowed_res) {
+      valid_res = true;
+      break;
+    }
+  }
+  if (!valid_res) {
+    std::cerr << "Invalid --res=" << res << " (allowed: 0, 2, 4, 8, 16)"
+              << std::endl;
+    return 1;
+  }
+
+  const std::string mesh_prefix =
+      "data/meshes/T10/tire_scaling/tire_res" + std::to_string(res) + ".1";
+
   // Read mesh data
   Eigen::MatrixXd nodes;
   Eigen::MatrixXi elements;
 
   const int n_nodes =
-      ANCFCPUUtils::FEAT10_read_nodes("data/meshes/T10/tire.node", nodes);
+      ANCFCPUUtils::FEAT10_read_nodes(mesh_prefix + ".node", nodes);
   const int n_elems =
-      ANCFCPUUtils::FEAT10_read_elements("data/meshes/T10/tire.ele", elements);
+      ANCFCPUUtils::FEAT10_read_elements(mesh_prefix + ".ele", elements);
 
+  std::cout << "mesh: " << mesh_prefix << std::endl;
   std::cout << "mesh read nodes: " << n_nodes << std::endl;
   std::cout << "mesh read elements: " << n_elems << std::endl;
 
   if (n_nodes <= 0 || n_elems <= 0) {
-    std::cerr << "Failed to read tire mesh." << std::endl;
+    std::cerr << "Failed to read tire mesh for --res=" << res << "."
+              << std::endl;
     return 1;
   }
 
@@ -142,7 +182,9 @@ int main() {
     }
     solver.Solve();
     if (step % output_interval == 0) {
-      gpu_t10_data.WriteOutputVTU("output/tire_newton_step_" +
+      gpu_t10_data.ComputeVonMises();
+      gpu_t10_data.WriteOutputVTU("output/tire_newton_res" +
+                                  std::to_string(res) + "_step_" +
                                   std::to_string(output_frame) + ".vtu");
       ++output_frame;
     }
