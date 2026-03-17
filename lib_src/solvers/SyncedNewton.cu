@@ -21,6 +21,7 @@
 #include <algorithm>
 #include <chrono>
 #include <iomanip>
+#include <limits>
 #include <vector>
 
 #include "../elements/ANCF3243Data.cuh"
