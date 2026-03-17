@@ -134,8 +134,8 @@ int main(int argc, char** argv) {
   // Set fixed nodes
   gpu_t10_data.SetNodalFixed(h_fixed_nodes);
 
-  // Preserve the original total load from bunny_ascii_26.1:
-  // 582 nodes with z > 4.0, each receiving -35000 N => -20,370,000 N total.
+  // Apply a total downward load of -100,000 N distributed evenly across all
+  // nodes with z > 0.4 (nodes near the ears of the bunny mesh).
   Eigen::VectorXd h_f_ext(gpu_t10_data.get_n_coef() * 3);
   h_f_ext.setZero();
 
@@ -154,7 +154,7 @@ int main(int argc, char** argv) {
       h_f_ext(3 * idx + 2) = force_per_node;
     }
   }
-  // std::cout << "Force nodes (z > 4.0): " << force_node_indices.size()
+  // std::cout << "Force nodes (z > 0.4): " << force_node_indices.size()
   //           << " total_force_z=" << total_force_z << std::endl;
   gpu_t10_data.SetExternalForce(h_f_ext);
 
