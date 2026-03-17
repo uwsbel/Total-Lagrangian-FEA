@@ -110,10 +110,10 @@ int main(int argc, char** argv) {
     h_z12(i) = nodes(i, 2);  // Z coordinates
   }
 
-  // Find all nodes with z < -4
+  // Find all nodes with z < -0.4
   std::vector<int> fixed_node_indices;
   for (int i = 0; i < h_z12.size(); ++i) {
-    if (h_z12(i) < -0.4) {  // Fix nodes with z coordinate less than -4
+    if (h_z12(i) < -0.4) {  // Fix nodes with z coordinate less than -0.4
       fixed_node_indices.push_back(i);
     }
   }
@@ -125,7 +125,7 @@ int main(int argc, char** argv) {
   }
 
   // print fixed nodes
-  std::cout << "Fixed nodes (z < -4.0):" << std::endl;
+  std::cout << "Fixed nodes (z < -0.4):" << std::endl;
   for (int i = 0; i < h_fixed_nodes.size(); ++i) {
     std::cout << h_fixed_nodes(i) << " ";
   }
