@@ -284,15 +284,16 @@ def tet10_tangent_svk_mesh(X_nodes, x_nodes, X_elem, pre_mesh, lam, mu):
 def newton_inner(v0, q_prev, v_prev, M, f_int_func, f_ext, h,
                  X_nodes, X_elem, pre_mesh, lam, mu,
                  lam_mult, rho_bb,
-                 max_newton=20, tol_R=1e-8, tol_step=1e-10):
+                 max_newton=10, inner_atol=1e-4, inner_rtol=1e-4):
     """
-    Plain Newton on R(v)=0 with:
-      R(v) = (M/h)(v-v_prev) + f_int(x) - f_ext + h T^T (lam + rho c)
+    Plain Newton on g(v)=0 with GPU-style residual stopping:
+      g(v) = (M/h)(v-v_prev) + f_int(x) - f_ext + h T^T (lam + rho c)
       J(v) = (M/h) + h K_t(x) + h^2 T^T rho T
     where x = q_prev + h v and T=∂c/∂x (constraint_jacobian).
     """
     v = v0.copy()
     N = M.shape[0] // 3
+    norm_g0 = None
 
     for it in range(max_newton):
         qA = q_prev + h*v
@@ -300,15 +301,18 @@ def newton_inner(v0, q_prev, v_prev, M, f_int_func, f_ext, h,
 
         # Residual pieces
         f_int = f_int_func(x, X_elem, pre_mesh, lam, mu)  # (3N,)
-        R_mech = (M @ (v - v_prev)) / h + f_int - f_ext
+        g_mech = (M @ (v - v_prev)) / h + f_int - f_ext
 
         T = constraint_jacobian(qA)  # (m,3N)
         c = constraint(qA)
-        R = R_mech + h * (T.T @ (lam_mult + rho_bb * c))
+        g = g_mech + h * (T.T @ (lam_mult + rho_bb * c))
 
-        nR = np.linalg.norm(R)
-        print(f"    Newton {it:02d}: ||R|| = {nR:.3e}")
-        if nR < tol_R*(1+np.linalg.norm(v)):
+        ng = np.linalg.norm(g)
+        if norm_g0 is None:
+            norm_g0 = ng
+        rel_g = ng / norm_g0 if norm_g0 > 0 else 0.0
+        print(f"    Newton {it:02d}: ||g|| = {ng:.3e}, ||g||/||g0|| = {rel_g:.3e}")
+        if ng < inner_atol or (inner_rtol > 0.0 and norm_g0 > 0.0 and ng <= inner_rtol * norm_g0):
             break
 
         # Jacobian
@@ -318,23 +322,20 @@ def newton_inner(v0, q_prev, v_prev, M, f_int_func, f_ext, h,
         # Solve and update (using Cholesky factorization)
         try:
             L = np.linalg.cholesky(J)
-            y = np.linalg.solve(L, -R)
+            y = np.linalg.solve(L, -g)
             dv = np.linalg.solve(L.T, y)
             print(f"    Cholesky solve successful")
         except np.linalg.LinAlgError:
             print(f"    Warning: Cholesky failed (matrix not positive definite), falling back to direct solve")
-            dv = np.linalg.solve(J, -R)
+            dv = np.linalg.solve(J, -g)
         v += dv
-
-        if np.linalg.norm(dv) < tol_step*(1+np.linalg.norm(v)):
-            print("    Newton step small; stopping.")
-            break
 
     return v, it+1
 
 def alm_newton_step(v_guess, lam_guess, v_prev, q_prev, M, f_int_func, f_ext, h, rho_bb,
                     X_nodes, X_elem, pre_mesh, lam, mu,
-                    max_outer=5, outer_tol=1e-6):
+                    max_outer=5, outer_tol=1e-6,
+                    max_newton=10, inner_atol=1e-4, inner_rtol=1e-4):
     """
     ALM outer loop with classic Newton inner solves (no line search).
     """
@@ -351,7 +352,8 @@ def alm_newton_step(v_guess, lam_guess, v_prev, q_prev, M, f_int_func, f_ext, h,
         v, nit = newton_inner(v, q_prev, v_prev, M, f_int_func, f_ext, h,
                               X_nodes, X_elem, pre_mesh, lam, mu,
                               lam_mult, rho_bb,
-                              max_newton=20, tol_R=1e-8, tol_step=1e-10)
+                              max_newton=max_newton,
+                              inner_atol=inner_atol, inner_rtol=inner_rtol)
         total_newton_iters += nit
 
         # ALM multiplier update (note: no 'h' here)
@@ -390,6 +392,11 @@ if __name__ == "__main__":
     f_ext[3*19 + 0] = 1000.0  # 1000 N force in x direction at node index 19
     time_step = 1e-3
     rho_bb = 1e14
+    max_outer = 5
+    outer_tol = 1e-6
+    max_newton = 10
+    inner_atol = 1e-4
+    inner_rtol = 1e-4
 
     q_prev = x_nodes.flatten()
     v_prev = np.zeros_like(q_prev)
@@ -410,7 +417,10 @@ if __name__ == "__main__":
         v_res, lam_res, outer_iters, inner_iters = alm_newton_step(
             v_guess, lam_guess, v_prev, q_prev, M_full,
             tet10_internal_force_mesh, f_ext, time_step, rho_bb,
-            X_nodes, X_elem, pre_mesh, lam, mu)
+            X_nodes, X_elem, pre_mesh, lam, mu,
+            max_outer=max_outer, outer_tol=outer_tol,
+            max_newton=max_newton,
+            inner_atol=inner_atol, inner_rtol=inner_rtol)
 
         v_guess, lam_guess = v_res.copy(), lam_res.copy()
         q_new = q_prev + time_step * v_guess
