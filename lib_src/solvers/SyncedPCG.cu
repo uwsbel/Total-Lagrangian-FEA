@@ -1127,6 +1127,8 @@ void SyncedPCGSolver::PCGSolve(int n_dofs) {
 
   // 6. PCG loop
   double alpha_spmv = 1.0, beta_spmv = 0.0;
+  double r_norm = r_norm0;
+  bool pcg_converged = false;
   int pcg_it = 0;
   for (; pcg_it < h_max_pcg_iter_; ++pcg_it) {
     // 6a. Ap = H @ p
@@ -1148,9 +1150,10 @@ void SyncedPCGSolver::PCGSolve(int n_dofs) {
 
     // 6e. Convergence check
     HANDLE_ERROR(cudaDeviceSynchronize());
-    double r_norm = compute_l2_norm_cublas(d_r_, n_dofs);
+    r_norm = compute_l2_norm_cublas(d_r_, n_dofs);
     if (r_norm < h_pcg_rtol_ * r_norm0 || r_norm < 1e-15) {
       ++pcg_it;
+      pcg_converged = true;
       break;
     }
 
@@ -1170,9 +1173,10 @@ void SyncedPCGSolver::PCGSolve(int n_dofs) {
         d_beta_cg_, d_z_pcg_, d_p_pcg_, n_dofs);
   }
   std::cout << "    PCG iters: " << pcg_it << std::endl;
-  if (pcg_it >= h_max_pcg_iter_)
-    std::cerr << "    WARNING: PCG hit max iters (" << h_max_pcg_iter_
-              << ")\n";
+  if (!pcg_converged) {
+    std::cerr << "    WARNING: PCG did not converge, ||r|| = "
+              << std::scientific << r_norm << "\n";
+  }
 }
 
 // =====================================================
