@@ -290,13 +290,16 @@ def apply_precond(M_inv_blocks, r, n_nodes):
 def pcg_inner(v0, q_prev, v_prev, M, f_int_func, f_ext, h,
               X_nodes, X_elem, pre_mesh, lam, mu,
               lam_mult, rho_bb,
-              max_newton=10, max_pcg=200, pcg_rtol=1e-4, tol_g=1e-4):
+              max_newton=10, max_pcg=200, pcg_rtol=1e-4,
+              inner_atol=1e-4, inner_rtol=1e-4):
     """
     Inexact Newton with PCG inner solve using block-diagonal preconditioner.
     """
     v = v0.copy()
     N = M.shape[0] // 3
     total_pcg_iters = 0
+
+    norm_g0 = None
 
     for it in range(max_newton):
         qA = q_prev + h*v
@@ -311,8 +314,11 @@ def pcg_inner(v0, q_prev, v_prev, M, f_int_func, f_ext, h,
         g = R_mech + h * (T.T @ (lam_mult + rho_bb * c))
 
         ng = np.linalg.norm(g)
-        print(f"    Newton {it:02d}: ||g|| = {ng:.3e}")
-        if ng < tol_g * (1 + np.linalg.norm(v)):
+        if norm_g0 is None:
+            norm_g0 = ng
+        rel_g = ng / norm_g0 if norm_g0 > 0 else 0.0
+        print(f"    Newton {it:02d}: ||g|| = {ng:.3e}, ||g||/||g0|| = {rel_g:.3e}")
+        if ng < inner_atol or (inner_rtol > 0.0 and norm_g0 > 0.0 and ng <= inner_rtol * norm_g0):
             break
 
         # Hessian: H = M/h + h*Kt + h^2*rho*T^T*T
@@ -327,32 +333,47 @@ def pcg_inner(v0, q_prev, v_prev, M, f_int_func, f_ext, h,
         dv = np.zeros_like(g)
         z = apply_precond(M_inv_blocks, r, N)
         p = z.copy()
-        rz_old = r @ z
+        rz = r @ z
         r_norm0 = np.linalg.norm(r)
+        r_norm = r_norm0
+        pcg_converged = False
+        pcg_bad_curvature = False
 
         pcg_iters = 0
         for pcg_it in range(max_pcg):
             Hp = H @ p
-            pHp = p @ Hp
-            if abs(pHp) < 1e-30:
+            denom = p @ Hp
+            if denom <= 0.0:
+                pcg_bad_curvature = True
                 break
-            alpha = rz_old / pHp
+            if abs(denom) < 1e-30:
+                break
+
+            alpha = rz / denom
             dv += alpha * p
             r -= alpha * Hp
 
             r_norm = np.linalg.norm(r)
             pcg_iters = pcg_it + 1
             if r_norm < pcg_rtol * r_norm0 or r_norm < 1e-15:
+                pcg_converged = True
                 break
 
-            z = apply_precond(M_inv_blocks, r, N)
-            rz_new = r @ z
-            if abs(rz_old) < 1e-30:
+            z_new = apply_precond(M_inv_blocks, r, N)
+            rz_new = r @ z_new
+            if abs(rz) < 1e-30:
                 break
-            beta = rz_new / rz_old
-            p = z + beta * p
-            rz_old = rz_new
 
+            beta = rz_new / rz
+            p = z_new + beta * p
+            z = z_new
+            rz = rz_new
+
+        if not pcg_converged:
+            if pcg_bad_curvature:
+                print("      WARNING: PCG stopped due to nonpositive p^T H p")
+            else:
+                print(f"      WARNING: PCG did not converge, ||r|| = {r_norm:.3e}")
         total_pcg_iters += pcg_iters
         print(f"      PCG converged in {pcg_iters} iters, ||r|| = {np.linalg.norm(r):.3e}")
 
@@ -379,7 +400,8 @@ def alm_pcg_step(v_guess, lam_guess, v_prev, q_prev, M, f_int_func, f_ext, h, rh
         v, nit, pcg_iters = pcg_inner(v, q_prev, v_prev, M, f_int_func, f_ext, h,
                                        X_nodes, X_elem, pre_mesh, lam, mu,
                                        lam_mult, rho_bb,
-                                       max_newton=10, max_pcg=200, pcg_rtol=1e-4, tol_g=1e-4)
+                                       max_newton=10, max_pcg=200, pcg_rtol=1e-4,
+                                       inner_atol=1e-4, inner_rtol=1e-4)
         total_newton_iters += nit
         total_pcg_iters += pcg_iters
 
