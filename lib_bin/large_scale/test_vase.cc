@@ -65,7 +65,6 @@ struct FoamMaterialPreset {
 
 static constexpr double kFoamEtaDamp          = 5e3;
 static constexpr double kFoamLambdaDamp       = 5e3;
-static constexpr double kNearIncompressibleNu = 0.499;
 
 // Vase (ceramic / porcelain). Keep SVK to avoid forcing a hyperelastic fit on
 // a stiff, small-strain body.
@@ -95,7 +94,7 @@ FoamMaterialPreset GetFoamMaterialPreset(FoamMaterialType type) {
     case FoamMaterialType::kNeoprene50A:
       return {"neoprene50a", "Neoprene / chloroprene rubber (50A)",
               MakeFoamMaterial(0.302e6, 0.076e6,
-                               MrBulkFromNu(0.302e6, 0.076e6, 0.49), 1230.0)};
+                               MrBulkFromNu(0.302e6, 0.076e6, 0.49), 1350.0)};
     case FoamMaterialType::kPolyurethane50A:
       return {"polyurethane50a", "Polyurethane elastomer (50A)",
               MakeFoamMaterial(0.302e6, 0.076e6,
@@ -109,7 +108,7 @@ FoamMaterialPreset GetFoamMaterialPreset(FoamMaterialType type) {
     case FoamMaterialType::kNeoprene60A:
       return {"neoprene60a", "Neoprene / chloroprene rubber (60A)",
               MakeFoamMaterial(0.382e6, 0.096e6,
-                               MrBulkFromNu(0.382e6, 0.096e6, 0.49), 1230.0)};
+                               MrBulkFromNu(0.382e6, 0.096e6, 0.49), 1400.0)};
   }
 
   return GetFoamMaterialPreset(FoamMaterialType::kEva95);
