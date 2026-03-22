@@ -452,6 +452,7 @@ int main(int argc, char** argv) {
       solver.AnalyzeHessianSparsity();
       solver.SetFixedSparsityPattern(true);
       for (int step = 0; step < opt.steps; ++step) {
+        std::cout << "Step " << step << std::endl;
         solver.Solve();
         record_step(step);
       }
@@ -485,6 +486,7 @@ int main(int argc, char** argv) {
       solver.SetParameters(&params);
       solver.AnalyzeHessianSparsity();
       for (int step = 0; step < opt.steps; ++step) {
+        std::cout << "Step " << step << std::endl;
         solver.Solve();
         record_step(step);
       }
