@@ -48,12 +48,12 @@ class SyncedPCGSolver : public SolverBase {
         d_csr_row_offsets_(nullptr),
         d_csr_col_indices_(nullptr),
         d_csr_values_(nullptr),
-        spmv_initialized_(false),
         spmv_mat_descr_(nullptr),
         spmv_vec_in_descr_(nullptr),
         spmv_vec_out_descr_(nullptr),
         d_spmv_buffer_(nullptr),
-        spmv_buffer_size_(0) {
+        spmv_buffer_size_(0),
+        spmv_initialized_(false) {
     if (data->type == TYPE_3243) {
       type_            = TYPE_3243;
       auto *typed_data = static_cast<GPU_ANCF3243_Data *>(data);
