@@ -466,8 +466,109 @@ __device__ __forceinline__ void clear_internal_force(GPU_FEAT10_Data* d_data) {
   }
 }
 
+__device__ __forceinline__ void eval_general_constraint_point(
+    GPU_FEAT10_Data* d_data, int constraint_idx, int point_slot,
+    double* out_position) {
+  out_position[0] = 0.0;
+  out_position[1] = 0.0;
+  out_position[2] = 0.0;
+
+  const int elem_idx =
+      d_data->general_constraint_point_element(constraint_idx, point_slot);
+  if (elem_idx < 0) {
+    return;
+  }
+
+  const auto connectivity = d_data->element_connectivity();
+  for (int local_node = 0; local_node < Quadrature::N_NODE_T10_10;
+       ++local_node) {
+    const double weight = d_data->general_constraint_point_shape(
+        constraint_idx, point_slot, local_node);
+    if (weight == 0.0) {
+      continue;
+    }
+
+    const int global_node = connectivity(elem_idx, local_node);
+    out_position[0] += weight * d_data->x12()(global_node);
+    out_position[1] += weight * d_data->y12()(global_node);
+    out_position[2] += weight * d_data->z12()(global_node);
+  }
+}
+
+__device__ __forceinline__ void compute_general_constraint_data(
+    GPU_FEAT10_Data* d_data) {
+  const int constraint_idx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (constraint_idx >= d_data->gpu_n_constraint()) {
+    return;
+  }
+
+  const int type = d_data->general_constraint_type(constraint_idx);
+  const double row_scale =
+      d_data->general_constraint_row_scale(constraint_idx);
+  if (type == kFEAT10ConstraintNodeWorldCD) {
+    const int node = d_data->general_constraint_node(constraint_idx);
+    const int axis = d_data->general_constraint_axis(constraint_idx);
+    double value   = 0.0;
+    if (axis == 0) {
+      value = d_data->x12()(node);
+    } else if (axis == 1) {
+      value = d_data->y12()(node);
+    } else {
+      value = d_data->z12()(node);
+    }
+    d_data->constraint()(constraint_idx) =
+        row_scale *
+        (value - d_data->general_constraint_target(constraint_idx));
+    return;
+  }
+
+  double p[3], q[3], r[3], s[3];
+  eval_general_constraint_point(d_data, constraint_idx, 0, p);
+
+  if (type == kFEAT10ConstraintPointWorldCD) {
+    const int axis = d_data->general_constraint_axis(constraint_idx);
+    d_data->constraint()(constraint_idx) =
+        row_scale *
+        (p[axis] - d_data->general_constraint_target(constraint_idx));
+    return;
+  }
+
+  eval_general_constraint_point(d_data, constraint_idx, 1, q);
+
+  if (type == kFEAT10ConstraintPointPointCD) {
+    const int axis = d_data->general_constraint_axis(constraint_idx);
+    d_data->constraint()(constraint_idx) =
+        row_scale *
+        ((q[axis] - p[axis]) -
+         d_data->general_constraint_target(constraint_idx));
+    return;
+  }
+
+  double a[3] = {q[0] - p[0], q[1] - p[1], q[2] - p[2]};
+  double d[3] = {0.0, 0.0, 0.0};
+  if (type == kFEAT10ConstraintWorldDP1) {
+    d[0] = d_data->general_constraint_world_direction(constraint_idx, 0);
+    d[1] = d_data->general_constraint_world_direction(constraint_idx, 1);
+    d[2] = d_data->general_constraint_world_direction(constraint_idx, 2);
+  } else {
+    eval_general_constraint_point(d_data, constraint_idx, 2, r);
+    eval_general_constraint_point(d_data, constraint_idx, 3, s);
+    d[0] = s[0] - r[0];
+    d[1] = s[1] - r[1];
+    d[2] = s[2] - r[2];
+  }
+  d_data->constraint()(constraint_idx) =
+      row_scale * (a[0] * d[0] + a[1] * d[1] + a[2] * d[2] -
+                   d_data->general_constraint_target(constraint_idx));
+}
+
 __device__ __forceinline__ void compute_constraint_data(
     GPU_FEAT10_Data* d_data) {
+  if (d_data->GetConstraintMode() == kFEAT10ConstraintGeneral) {
+    compute_general_constraint_data(d_data);
+    return;
+  }
+
   int thread_idx = blockIdx.x * blockDim.x + threadIdx.x;
 
   if (thread_idx < d_data->gpu_n_constraint() / 3) {

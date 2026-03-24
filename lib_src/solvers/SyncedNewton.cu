@@ -23,6 +23,7 @@
 #include <iomanip>
 #include <limits>
 #include <vector>
+#include <type_traits>
 
 #include "../elements/ANCF3243Data.cuh"
 #include "../elements/ANCF3243DataFunc.cuh"
@@ -155,6 +156,30 @@ __device__ int binary_search_column(const int *cols, int n_cols, int target) {
   }
   return -1;  // Not found
 }
+
+__device__ __forceinline__ void add_sparse_hessian_entry(
+    int row_dof, int col_dof, double value, const int *d_csr_row_offsets,
+    const int *d_csr_col_indices, double *d_csr_values) {
+  int row_begin  = d_csr_row_offsets[row_dof];
+  int row_length = d_csr_row_offsets[row_dof + 1] - row_begin;
+  int pos = binary_search_column(&d_csr_col_indices[row_begin], row_length,
+                                 col_dof);
+  if (pos >= 0) {
+    atomicAdd(&d_csr_values[row_begin + pos], value);
+  }
+}
+
+__device__ __forceinline__ void add_symmetric_sparse_hessian_entry(
+    int dof_a, int dof_b, double value, const int *d_csr_row_offsets,
+    const int *d_csr_col_indices, double *d_csr_values) {
+  add_sparse_hessian_entry(dof_a, dof_b, value, d_csr_row_offsets,
+                           d_csr_col_indices, d_csr_values);
+  if (dof_a != dof_b) {
+    add_sparse_hessian_entry(dof_b, dof_a, value, d_csr_row_offsets,
+                             d_csr_col_indices, d_csr_values);
+  }
+}
+
 // Build the global DOF-level CSR pattern from the coefficient-level adjacency
 // already constructed by each ElementData via BuildMassCSRPattern().
 //
@@ -338,6 +363,107 @@ __global__ void assemble_sparse_hessian_constraints(
 
       if (pos >= 0) {
         atomicAdd(&d_csr_values[row_begin + pos], factor * J_ic * J_jc);
+      }
+    }
+  }
+}
+
+__global__ void assemble_sparse_hessian_t10_exact_dp1_constraints(
+    GPU_FEAT10_Data *d_data, SyncedNewtonSolver *d_solver,
+    int *d_csr_row_offsets, int *d_csr_col_indices, double *d_csr_values) {
+  const int constraint_idx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (constraint_idx >= d_solver->gpu_n_constraints()) {
+    return;
+  }
+
+  if (d_data->general_constraint_type(constraint_idx) !=
+      kFEAT10ConstraintDP1) {
+    return;
+  }
+
+  const double h = d_solver->solver_time_step();
+  const double rho = *d_solver->solver_rho();
+  const double lambda = d_solver->lambda_guess()(constraint_idx);
+  const double c_val = d_data->constraint()(constraint_idx);
+  const double row_scale = d_data->general_constraint_row_scale(constraint_idx);
+  // constraint() and lambda_guess() already store the normalized DP1 row,
+  // while the block structure assembled below corresponds to the raw second
+  // derivative in Eq. (23). Under that convention, the curvature correction
+  // contributes one additional row-scale factor here.
+  const double factor = h * h * (lambda + rho * c_val) * row_scale;
+
+  if (fabs(factor) < 1e-30) {
+    return;
+  }
+
+  const auto connectivity = d_data->element_connectivity();
+
+  for (int axis = 0; axis < 3; ++axis) {
+    for (int local_p = 0; local_p < Quadrature::N_NODE_T10_10; ++local_p) {
+      const double wp =
+          d_data->general_constraint_point_shape(constraint_idx, 0, local_p);
+      if (wp != 0.0) {
+        const int node_p = connectivity(
+            d_data->general_constraint_point_element(constraint_idx, 0),
+            local_p);
+        const int dof_p = node_p * 3 + axis;
+
+        for (int local_r = 0; local_r < Quadrature::N_NODE_T10_10; ++local_r) {
+          const double wr = d_data->general_constraint_point_shape(
+              constraint_idx, 2, local_r);
+          if (wr != 0.0) {
+            const int node_r = connectivity(
+                d_data->general_constraint_point_element(constraint_idx, 2),
+                local_r);
+            add_symmetric_sparse_hessian_entry(
+                dof_p, node_r * 3 + axis, factor * wp * wr,
+                d_csr_row_offsets, d_csr_col_indices, d_csr_values);
+          }
+
+          const double ws = d_data->general_constraint_point_shape(
+              constraint_idx, 3, local_r);
+          if (ws != 0.0) {
+            const int node_s = connectivity(
+                d_data->general_constraint_point_element(constraint_idx, 3),
+                local_r);
+            add_symmetric_sparse_hessian_entry(
+                dof_p, node_s * 3 + axis, -factor * wp * ws,
+                d_csr_row_offsets, d_csr_col_indices, d_csr_values);
+          }
+        }
+      }
+
+      const double wq =
+          d_data->general_constraint_point_shape(constraint_idx, 1, local_p);
+      if (wq != 0.0) {
+        const int node_q = connectivity(
+            d_data->general_constraint_point_element(constraint_idx, 1),
+            local_p);
+        const int dof_q = node_q * 3 + axis;
+
+        for (int local_r = 0; local_r < Quadrature::N_NODE_T10_10; ++local_r) {
+          const double wr = d_data->general_constraint_point_shape(
+              constraint_idx, 2, local_r);
+          if (wr != 0.0) {
+            const int node_r = connectivity(
+                d_data->general_constraint_point_element(constraint_idx, 2),
+                local_r);
+            add_symmetric_sparse_hessian_entry(
+                dof_q, node_r * 3 + axis, -factor * wq * wr,
+                d_csr_row_offsets, d_csr_col_indices, d_csr_values);
+          }
+
+          const double ws = d_data->general_constraint_point_shape(
+              constraint_idx, 3, local_r);
+          if (ws != 0.0) {
+            const int node_s = connectivity(
+                d_data->general_constraint_point_element(constraint_idx, 3),
+                local_r);
+            add_symmetric_sparse_hessian_entry(
+                dof_q, node_s * 3 + axis, factor * wq * ws,
+                d_csr_row_offsets, d_csr_col_indices, d_csr_values);
+          }
+        }
       }
     }
   }
@@ -552,10 +678,133 @@ void SyncedNewtonSolver::AnalyzeHessianSparsity() {
 
   std::cout << "Analyzing Hessian sparsity pattern..." << std::endl;
 
-  // Special-case: ANCF3243/ANCF3443 with general (linear CSR) constraints needs
-  // a constraint-aware sparsity pattern. The default coefficient-adjacency
-  // expansion only captures element couplings, and would miss J^T J
-  // off-diagonal blocks that connect otherwise-disconnected mesh components.
+  // Special-case: T10/ANCF with general sparse constraints needs a
+  // constraint-aware sparsity pattern. The default coefficient-adjacency
+  // expansion only captures element couplings, and would miss J^T J and exact
+  // DP1 curvature off-diagonal blocks that connect otherwise-disconnected mesh
+  // components across joints.
+  if (type_ == TYPE_T10 && n_constraints_ > 0) {
+    auto *typed_data = static_cast<GPU_FEAT10_Data *>(h_data_);
+    if (typed_data->GetConstraintMode() == kFEAT10ConstraintGeneral) {
+      typed_data->BuildMassCSRPattern();
+      typed_data->BuildConstraintJacobianCSR();
+
+      std::vector<int> mass_offsets;
+      std::vector<int> mass_columns;
+      std::vector<double> mass_values;
+      typed_data->RetrieveMassCSRToCPU(mass_offsets, mass_columns, mass_values);
+
+      std::vector<int> j_offsets;
+      std::vector<int> j_columns;
+      std::vector<double> j_values;
+      typed_data->RetrieveConstraintJacobianCSRToCPU(j_offsets, j_columns,
+                                                     j_values);
+
+      const int n_dofs = 3 * n_coef_;
+
+      std::vector<std::vector<int>> coef_adj(static_cast<size_t>(n_coef_));
+      for (int i = 0; i < n_coef_; ++i) {
+        coef_adj[static_cast<size_t>(i)].push_back(i);
+      }
+
+      if (static_cast<int>(mass_offsets.size()) == n_coef_ + 1) {
+        for (int i = 0; i < n_coef_; ++i) {
+          const int start = mass_offsets[static_cast<size_t>(i)];
+          const int end   = mass_offsets[static_cast<size_t>(i + 1)];
+          for (int idx = start; idx < end; ++idx) {
+            const int j = mass_columns[static_cast<size_t>(idx)];
+            if (j < 0 || j >= n_coef_)
+              continue;
+            coef_adj[static_cast<size_t>(i)].push_back(j);
+          }
+        }
+      }
+
+      if (static_cast<int>(j_offsets.size()) == n_constraints_ + 1) {
+        std::vector<int> row_coefs;
+        row_coefs.reserve(8);
+        for (int r = 0; r < n_constraints_; ++r) {
+          row_coefs.clear();
+          const int start = j_offsets[static_cast<size_t>(r)];
+          const int end   = j_offsets[static_cast<size_t>(r + 1)];
+          for (int idx = start; idx < end; ++idx) {
+            const int dof = j_columns[static_cast<size_t>(idx)];
+            if (dof < 0 || dof >= n_dofs)
+              continue;
+            const int coef = dof / 3;
+            if (coef < 0 || coef >= n_coef_)
+              continue;
+            row_coefs.push_back(coef);
+          }
+          std::sort(row_coefs.begin(), row_coefs.end());
+          row_coefs.erase(std::unique(row_coefs.begin(), row_coefs.end()),
+                          row_coefs.end());
+          for (size_t a = 0; a < row_coefs.size(); ++a) {
+            for (size_t b = a; b < row_coefs.size(); ++b) {
+              const int ia = row_coefs[a];
+              const int ib = row_coefs[b];
+              coef_adj[static_cast<size_t>(ia)].push_back(ib);
+              coef_adj[static_cast<size_t>(ib)].push_back(ia);
+            }
+          }
+        }
+      }
+
+      for (int i = 0; i < n_coef_; ++i) {
+        auto &nbrs = coef_adj[static_cast<size_t>(i)];
+        std::sort(nbrs.begin(), nbrs.end());
+        nbrs.erase(std::unique(nbrs.begin(), nbrs.end()), nbrs.end());
+      }
+
+      std::vector<int> dof_offsets(static_cast<size_t>(n_dofs) + 1, 0);
+      std::vector<int> dof_columns;
+      dof_columns.reserve(static_cast<size_t>(n_dofs) * 16);
+
+      int running = 0;
+      for (int dof_row = 0; dof_row < n_dofs; ++dof_row) {
+        const int coef_i = dof_row / 3;
+        const auto &nbrs = coef_adj[static_cast<size_t>(coef_i)];
+
+        dof_offsets[static_cast<size_t>(dof_row)] = running;
+        for (int coef_j : nbrs) {
+          const int base = 3 * coef_j;
+          dof_columns.push_back(base + 0);
+          dof_columns.push_back(base + 1);
+          dof_columns.push_back(base + 2);
+          running += 3;
+        }
+      }
+      dof_offsets[static_cast<size_t>(n_dofs)] = running;
+
+      h_nnz_ = running;
+      HANDLE_ERROR(cudaMalloc(&d_csr_row_offsets_,
+                              static_cast<size_t>(n_dofs + 1) * sizeof(int)));
+      HANDLE_ERROR(cudaMalloc(&d_csr_col_indices_,
+                              static_cast<size_t>(h_nnz_) * sizeof(int)));
+      HANDLE_ERROR(cudaMalloc(&d_csr_values_,
+                              static_cast<size_t>(h_nnz_) * sizeof(double)));
+
+      HANDLE_ERROR(cudaMemcpy(d_csr_row_offsets_, dof_offsets.data(),
+                              static_cast<size_t>(n_dofs + 1) * sizeof(int),
+                              cudaMemcpyHostToDevice));
+      HANDLE_ERROR(cudaMemcpy(d_csr_col_indices_, dof_columns.data(),
+                              static_cast<size_t>(h_nnz_) * sizeof(int),
+                              cudaMemcpyHostToDevice));
+      HANDLE_ERROR(cudaMemset(d_csr_values_, 0,
+                              static_cast<size_t>(h_nnz_) * sizeof(double)));
+
+      std::cout << "Sparse Hessian (constraint-aware): " << n_dofs << " x "
+                << n_dofs << ", nnz = " << h_nnz_ << " ("
+                << (100.0 * static_cast<double>(h_nnz_)) /
+                       (static_cast<double>(n_dofs) *
+                        static_cast<double>(n_dofs))
+                << "%)" << std::endl;
+
+      sparse_hessian_initialized_ = true;
+      std::cout << "Sparsity analysis complete." << std::endl;
+      return;
+    }
+  }
   if (type_ == TYPE_3243 && n_constraints_ > 0) {
     auto *typed_data = static_cast<GPU_ANCF3243_Data *>(h_data_);
     if (typed_data->GetConstraintMode() ==
@@ -959,6 +1208,12 @@ void SyncedNewtonSolver::OneStepNewtonCuDSS() {
       (n_beam_ * n_shape_ + threadsPerBlock - 1) / threadsPerBlock;
   int numBlocks_grad_l = (n_coef_ * 3 + threadsPerBlock - 1) / threadsPerBlock;
   int n_constraints_eval = n_constraints_ / 3;
+  if (type_ == TYPE_T10 && n_constraints_ > 0) {
+    auto *typed_data = static_cast<GPU_FEAT10_Data *>(h_data_);
+    if (typed_data->GetConstraintMode() == kFEAT10ConstraintGeneral) {
+      n_constraints_eval = n_constraints_;
+    }
+  }
   if (type_ == TYPE_3243 && n_constraints_ > 0) {
     auto *typed_data = static_cast<GPU_ANCF3243_Data *>(h_data_);
     if (typed_data->GetConstraintMode() ==
@@ -1011,10 +1266,13 @@ void SyncedNewtonSolver::OneStepNewtonCuDSS() {
   }
 
   cudssMatrix_t dssA, dssB, dssX;
+  const cudssMatrixType_t matrix_type =
+      use_symmetric_constraint_hessian_ ? CUDSS_MTYPE_SYMMETRIC
+                                        : CUDSS_MTYPE_SPD;
   CUDSS_OK(cudssMatrixCreateCsr(
       &dssA, n_dofs, n_dofs, h_nnz_, d_csr_row_offsets_, nullptr,
       d_csr_col_indices_, d_csr_values_, CUDA_R_32I, CUDA_R_64F,
-      CUDSS_MTYPE_SPD, CUDSS_MVIEW_UPPER, CUDSS_BASE_ZERO));
+      matrix_type, CUDSS_MVIEW_UPPER, CUDSS_BASE_ZERO));
   CUDSS_OK(cudssMatrixCreateDn(&dssB, n_dofs, 1, n_dofs, d_r_, CUDA_R_64F,
                                CUDSS_LAYOUT_COL_MAJOR));
   CUDSS_OK(cudssMatrixCreateDn(&dssX, n_dofs, 1, n_dofs, d_delta_v_, CUDA_R_64F,
@@ -1090,6 +1348,14 @@ void SyncedNewtonSolver::OneStepNewtonCuDSS() {
       cudss_solve_constraints_eval<<<numBlocks_constraints_eval,
                                      threadsPerBlock>>>(typed_data,
                                                         d_newton_solver_);
+
+      if (type_ == TYPE_T10) {
+        auto *host_t10 = static_cast<GPU_FEAT10_Data *>(h_data_);
+        if (host_t10->GetConstraintMode() == kFEAT10ConstraintGeneral) {
+          host_t10->BuildConstraintJacobianTransposeCSR();
+          host_t10->BuildConstraintJacobianCSR();
+        }
+      }
     }
 
     cudss_solve_compute_grad_l<<<numBlocks_grad_l, threadsPerBlock>>>(
@@ -1209,6 +1475,15 @@ void SyncedNewtonSolver::OneStepNewtonCuDSS() {
                                                 threadsPerBlock>>>(
               typed_data, d_newton_solver_, d_csr_row_offsets_,
               d_csr_col_indices_, d_csr_values_);
+
+          if constexpr (std::is_same_v<decltype(*typed_data), GPU_FEAT10_Data&>) {
+            if (use_symmetric_constraint_hessian_) {
+              assemble_sparse_hessian_t10_exact_dp1_constraints<<<
+                  numBlocks_sparse_constraint, threadsPerBlock>>>(
+                  typed_data, d_newton_solver_, d_csr_row_offsets_,
+                  d_csr_col_indices_, d_csr_values_);
+            }
+          }
         }
 
         HANDLE_ERROR(cudaDeviceSynchronize());
@@ -1255,16 +1530,16 @@ void SyncedNewtonSolver::OneStepNewtonCuDSS() {
       cudss_solve_update_pos<<<numBlocks_update_pos, threadsPerBlock>>>(
           d_newton_solver_, typed_data);
 
-      cudss_solve_update_v_prev<<<numBlocks_update_prev_v, threadsPerBlock>>>(
-          d_newton_solver_);
-
       if (n_constraints_eval > 0) {
         cudss_solve_constraints_eval<<<numBlocks_constraints_eval,
                                        threadsPerBlock>>>(typed_data,
                                                           d_newton_solver_);
       }
 
-      if (n_constraints_ > 0) {
+      // v_prev stores the previous time-step velocity that appears in the
+      // inertial term M (v - v_n) / h. Keep it fixed throughout the ALM outer
+      // loop; only the dual variables should evolve between outer iterations.
+      if (n_constraints_ > 0 && inner_converged) {
         cudss_solve_update_dual_var<<<numBlocks_update_dual_var,
                                       threadsPerBlock>>>(typed_data,
                                                          d_newton_solver_);
@@ -1301,6 +1576,12 @@ void SyncedNewtonSolver::OneStepNewtonCuDSS() {
   } else if (type_ == TYPE_3443) {
     run_newton_iterations(static_cast<GPU_ANCF3443_Data *>(d_data_));
   }
+
+  // Promote the accepted step to the next time-step reference only after the
+  // full nonlinear solve for this step is finished.
+  cudss_solve_update_v_prev<<<numBlocks_update_prev_v, threadsPerBlock>>>(
+      d_newton_solver_);
+  HANDLE_ERROR(cudaDeviceSynchronize());
 
   CUDSS_OK(cudssMatrixDestroy(dssA));
   CUDSS_OK(cudssMatrixDestroy(dssB));

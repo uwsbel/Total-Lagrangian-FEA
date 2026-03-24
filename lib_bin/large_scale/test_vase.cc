@@ -38,6 +38,7 @@
 
 #include "../../lib_src/collision/DemeMeshCollisionSystem.h"
 #include "../../lib_src/elements/FEAT10Data.cuh"
+#include "../../lib_src/solvers/FEAT10ConstraintManager.h"
 #include "../../lib_src/solvers/FEMultiElementProblem.h"
 #include "../../lib_src/solvers/MultiElementNewton.cuh"
 #include "../../lib_utils/cpu_utils.h"
@@ -45,7 +46,6 @@
 #include "../../lib_utils/mesh_manager.h"
 #include "../../lib_utils/quadrature_utils.h"
 #include "../../lib_utils/surface_trimesh_extract.h"
-#include "prescribed_shake.h"
 
 namespace {
 
@@ -416,17 +416,7 @@ int main(int argc, char** argv) {
   for (int i = 0; i < static_cast<int>(fixed_indices.size()); ++i) {
     h_fixed(i) = fixed_indices[static_cast<size_t>(i)];
   }
-  foam_data->SetNodalFixed(h_fixed);
-  std::cout << "Fixed " << h_fixed.size() << " foam nodes (Z < "
-            << fix_z_threshold << " m)\n";
-
-  int* d_fixed_node_ids = nullptr;
-  const int n_fixed     = static_cast<int>(fixed_indices.size());
-  if (n_fixed > 0) {
-    HANDLE_ERROR(cudaMalloc(&d_fixed_node_ids, n_fixed * sizeof(int)));
-    HANDLE_ERROR(cudaMemcpy(d_fixed_node_ids, fixed_indices.data(),
-                            n_fixed * sizeof(int), cudaMemcpyHostToDevice));
-  }
+  const int n_fixed = static_cast<int>(fixed_indices.size());
 
   // =========================================================================
   // FE setup
@@ -437,6 +427,12 @@ int main(int argc, char** argv) {
   vase_data->Setup(Quadrature::tet5pt_x, Quadrature::tet5pt_y,
                    Quadrature::tet5pt_z, Quadrature::tet5pt_weights, vase_x,
                    vase_y, vase_z, vase_elements);
+
+  FEAT10ConstraintManager foam_constraints(foam_data.get());
+  foam_constraints.AddNodesToWorldCD(h_fixed);
+  foam_constraints.Finalize();
+  std::cout << "Fixed " << foam_constraints.num_constrained_nodes()
+            << " foam nodes (Z < " << fix_z_threshold << " m)\n";
 
   foam_data->ApplyMaterial(foam_preset.material);
   vase_data->ApplyMaterial(kVaseMaterial);
@@ -582,9 +578,7 @@ int main(int argc, char** argv) {
       }
 
       const double delta_dx = dx - shake_dx_prev;
-      PrescribedShake::OffsetNodesAndTargets(
-          foam_data->GetX12DevicePtr(), foam_data->GetX12JacDevicePtr(),
-          d_fixed_node_ids, n_fixed, delta_dx);
+      foam_constraints.OffsetConstrainedNodesAndTargets(/*axis=*/0, delta_dx);
       shake_dx_prev = dx;
 
       // Propagate prescribed-motion changes to the unified state buffer before
@@ -643,9 +637,6 @@ int main(int argc, char** argv) {
 
   CheckCublas(cublasDestroy(cublas_handle), "cublasDestroy");
   HANDLE_ERROR(cudaFree(d_f_gravity));
-  if (d_fixed_node_ids != nullptr) {
-    HANDLE_ERROR(cudaFree(d_fixed_node_ids));
-  }
 
   foam_data->Destroy();
   vase_data->Destroy();

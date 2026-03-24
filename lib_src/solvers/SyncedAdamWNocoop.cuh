@@ -26,6 +26,7 @@ class SyncedAdamWNocoopSolver : public SolverBase {
       : n_coef_(data->get_n_coef()),
         n_beam_(data->get_n_beam()),
         n_constraints_(n_constraints) {
+    h_data_ = data;
     if (data->type == TYPE_3243) {
       type_             = TYPE_3243;
       auto *typed_data  = static_cast<GPU_ANCF3243_Data *>(data);
@@ -320,6 +321,7 @@ class SyncedAdamWNocoopSolver : public SolverBase {
   double compute_l2_norm_cublas(double *d_vec, int n_dofs);
 
   ElementType type_;
+  ElementBase *h_data_;
   ElementBase *d_data_;
   SyncedAdamWNocoopSolver *d_adamw_solver_;
   int n_total_qp_, n_shape_;

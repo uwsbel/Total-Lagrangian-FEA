@@ -30,6 +30,7 @@
 #include <vector>
 
 #include "../../lib_src/collision/DemeMeshCollisionSystem.h"
+#include "../../lib_src/solvers/FEAT10ConstraintManager.h"
 #include "../../lib_src/elements/ANCF3443Data.cuh"
 #include "../../lib_src/elements/FEAT10Data.cuh"
 #include "../../lib_src/solvers/FEMultiElementProblem.h"
@@ -529,7 +530,9 @@ int main(int argc, char** argv) {
     for (int i = 0; i < inst_openbox.num_nodes; ++i) {
       fixed_nodes(i) = i;
     }
-    openbox_data->SetNodalFixed(fixed_nodes);
+    FEAT10ConstraintManager openbox_constraints(openbox_data.get());
+    openbox_constraints.AddNodesToWorldCD(fixed_nodes);
+    openbox_constraints.Finalize();
   }
   openbox_data->CalcConstraintData();
   openbox_data->ConvertToCSR_ConstraintJacT();

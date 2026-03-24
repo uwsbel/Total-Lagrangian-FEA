@@ -39,6 +39,7 @@ class SyncedAdamWSolver : public SolverBase {
       : n_coef_(data->get_n_coef()),
         n_beam_(data->get_n_beam()),
         n_constraints_(n_constraints) {
+    h_data_ = data;
     // Type-based casting to get the correct d_data from derived class
     if (data->type == TYPE_3243) {
       type_            = TYPE_3243;
@@ -294,6 +295,7 @@ class SyncedAdamWSolver : public SolverBase {
 
  private:
   ElementType type_;
+  ElementBase *h_data_;
   ElementBase *d_data_;
   SyncedAdamWSolver *d_adamw_solver_;
   int n_total_qp_, n_shape_;

@@ -28,6 +28,7 @@
 
 #include "../../lib_src/collision/DemeMeshCollisionSystem.h"
 #include "../../lib_src/collision/HydroelasticPatchCollisionSystem.h"
+#include "../../lib_src/solvers/FEAT10ConstraintManager.h"
 #include "../../lib_src/elements/FEAT10Data.cuh"
 #include "../../lib_src/solvers/SyncedNewton.cuh"
 #include "../../lib_utils/cpu_utils.h"
@@ -428,7 +429,9 @@ int main(int argc, char** argv) {
     h_fixed_nodes(i) = fixed_node_indices[i];
   }
   std::cout << "Fixed " << h_fixed_nodes.size() << " floor bottom nodes\n";
-  gpu_t10_data.SetNodalFixed(h_fixed_nodes);
+  FEAT10ConstraintManager constraint_manager(&gpu_t10_data);
+  constraint_manager.AddNodesToWorldCD(h_fixed_nodes);
+  constraint_manager.Finalize();
 
   const Eigen::VectorXd& tet5pt_x       = Quadrature::tet5pt_x;
   const Eigen::VectorXd& tet5pt_y       = Quadrature::tet5pt_y;

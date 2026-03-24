@@ -17,6 +17,7 @@
 #include <thrust/scan.h>
 
 #include <algorithm>
+#include <cstdlib>
 #include <cstdint>
 #include <cstring>
 #include <iomanip>
@@ -1473,6 +1474,17 @@ bool SyncedVBDSolver::EnsurePostOuterGraph(int threads, int blocks_coef) {
 // =====================================================
 
 void SyncedVBDSolver::OneStepVBD() {
+  if (type_ == TYPE_T10) {
+    auto *typed_data = static_cast<GPU_FEAT10_Data *>(h_data_);
+    if (typed_data->GetConstraintMode() == kFEAT10ConstraintGeneral) {
+      std::cerr << "SyncedVBD currently supports FEAT10 fixed-node "
+                   "constraints only; use SyncedNewton for FEAT10 DP1 or "
+                   "revolute constraints."
+                << std::endl;
+      std::abort();
+    }
+  }
+
   cudaDeviceProp props;
   HANDLE_ERROR(cudaGetDeviceProperties(&props, 0));
   const int max_grid_stride_blocks = 32 * props.multiProcessorCount;

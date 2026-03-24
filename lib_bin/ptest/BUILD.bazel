@@ -33,6 +33,7 @@ cc_binary(
     deps = [
         "//lib_src/collision:deme_mesh_collision_system",
         "//lib_src/elements:FEAT10Data",
+        "//lib_src/solvers:FEAT10ConstraintManager",
         "//lib_src/solvers:solvers_syncednewton",
         ":rigid_equivalent_utils",
         "//lib_utils:cli_utils",
@@ -63,6 +64,7 @@ cc_binary(
     deps = [
         "//lib_src/collision:deme_mesh_collision_system",
         "//lib_src/elements:FEAT10Data",
+        "//lib_src/solvers:FEAT10ConstraintManager",
         "//lib_src/solvers:solvers_syncednewton",
         ":rigid_equivalent_utils",
         "//lib_utils:cli_utils",
@@ -93,6 +95,7 @@ cc_binary(
     deps = [
         "//lib_src/collision:deme_mesh_collision_system",
         "//lib_src/elements:FEAT10Data",
+        "//lib_src/solvers:FEAT10ConstraintManager",
         "//lib_src/solvers:solvers_syncednewton",
         ":rigid_equivalent_utils",
         "//lib_utils:cli_utils",
