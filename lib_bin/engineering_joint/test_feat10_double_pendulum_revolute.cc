@@ -249,7 +249,7 @@ int main(int argc, char** argv) {
   gpu_t10_data.CalcP();
   gpu_t10_data.CalcInternalForce();
 
-  SyncedNewtonParams params = {1e-4, 1e-4, 1e-6, 1e9, 8, 10, kDt, true};
+  SyncedNewtonParams params = {1e-4, 1e-4, 1e-6, 1e9, 8, 10, kDt, false};
   SyncedNewtonSolver solver(&gpu_t10_data, gpu_t10_data.get_n_constraint());
   solver.Setup();
   solver.SetParameters(&params);

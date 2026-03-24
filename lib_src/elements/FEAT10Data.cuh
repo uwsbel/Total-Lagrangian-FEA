@@ -1318,8 +1318,14 @@ struct GPU_FEAT10_Data : public ElementBase {
     HANDLE_ERROR(cudaFree(d_data));
 
     if (is_constraints_setup) {
-      HANDLE_ERROR(cudaFree(d_constraint));
-      HANDLE_ERROR(cudaFree(d_fixed_nodes));
+      if (d_constraint != nullptr) {
+        HANDLE_ERROR(cudaFree(d_constraint));
+        d_constraint = nullptr;
+      }
+      if (d_fixed_nodes != nullptr) {
+        HANDLE_ERROR(cudaFree(d_fixed_nodes));
+        d_fixed_nodes = nullptr;
+      }
 
       if (d_general_constraint_types != nullptr) {
         HANDLE_ERROR(cudaFree(d_general_constraint_types));
