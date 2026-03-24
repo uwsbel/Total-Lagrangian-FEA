@@ -29,9 +29,9 @@ namespace {
 
 constexpr double kPi             = 3.14159265358979323846;
 constexpr double kGravity        = -9.81;
-constexpr double kDt             = 1e-4;
-constexpr int kNumStepsDefault   = 20000;
-constexpr int kExportIntervalDef = 20;
+constexpr double kDt             = 2e-4;
+constexpr int kNumStepsDefault   = 40000;
+constexpr int kExportIntervalDef = 50;
 
 constexpr double kBeamLength           = 0.5;
 constexpr double kUpperHingeLocalZ     = 0.0;
@@ -118,6 +118,23 @@ std::string MakeOutputPath(int frame) {
   oss << "output/engineering_joint/double_pendulum_" << std::setw(6)
       << std::setfill('0') << frame << ".vtu";
   return oss.str();
+}
+
+Eigen::Vector3d EvaluateCurrentPointPosition(
+    const FEAT10ConstraintManager::ReferencePoint& point,
+    const Eigen::MatrixXi& connectivity, const Eigen::VectorXd& x,
+    const Eigen::VectorXd& y, const Eigen::VectorXd& z) {
+  Eigen::Vector3d position = Eigen::Vector3d::Zero();
+  for (int local_node = 0; local_node < Quadrature::N_NODE_T10_10;
+       ++local_node) {
+    const double weight = point.shape(local_node);
+    if (weight == 0.0) {
+      continue;
+    }
+    const int node = connectivity(point.element_idx, local_node);
+    position += weight * Eigen::Vector3d(x(node), y(node), z(node));
+  }
+  return position;
 }
 
 }  // namespace
@@ -214,9 +231,13 @@ int main(int argc, char** argv) {
   gpu_t10_data.SetExternalForce(h_f_ext);
 
   FEAT10ConstraintManager constraint_manager(&gpu_t10_data);
+  const auto lower_hinge_on_upper = constraint_manager.LocateReferencePoint(
+      lower_hinge, MakeElementRange(inst_upper));
+  const auto lower_hinge_on_lower = constraint_manager.LocateReferencePoint(
+      lower_hinge, MakeElementRange(inst_lower));
   constraint_manager.AddRevoluteJointToWorld(
       MakeElementRange(inst_upper), top_hinge, Eigen::Vector3d::UnitY(),
-      kJointOffset, 1e2);
+      kJointOffset, 1.0);
   constraint_manager.AddRevoluteJoint(
       MakeElementRange(inst_upper), MakeElementRange(inst_lower), lower_hinge,
       Eigen::Vector3d::UnitY(), kJointOffset, 1);
@@ -228,7 +249,7 @@ int main(int argc, char** argv) {
   gpu_t10_data.CalcP();
   gpu_t10_data.CalcInternalForce();
 
-  SyncedNewtonParams params = {1e-4, 1e-4, 1e-8, 1e10, 8, 10, kDt, true};
+  SyncedNewtonParams params = {1e-4, 1e-4, 1e-6, 1e9, 8, 10, kDt, true};
   SyncedNewtonSolver solver(&gpu_t10_data, gpu_t10_data.get_n_constraint());
   solver.Setup();
   solver.SetParameters(&params);
@@ -236,12 +257,37 @@ int main(int argc, char** argv) {
   solver.SetFixedSparsityPattern(true);
 
   std::cout << "constraints: " << gpu_t10_data.get_n_constraint() << "\n";
+  Eigen::VectorXd x_curr, y_curr, z_curr;
+  gpu_t10_data.RetrievePositionToCPU(x_curr, y_curr, z_curr);
+  const Eigen::Vector3d lower_upper_initial = EvaluateCurrentPointPosition(
+      lower_hinge_on_upper, all_elems, x_curr, y_curr, z_curr);
+  const Eigen::Vector3d lower_lower_initial = EvaluateCurrentPointPosition(
+      lower_hinge_on_lower, all_elems, x_curr, y_curr, z_curr);
+  std::cout << "initial lower hinge on upper: ["
+            << lower_upper_initial.transpose() << "]\n";
+  std::cout << "initial lower hinge on lower: ["
+            << lower_lower_initial.transpose() << "]\n";
+  std::cout << "initial lower hinge mismatch norm: "
+            << (lower_upper_initial - lower_lower_initial).norm() << "\n";
   std::cout << "writing initial frame to " << MakeOutputPath(0) << "\n";
   gpu_t10_data.WriteOutputVTU(MakeOutputPath(0));
 
   int output_frame = 1;
   for (int step = 1; step <= max_steps; ++step) {
     solver.Solve();
+    gpu_t10_data.RetrievePositionToCPU(x_curr, y_curr, z_curr);
+    const Eigen::Vector3d lower_upper_current = EvaluateCurrentPointPosition(
+        lower_hinge_on_upper, all_elems, x_curr, y_curr, z_curr);
+    const Eigen::Vector3d lower_lower_current = EvaluateCurrentPointPosition(
+        lower_hinge_on_lower, all_elems, x_curr, y_curr, z_curr);
+    std::cout << "step " << step << " lower hinge on upper: ["
+              << lower_upper_current.transpose() << "]\n";
+    std::cout << "step " << step << " lower hinge on lower: ["
+              << lower_lower_current.transpose() << "]\n";
+    std::cout << "step " << step << " lower hinge mismatch norm: "
+              << (lower_upper_current - lower_lower_current).norm() << "\n";
+    std::cout << "step " << step << " lower hinge travel from reference: "
+              << (lower_upper_current - lower_hinge).norm() << "\n";
     if (step % export_interval == 0) {
       gpu_t10_data.WriteOutputVTU(MakeOutputPath(output_frame));
       ++output_frame;

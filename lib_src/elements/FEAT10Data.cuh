@@ -624,6 +624,10 @@ struct GPU_FEAT10_Data : public ElementBase {
                             std::vector<int> &columns,
                             std::vector<double> &values);
 
+  void RetrieveConstraintJacobianCSRToCPU(std::vector<int> &offsets,
+                                          std::vector<int> &columns,
+                                          std::vector<double> &values);
+
   void RetrieveInternalForceToCPU(Eigen::VectorXd &internal_force) override;
 
   void RetrieveExternalForceToCPU(Eigen::VectorXd &external_force);

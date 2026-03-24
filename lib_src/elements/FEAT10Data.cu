@@ -781,6 +781,43 @@ void GPU_FEAT10_Data::RetrieveMassCSRToCPU(std::vector<int> &offsets,
                           cudaMemcpyDeviceToHost));
 }
 
+void GPU_FEAT10_Data::RetrieveConstraintJacobianCSRToCPU(
+    std::vector<int> &offsets, std::vector<int> &columns,
+    std::vector<double> &values) {
+  offsets.assign(static_cast<size_t>(n_constraint) + 1, 0);
+  columns.clear();
+  values.clear();
+
+  if (!is_constraints_setup || n_constraint == 0) {
+    return;
+  }
+  if (!is_j_csr_setup) {
+    return;
+  }
+
+  int h_nnz = 0;
+  HANDLE_ERROR(
+      cudaMemcpy(&h_nnz, d_j_nnz, sizeof(int), cudaMemcpyDeviceToHost));
+  if (h_nnz < 0) {
+    return;
+  }
+
+  columns.resize(static_cast<size_t>(h_nnz));
+  values.resize(static_cast<size_t>(h_nnz));
+
+  HANDLE_ERROR(cudaMemcpy(offsets.data(), d_j_csr_offsets,
+                          (static_cast<size_t>(n_constraint) + 1) * sizeof(int),
+                          cudaMemcpyDeviceToHost));
+  if (h_nnz > 0) {
+    HANDLE_ERROR(cudaMemcpy(columns.data(), d_j_csr_columns,
+                            static_cast<size_t>(h_nnz) * sizeof(int),
+                            cudaMemcpyDeviceToHost));
+    HANDLE_ERROR(cudaMemcpy(values.data(), d_j_csr_values,
+                            static_cast<size_t>(h_nnz) * sizeof(double),
+                            cudaMemcpyDeviceToHost));
+  }
+}
+
 void GPU_FEAT10_Data::RetrievePFromFToCPU(
     std::vector<std::vector<Eigen::MatrixXd>> &p_from_F) {
   // Resize to [n_elem][N_QP_T10_5]

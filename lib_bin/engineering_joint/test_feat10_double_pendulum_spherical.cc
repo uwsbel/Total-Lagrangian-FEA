@@ -30,8 +30,8 @@ namespace {
 constexpr double kPi             = 3.14159265358979323846;
 constexpr double kGravity        = -9.81;
 constexpr double kDt             = 2e-4;
-constexpr int kNumStepsDefault   = 10000;
-constexpr int kExportIntervalDef = 10;
+constexpr int kNumStepsDefault   = 40000;
+constexpr int kExportIntervalDef = 50;
 
 constexpr double kBeamLength           = 0.5;
 constexpr double kUpperHingeLocalZ     = 0.0;
@@ -39,6 +39,8 @@ constexpr double kLowerHingeLocalZ     = kBeamLength;
 constexpr double kLowerLinkHingeLocalZ = 0.0;
 constexpr double kUpperAngleDeg        = 35.0;
 constexpr double kLowerAngleDeg        = -25.0;
+constexpr double kUpperOutOfPlaneDeg   = 18.0;
+constexpr double kLowerOutOfPlaneDeg   = -27.0;
 
 const SolidMaterialProperties kLinkMaterial =
     SolidMaterialProperties::SVK(5.0e6,   // E: pendulum links
@@ -59,10 +61,13 @@ Eigen::Vector3d TransformPoint(const Eigen::Matrix4d& transform,
   return mapped.head<3>();
 }
 
-Eigen::Matrix4d MakeBeamTransform(double angle_y,
+Eigen::Matrix4d MakeBeamTransform(double angle_x, double angle_y,
                                   const Eigen::Vector3d& hinge_point,
                                   double hinge_local_z) {
-  const Eigen::Matrix4d rotation = ANCFCPUUtils::rotationY(angle_y);
+  // Start from the planar Y rotation used by the revolute demo, then add an
+  // X tilt so the spherical-joint motion is initialized in full 3D.
+  const Eigen::Matrix4d rotation =
+      ANCFCPUUtils::rotationX(angle_x) * ANCFCPUUtils::rotationY(angle_y);
   const Eigen::Vector3d rotated_hinge =
       TransformPoint(rotation, Eigen::Vector3d(0.0, 0.0, hinge_local_z));
   return ANCFCPUUtils::translation(hinge_point.x() - rotated_hinge.x(),
@@ -162,17 +167,19 @@ int main(int argc, char** argv) {
   const auto& inst_lower = mesh_manager.GetMeshInstance(mesh_lower);
 
   const Eigen::Vector3d top_hinge(0.0, 0.0, 0.7);
-  const double upper_angle = kPi - DegToRad(kUpperAngleDeg);
-  const double lower_angle = kPi - DegToRad(kLowerAngleDeg);
+  const double upper_angle        = kPi - DegToRad(kUpperAngleDeg);
+  const double lower_angle        = kPi - DegToRad(kLowerAngleDeg);
+  const double upper_out_of_plane = DegToRad(kUpperOutOfPlaneDeg);
+  const double lower_out_of_plane = DegToRad(kLowerOutOfPlaneDeg);
 
-  const Eigen::Matrix4d upper_transform =
-      MakeBeamTransform(upper_angle, top_hinge, kUpperHingeLocalZ);
+  const Eigen::Matrix4d upper_transform = MakeBeamTransform(
+      upper_out_of_plane, upper_angle, top_hinge, kUpperHingeLocalZ);
   mesh_manager.TransformMesh(mesh_upper, upper_transform);
 
   const Eigen::Vector3d lower_hinge = TransformPoint(
       upper_transform, Eigen::Vector3d(0.0, 0.0, kLowerHingeLocalZ));
-  const Eigen::Matrix4d lower_transform =
-      MakeBeamTransform(lower_angle, lower_hinge, kLowerLinkHingeLocalZ);
+  const Eigen::Matrix4d lower_transform = MakeBeamTransform(
+      lower_out_of_plane, lower_angle, lower_hinge, kLowerLinkHingeLocalZ);
   mesh_manager.TransformMesh(mesh_lower, lower_transform);
 
   const Eigen::MatrixXd& all_nodes = mesh_manager.GetAllNodes();
@@ -187,6 +194,8 @@ int main(int argc, char** argv) {
   std::cout << "total:   " << n_nodes << " nodes, " << n_elems << " elements\n";
   std::cout << "top hinge:   [" << top_hinge.transpose() << "]\n";
   std::cout << "lower hinge: [" << lower_hinge.transpose() << "]\n";
+  std::cout << "upper out-of-plane tilt: " << kUpperOutOfPlaneDeg << " deg\n";
+  std::cout << "lower out-of-plane tilt: " << kLowerOutOfPlaneDeg << " deg\n";
 
   GPU_FEAT10_Data gpu_t10_data(n_elems, n_nodes);
   gpu_t10_data.Initialize();
