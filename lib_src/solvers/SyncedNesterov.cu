@@ -14,6 +14,8 @@
 
 #include <cooperative_groups.h>
 
+#include <cstdlib>
+
 #include "../elements/ANCF3243Data.cuh"
 #include "../elements/ANCF3243DataFunc.cuh"
 #include "../elements/ANCF3443Data.cuh"
@@ -387,6 +389,17 @@ template __global__ void one_step_nesterov_kernel<GPU_FEAT10_Data>(
     GPU_FEAT10_Data *, SyncedNesterovSolver *);
 
 void SyncedNesterovSolver::OneStepNesterov() {
+  if (type_ == TYPE_T10) {
+    auto *typed_data = static_cast<GPU_FEAT10_Data *>(h_data_);
+    if (typed_data->GetConstraintMode() == kFEAT10ConstraintGeneral) {
+      std::cerr << "SyncedNesterov currently supports FEAT10 fixed-node "
+                   "constraints only; use SyncedNewton for FEAT10 DP1 or "
+                   "revolute constraints."
+                << std::endl;
+      std::abort();
+    }
+  }
+
   cudaEvent_t start, stop;
   HANDLE_ERROR(cudaEventCreate(&start));
   HANDLE_ERROR(cudaEventCreate(&stop));

@@ -35,6 +35,54 @@ struct FEAT10MeshMaterial {
   double kappa = 0.0;
 };
 
+enum FEAT10ConstraintMode {
+  kFEAT10ConstraintFixedNodes = 0,
+  kFEAT10ConstraintGeneral    = 1,
+};
+
+enum FEAT10GeneralConstraintType {
+  kFEAT10ConstraintNodeWorldCD = 0,
+  kFEAT10ConstraintPointWorldCD,
+  kFEAT10ConstraintPointPointCD,
+  kFEAT10ConstraintWorldDP1,
+  kFEAT10ConstraintDP1,
+};
+
+enum FEAT10GeneralConstraintTermKind {
+  kFEAT10ConstraintTermConstant = 0,
+  kFEAT10ConstraintTermUsesA,
+  kFEAT10ConstraintTermUsesD,
+};
+
+struct FEAT10ConstraintPoint {
+  int element_idx = -1;
+  Eigen::Matrix<double, Quadrature::N_NODE_T10_10, 1> shape =
+      Eigen::Matrix<double, Quadrature::N_NODE_T10_10, 1>::Zero();
+};
+
+struct FEAT10GeneralConstraintScalar {
+  int type    = kFEAT10ConstraintNodeWorldCD;
+  int axis    = 0;
+  int node_id = -1;
+  double target = 0.0;
+  double row_scale = 1.0;
+  Eigen::Vector3d world_direction = Eigen::Vector3d::Zero();
+  FEAT10ConstraintPoint points[4];
+};
+
+struct FEAT10GeneralConstraintLayout {
+  std::vector<FEAT10GeneralConstraintScalar> scalars;
+  std::vector<int> term_offsets;
+  std::vector<int> term_kinds;
+  std::vector<double> term_scales;
+  std::vector<int> term_j_indices;
+  std::vector<int> term_jt_indices;
+  std::vector<int> j_offsets;
+  std::vector<int> j_columns;
+  std::vector<int> jt_offsets;
+  std::vector<int> jt_columns;
+};
+
 //
 // define a SAP data strucutre
 struct GPU_FEAT10_Data : public ElementBase {
@@ -222,6 +270,90 @@ struct GPU_FEAT10_Data : public ElementBase {
 
   __device__ Eigen::Map<Eigen::VectorXi> fixed_nodes() {
     return Eigen::Map<Eigen::VectorXi>(d_fixed_nodes, n_constraint / 3);
+  }
+
+  __host__ __device__ int GetConstraintMode() const {
+    return constraint_mode_;
+  }
+
+  __host__ __device__ int GetConstraintEvalThreadCount() const {
+    return constraint_mode_ == kFEAT10ConstraintGeneral ? n_constraint
+                                                        : n_constraint / 3;
+  }
+
+  __host__ __device__ bool HasGeneralDP1Constraints() const {
+    return n_general_constraint_dp1 > 0;
+  }
+
+  __host__ __device__ int GetGeneralDP1ConstraintCount() const {
+    return n_general_constraint_dp1;
+  }
+
+  __host__ __device__ bool HasGeneralNonlinearDP1Constraints() const {
+    return n_general_constraint_nonlinear_dp1 > 0;
+  }
+
+  __host__ __device__ int GetGeneralNonlinearDP1ConstraintCount() const {
+    return n_general_constraint_nonlinear_dp1;
+  }
+
+  __device__ int general_constraint_type(int constraint_idx) const {
+    return d_general_constraint_types[constraint_idx];
+  }
+
+  __device__ int general_constraint_axis(int constraint_idx) const {
+    return d_general_constraint_axes[constraint_idx];
+  }
+
+  __device__ int general_constraint_node(int constraint_idx) const {
+    return d_general_constraint_nodes[constraint_idx];
+  }
+
+  __device__ double general_constraint_target(int constraint_idx) const {
+    return d_general_constraint_targets[constraint_idx];
+  }
+
+  __device__ double general_constraint_row_scale(int constraint_idx) const {
+    return d_general_constraint_row_scales[constraint_idx];
+  }
+
+  __device__ double general_constraint_world_direction(int constraint_idx,
+                                                       int axis) const {
+    return d_general_constraint_world_directions[constraint_idx * 3 + axis];
+  }
+
+  __device__ int general_constraint_point_element(int constraint_idx,
+                                                  int point_slot) const {
+    return d_general_constraint_point_elements[constraint_idx * 4 + point_slot];
+  }
+
+  __device__ double general_constraint_point_shape(int constraint_idx,
+                                                   int point_slot,
+                                                   int local_node) const {
+    const int offset =
+        (constraint_idx * 4 + point_slot) * Quadrature::N_NODE_T10_10 +
+        local_node;
+    return d_general_constraint_point_shapes[offset];
+  }
+
+  __device__ int general_constraint_term_offset(int constraint_idx) const {
+    return d_general_constraint_term_offsets[constraint_idx];
+  }
+
+  __device__ int general_constraint_term_kind(int term_idx) const {
+    return d_general_constraint_term_kinds[term_idx];
+  }
+
+  __device__ double general_constraint_term_scale(int term_idx) const {
+    return d_general_constraint_term_scales[term_idx];
+  }
+
+  __device__ int general_constraint_term_j_index(int term_idx) const {
+    return d_general_constraint_term_j_indices[term_idx];
+  }
+
+  __device__ int general_constraint_term_jt_index(int term_idx) const {
+    return d_general_constraint_term_jt_indices[term_idx];
   }
 
   // ================================
@@ -445,6 +577,10 @@ struct GPU_FEAT10_Data : public ElementBase {
     return *d_nnz;
   }
 #endif
+
+  bool HasGeneralNonlinearDP1ConstraintsHost() const {
+    return n_general_constraint_nonlinear_dp1 > 0;
+  }
 
   __host__ __device__ int get_n_elem() const {
     return n_elem;
@@ -1086,6 +1222,8 @@ struct GPU_FEAT10_Data : public ElementBase {
 
   void SetNodalFixed(const Eigen::VectorXi &fixed_nodes);
 
+  void SetGeneralConstraints(const FEAT10GeneralConstraintLayout &layout);
+
   /**
    * Update fixed nodes for dynamic constraint changes (e.g., moving grippers).
    * This reuses existing constraint buffers if the number of fixed nodes
@@ -1178,6 +1316,22 @@ struct GPU_FEAT10_Data : public ElementBase {
     if (is_constraints_setup) {
       HANDLE_ERROR(cudaFree(d_constraint));
       HANDLE_ERROR(cudaFree(d_fixed_nodes));
+
+      if (d_general_constraint_types != nullptr) {
+        HANDLE_ERROR(cudaFree(d_general_constraint_types));
+        HANDLE_ERROR(cudaFree(d_general_constraint_axes));
+        HANDLE_ERROR(cudaFree(d_general_constraint_nodes));
+        HANDLE_ERROR(cudaFree(d_general_constraint_targets));
+        HANDLE_ERROR(cudaFree(d_general_constraint_row_scales));
+        HANDLE_ERROR(cudaFree(d_general_constraint_world_directions));
+        HANDLE_ERROR(cudaFree(d_general_constraint_point_elements));
+        HANDLE_ERROR(cudaFree(d_general_constraint_point_shapes));
+        HANDLE_ERROR(cudaFree(d_general_constraint_term_offsets));
+        HANDLE_ERROR(cudaFree(d_general_constraint_term_kinds));
+        HANDLE_ERROR(cudaFree(d_general_constraint_term_scales));
+        HANDLE_ERROR(cudaFree(d_general_constraint_term_j_indices));
+        HANDLE_ERROR(cudaFree(d_general_constraint_term_jt_indices));
+      }
     }
   }
 
@@ -1241,8 +1395,23 @@ struct GPU_FEAT10_Data : public ElementBase {
   int n_mesh_materials                 = 0;
 
   // Constraint data
-  double *d_constraint;
-  int *d_fixed_nodes;
+  double *d_constraint = nullptr;
+  int *d_fixed_nodes   = nullptr;
+  int *d_general_constraint_types       = nullptr;
+  int *d_general_constraint_axes        = nullptr;
+  int *d_general_constraint_nodes       = nullptr;
+  double *d_general_constraint_targets  = nullptr;
+  double *d_general_constraint_row_scales = nullptr;
+  double *d_general_constraint_world_directions = nullptr;
+  int *d_general_constraint_point_elements = nullptr;
+  double *d_general_constraint_point_shapes = nullptr;
+  int *d_general_constraint_term_offsets    = nullptr;
+  int *d_general_constraint_term_kinds      = nullptr;
+  double *d_general_constraint_term_scales  = nullptr;
+  int *d_general_constraint_term_j_indices  = nullptr;
+  int *d_general_constraint_term_jt_indices = nullptr;
+  int n_general_constraint_dp1              = 0;
+  int n_general_constraint_nonlinear_dp1    = 0;
   // Constraint Jacobian J^T in CSR format
   int *d_cj_csr_offsets, *d_cj_csr_columns;
   double *d_cj_csr_values;
@@ -1261,4 +1430,5 @@ struct GPU_FEAT10_Data : public ElementBase {
   bool is_csr_setup         = false;
   bool is_cj_csr_setup      = false;
   bool is_j_csr_setup       = false;
+  int constraint_mode_      = kFEAT10ConstraintFixedNodes;
 };

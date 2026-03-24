@@ -28,6 +28,7 @@
 #include <string>
 #include <vector>
 
+#include "../../lib_src/elements/FEAT10ConstraintManager.h"
 #include "../../lib_src/elements/FEAT10Data.cuh"
 #include "../../lib_src/solvers/SyncedAdamWNocoop.cuh"
 #include "../../lib_src/solvers/SyncedNewton.cuh"
@@ -350,7 +351,9 @@ int main(int argc, char** argv) {
   for (size_t i = 0; i < fixed_node_indices.size(); ++i) {
     h_fixed_nodes(static_cast<int>(i)) = fixed_node_indices[i];
   }
-  data.SetNodalFixed(h_fixed_nodes);
+  FEAT10ConstraintManager constraint_manager(&data);
+  constraint_manager.AddNodesToWorldCD(h_fixed_nodes);
+  constraint_manager.Finalize();
 
   // External force: distribute 5000N in +x at x == 3
   Eigen::VectorXd h_f_ext(data.get_n_coef() * 3);

@@ -354,7 +354,7 @@ void GPU_FEAT10_Data::CalcConstraintData() {
   if (n_constraint == 0) {
     return;
   }
-  int total_threads     = n_constraint / 3;
+  int total_threads = GetConstraintEvalThreadCount();
   int threads_per_block = 128;
   int blocks = (total_threads + threads_per_block - 1) / threads_per_block;
 
@@ -508,11 +508,92 @@ __global__ void build_constraint_jt_fill_kernel(int n_constraint,
   columns[out] = tid;
   values[out]  = 1.0;
 }
+
+__global__ void build_general_constraint_jacobian_values_kernel(
+    GPU_FEAT10_Data *d_data) {
+  const int constraint_idx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (constraint_idx >= d_data->gpu_n_constraint()) {
+    return;
+  }
+
+  const int constraint_type = d_data->general_constraint_type(constraint_idx);
+
+  const int row_start = d_data->j_csr_offsets()[constraint_idx];
+  const int row_end   = d_data->j_csr_offsets()[constraint_idx + 1];
+  for (int idx = row_start; idx < row_end; ++idx) {
+    d_data->j_csr_values()[idx] = 0.0;
+  }
+
+  double p[3], q[3], r[3], s[3];
+  double a[3] = {0.0, 0.0, 0.0};
+  double d[3] = {0.0, 0.0, 0.0};
+  if (constraint_type == kFEAT10ConstraintDP1 ||
+      constraint_type == kFEAT10ConstraintWorldDP1) {
+    eval_general_constraint_point(d_data, constraint_idx, 0, p);
+    eval_general_constraint_point(d_data, constraint_idx, 1, q);
+
+    a[0] = q[0] - p[0];
+    a[1] = q[1] - p[1];
+    a[2] = q[2] - p[2];
+
+    if (constraint_type == kFEAT10ConstraintDP1) {
+      eval_general_constraint_point(d_data, constraint_idx, 2, r);
+      eval_general_constraint_point(d_data, constraint_idx, 3, s);
+      d[0] = s[0] - r[0];
+      d[1] = s[1] - r[1];
+      d[2] = s[2] - r[2];
+    } else {
+      d[0] = d_data->general_constraint_world_direction(constraint_idx, 0);
+      d[1] = d_data->general_constraint_world_direction(constraint_idx, 1);
+      d[2] = d_data->general_constraint_world_direction(constraint_idx, 2);
+    }
+  }
+
+  const int term_begin = d_data->general_constraint_term_offset(constraint_idx);
+  const int term_end = d_data->general_constraint_term_offset(constraint_idx + 1);
+  for (int term_idx = term_begin; term_idx < term_end; ++term_idx) {
+    const int j_index = d_data->general_constraint_term_j_index(term_idx);
+    const int jt_index = d_data->general_constraint_term_jt_index(term_idx);
+    const int dof_component = d_data->j_csr_columns()[j_index] % 3;
+
+    double value = d_data->general_constraint_term_scale(term_idx);
+    const int term_kind = d_data->general_constraint_term_kind(term_idx);
+    if (term_kind == kFEAT10ConstraintTermUsesA) {
+      value *= a[dof_component];
+    } else if (term_kind == kFEAT10ConstraintTermUsesD) {
+      value *= d[dof_component];
+    }
+
+    d_data->j_csr_values()[j_index] += value;
+    d_data->cj_csr_values()[jt_index] = value;
+  }
+}
 }  // namespace
 
 // This function converts the Constraint Jacobian matrix J to CSR format
 // (Rows = Constraints, Cols = DOFs)
 void GPU_FEAT10_Data::ConvertToCSR_ConstraintJac() {
+  if (constraint_mode_ == kFEAT10ConstraintGeneral) {
+    if (!is_j_csr_setup || n_constraint == 0) {
+      return;
+    }
+    int h_j_nnz  = 0;
+    int h_cj_nnz = 0;
+    HANDLE_ERROR(cudaMemcpy(&h_j_nnz, d_j_nnz, sizeof(int),
+                            cudaMemcpyDeviceToHost));
+    HANDLE_ERROR(cudaMemcpy(&h_cj_nnz, d_cj_nnz, sizeof(int),
+                            cudaMemcpyDeviceToHost));
+    HANDLE_ERROR(cudaMemset(d_j_csr_values, 0,
+                            static_cast<size_t>(h_j_nnz) * sizeof(double)));
+    HANDLE_ERROR(cudaMemset(d_cj_csr_values, 0,
+                            static_cast<size_t>(h_cj_nnz) * sizeof(double)));
+    constexpr int threads = 256;
+    const int blocks      = (n_constraint + threads - 1) / threads;
+    build_general_constraint_jacobian_values_kernel<<<blocks, threads>>>(d_data);
+    HANDLE_ERROR(cudaDeviceSynchronize());
+    return;
+  }
+
   if (is_j_csr_setup) {
     return;
   }
@@ -550,6 +631,27 @@ void GPU_FEAT10_Data::ConvertToCSR_ConstraintJac() {
 // This function converts the TRANSPOSE of the constraint Jacobian matrix to CSR
 // format
 void GPU_FEAT10_Data::ConvertToCSR_ConstraintJacT() {
+  if (constraint_mode_ == kFEAT10ConstraintGeneral) {
+    if (!is_cj_csr_setup || n_constraint == 0) {
+      return;
+    }
+    int h_j_nnz  = 0;
+    int h_cj_nnz = 0;
+    HANDLE_ERROR(cudaMemcpy(&h_j_nnz, d_j_nnz, sizeof(int),
+                            cudaMemcpyDeviceToHost));
+    HANDLE_ERROR(cudaMemcpy(&h_cj_nnz, d_cj_nnz, sizeof(int),
+                            cudaMemcpyDeviceToHost));
+    HANDLE_ERROR(cudaMemset(d_j_csr_values, 0,
+                            static_cast<size_t>(h_j_nnz) * sizeof(double)));
+    HANDLE_ERROR(cudaMemset(d_cj_csr_values, 0,
+                            static_cast<size_t>(h_cj_nnz) * sizeof(double)));
+    constexpr int threads = 256;
+    const int blocks      = (n_constraint + threads - 1) / threads;
+    build_general_constraint_jacobian_values_kernel<<<blocks, threads>>>(d_data);
+    HANDLE_ERROR(cudaDeviceSynchronize());
+    return;
+  }
+
   if (is_cj_csr_setup) {
     return;
   }
@@ -891,7 +993,10 @@ void GPU_FEAT10_Data::SetNodalFixed(const Eigen::VectorXi &fixed_nodes) {
     return;
   }
 
+  constraint_mode_ = kFEAT10ConstraintFixedNodes;
   n_constraint = fixed_nodes.size() * 3;
+  n_general_constraint_dp1 = 0;
+  n_general_constraint_nonlinear_dp1 = 0;
 
   HANDLE_ERROR(cudaMalloc(&d_constraint, n_constraint * sizeof(double)));
   HANDLE_ERROR(cudaMalloc(&d_fixed_nodes, fixed_nodes.size() * sizeof(int)));
@@ -908,7 +1013,190 @@ void GPU_FEAT10_Data::SetNodalFixed(const Eigen::VectorXi &fixed_nodes) {
   }
 }
 
+void GPU_FEAT10_Data::SetGeneralConstraints(
+    const FEAT10GeneralConstraintLayout &layout) {
+  if (is_constraints_setup) {
+    std::cerr << "GPU_FEAT10_Data CONSTRAINT is already set up." << std::endl;
+    return;
+  }
+
+  n_constraint     = static_cast<int>(layout.scalars.size());
+  constraint_mode_ = kFEAT10ConstraintGeneral;
+  n_general_constraint_dp1 = 0;
+  n_general_constraint_nonlinear_dp1 = 0;
+  if (n_constraint == 0) {
+    return;
+  }
+
+  std::vector<int> types(static_cast<size_t>(n_constraint),
+                         kFEAT10ConstraintNodeWorldCD);
+  std::vector<int> axes(static_cast<size_t>(n_constraint), 0);
+  std::vector<int> nodes(static_cast<size_t>(n_constraint), -1);
+  std::vector<double> targets(static_cast<size_t>(n_constraint), 0.0);
+  std::vector<double> row_scales(static_cast<size_t>(n_constraint), 1.0);
+  std::vector<double> world_directions(static_cast<size_t>(n_constraint) * 3,
+                                       0.0);
+  std::vector<int> point_elements(static_cast<size_t>(n_constraint) * 4, -1);
+  std::vector<double> point_shapes(static_cast<size_t>(n_constraint) * 4 *
+                                       Quadrature::N_NODE_T10_10,
+                                   0.0);
+
+  for (int i = 0; i < n_constraint; ++i) {
+    const auto &scalar = layout.scalars[static_cast<size_t>(i)];
+    types[static_cast<size_t>(i)]   = scalar.type;
+    if (scalar.type == kFEAT10ConstraintDP1 ||
+        scalar.type == kFEAT10ConstraintWorldDP1) {
+      ++n_general_constraint_dp1;
+    }
+    if (scalar.type == kFEAT10ConstraintDP1) {
+      ++n_general_constraint_nonlinear_dp1;
+    }
+    axes[static_cast<size_t>(i)]    = scalar.axis;
+    nodes[static_cast<size_t>(i)]   = scalar.node_id;
+    targets[static_cast<size_t>(i)] = scalar.target;
+    row_scales[static_cast<size_t>(i)] = scalar.row_scale;
+    for (int axis = 0; axis < 3; ++axis) {
+      world_directions[static_cast<size_t>(i) * 3 + axis] =
+          scalar.world_direction(axis);
+    }
+    for (int point_slot = 0; point_slot < 4; ++point_slot) {
+      point_elements[static_cast<size_t>(i) * 4 + point_slot] =
+          scalar.points[point_slot].element_idx;
+      for (int local_node = 0; local_node < Quadrature::N_NODE_T10_10;
+           ++local_node) {
+        const int offset =
+            (i * 4 + point_slot) * Quadrature::N_NODE_T10_10 + local_node;
+        point_shapes[static_cast<size_t>(offset)] =
+            scalar.points[point_slot].shape(local_node);
+      }
+    }
+  }
+
+  HANDLE_ERROR(cudaMalloc(&d_constraint, n_constraint * sizeof(double)));
+  HANDLE_ERROR(cudaMemset(d_constraint, 0, n_constraint * sizeof(double)));
+  d_fixed_nodes = nullptr;
+
+  HANDLE_ERROR(cudaMalloc(&d_general_constraint_types,
+                          n_constraint * sizeof(int)));
+  HANDLE_ERROR(cudaMalloc(&d_general_constraint_axes,
+                          n_constraint * sizeof(int)));
+  HANDLE_ERROR(cudaMalloc(&d_general_constraint_nodes,
+                          n_constraint * sizeof(int)));
+  HANDLE_ERROR(cudaMalloc(&d_general_constraint_targets,
+                          n_constraint * sizeof(double)));
+  HANDLE_ERROR(cudaMalloc(&d_general_constraint_row_scales,
+                          n_constraint * sizeof(double)));
+  HANDLE_ERROR(cudaMalloc(&d_general_constraint_world_directions,
+                          world_directions.size() * sizeof(double)));
+  HANDLE_ERROR(cudaMalloc(&d_general_constraint_point_elements,
+                          point_elements.size() * sizeof(int)));
+  HANDLE_ERROR(cudaMalloc(&d_general_constraint_point_shapes,
+                          point_shapes.size() * sizeof(double)));
+  HANDLE_ERROR(cudaMalloc(&d_general_constraint_term_offsets,
+                          layout.term_offsets.size() * sizeof(int)));
+  HANDLE_ERROR(cudaMalloc(&d_general_constraint_term_kinds,
+                          layout.term_kinds.size() * sizeof(int)));
+  HANDLE_ERROR(cudaMalloc(&d_general_constraint_term_scales,
+                          layout.term_scales.size() * sizeof(double)));
+  HANDLE_ERROR(cudaMalloc(&d_general_constraint_term_j_indices,
+                          layout.term_j_indices.size() * sizeof(int)));
+  HANDLE_ERROR(cudaMalloc(&d_general_constraint_term_jt_indices,
+                          layout.term_jt_indices.size() * sizeof(int)));
+
+  HANDLE_ERROR(cudaMemcpy(d_general_constraint_types, types.data(),
+                          types.size() * sizeof(int), cudaMemcpyHostToDevice));
+  HANDLE_ERROR(cudaMemcpy(d_general_constraint_axes, axes.data(),
+                          axes.size() * sizeof(int), cudaMemcpyHostToDevice));
+  HANDLE_ERROR(cudaMemcpy(d_general_constraint_nodes, nodes.data(),
+                          nodes.size() * sizeof(int), cudaMemcpyHostToDevice));
+  HANDLE_ERROR(cudaMemcpy(d_general_constraint_targets, targets.data(),
+                          targets.size() * sizeof(double),
+                          cudaMemcpyHostToDevice));
+  HANDLE_ERROR(cudaMemcpy(d_general_constraint_row_scales, row_scales.data(),
+                          row_scales.size() * sizeof(double),
+                          cudaMemcpyHostToDevice));
+  HANDLE_ERROR(cudaMemcpy(d_general_constraint_world_directions,
+                          world_directions.data(),
+                          world_directions.size() * sizeof(double),
+                          cudaMemcpyHostToDevice));
+  HANDLE_ERROR(cudaMemcpy(d_general_constraint_point_elements,
+                          point_elements.data(),
+                          point_elements.size() * sizeof(int),
+                          cudaMemcpyHostToDevice));
+  HANDLE_ERROR(cudaMemcpy(d_general_constraint_point_shapes,
+                          point_shapes.data(),
+                          point_shapes.size() * sizeof(double),
+                          cudaMemcpyHostToDevice));
+  HANDLE_ERROR(cudaMemcpy(d_general_constraint_term_offsets,
+                          layout.term_offsets.data(),
+                          layout.term_offsets.size() * sizeof(int),
+                          cudaMemcpyHostToDevice));
+  HANDLE_ERROR(cudaMemcpy(d_general_constraint_term_kinds,
+                          layout.term_kinds.data(),
+                          layout.term_kinds.size() * sizeof(int),
+                          cudaMemcpyHostToDevice));
+  HANDLE_ERROR(cudaMemcpy(d_general_constraint_term_scales,
+                          layout.term_scales.data(),
+                          layout.term_scales.size() * sizeof(double),
+                          cudaMemcpyHostToDevice));
+  HANDLE_ERROR(cudaMemcpy(d_general_constraint_term_j_indices,
+                          layout.term_j_indices.data(),
+                          layout.term_j_indices.size() * sizeof(int),
+                          cudaMemcpyHostToDevice));
+  HANDLE_ERROR(cudaMemcpy(d_general_constraint_term_jt_indices,
+                          layout.term_jt_indices.data(),
+                          layout.term_jt_indices.size() * sizeof(int),
+                          cudaMemcpyHostToDevice));
+
+  const int j_nnz = static_cast<int>(layout.j_columns.size());
+  HANDLE_ERROR(cudaMalloc(&d_j_csr_offsets,
+                          layout.j_offsets.size() * sizeof(int)));
+  HANDLE_ERROR(cudaMalloc(&d_j_csr_columns, j_nnz * sizeof(int)));
+  HANDLE_ERROR(cudaMalloc(&d_j_csr_values, j_nnz * sizeof(double)));
+  HANDLE_ERROR(cudaMalloc(&d_j_nnz, sizeof(int)));
+  HANDLE_ERROR(cudaMemcpy(d_j_csr_offsets, layout.j_offsets.data(),
+                          layout.j_offsets.size() * sizeof(int),
+                          cudaMemcpyHostToDevice));
+  HANDLE_ERROR(cudaMemcpy(d_j_csr_columns, layout.j_columns.data(),
+                          j_nnz * sizeof(int), cudaMemcpyHostToDevice));
+  HANDLE_ERROR(cudaMemset(d_j_csr_values, 0, j_nnz * sizeof(double)));
+  HANDLE_ERROR(cudaMemcpy(d_j_nnz, &j_nnz, sizeof(int), cudaMemcpyHostToDevice));
+
+  const int jt_nnz = static_cast<int>(layout.jt_columns.size());
+  HANDLE_ERROR(cudaMalloc(&d_cj_csr_offsets,
+                          layout.jt_offsets.size() * sizeof(int)));
+  HANDLE_ERROR(cudaMalloc(&d_cj_csr_columns, jt_nnz * sizeof(int)));
+  HANDLE_ERROR(cudaMalloc(&d_cj_csr_values, jt_nnz * sizeof(double)));
+  HANDLE_ERROR(cudaMalloc(&d_cj_nnz, sizeof(int)));
+  HANDLE_ERROR(cudaMemcpy(d_cj_csr_offsets, layout.jt_offsets.data(),
+                          layout.jt_offsets.size() * sizeof(int),
+                          cudaMemcpyHostToDevice));
+  HANDLE_ERROR(cudaMemcpy(d_cj_csr_columns, layout.jt_columns.data(),
+                          jt_nnz * sizeof(int), cudaMemcpyHostToDevice));
+  HANDLE_ERROR(cudaMemset(d_cj_csr_values, 0, jt_nnz * sizeof(double)));
+  HANDLE_ERROR(
+      cudaMemcpy(d_cj_nnz, &jt_nnz, sizeof(int), cudaMemcpyHostToDevice));
+
+  is_constraints_setup = true;
+  is_j_csr_setup       = true;
+  is_cj_csr_setup      = true;
+  if (d_data) {
+    HANDLE_ERROR(cudaMemcpy(d_data, this, sizeof(GPU_FEAT10_Data),
+                            cudaMemcpyHostToDevice));
+  }
+}
+
 void GPU_FEAT10_Data::UpdateNodalFixed(const Eigen::VectorXi &fixed_nodes) {
+  if (is_constraints_setup && constraint_mode_ != kFEAT10ConstraintFixedNodes) {
+    std::cerr << "GPU_FEAT10_Data general constraints do not support "
+                 "UpdateNodalFixed()."
+              << std::endl;
+    return;
+  }
+
+  constraint_mode_ = kFEAT10ConstraintFixedNodes;
+  n_general_constraint_dp1 = 0;
+  n_general_constraint_nonlinear_dp1 = 0;
   int new_n_constraint = fixed_nodes.size() * 3;
 
   // If constraints not set up yet, just call SetNodalFixed

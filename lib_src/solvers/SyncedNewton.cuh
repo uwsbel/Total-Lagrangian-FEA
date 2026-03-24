@@ -52,6 +52,7 @@ class SyncedNewtonSolver : public SolverBase {
         d_csr_values_(nullptr),
         d_col_bitset_(nullptr),
         d_nnz_per_row_(nullptr),
+        use_symmetric_constraint_hessian_(false),
         fixed_sparsity_pattern_(false),
         analysis_done_(false),
         factorization_done_(false) {
@@ -76,6 +77,8 @@ class SyncedNewtonSolver : public SolverBase {
       d_data_ = typed_data->d_data;  // This accesses the derived class's d_data
       n_total_qp_ = Quadrature::N_QP_T10_5;
       n_shape_    = Quadrature::N_NODE_T10_10;
+      use_symmetric_constraint_hessian_ =
+          typed_data->HasGeneralNonlinearDP1ConstraintsHost();
     } else {
       d_data_ = nullptr;
       std::cerr << "Unknown element type!" << std::endl;
@@ -423,6 +426,7 @@ class SyncedNewtonSolver : public SolverBase {
   double *d_csr_values_;        // Size: nnz
   unsigned int *d_col_bitset_;  // Temporary for sparsity analysis
   int *d_nnz_per_row_;          // Temporary workspace
+  bool use_symmetric_constraint_hessian_;
 
   // Persistent library handles (reused across iterations)
   cublasHandle_t cublas_handle_;

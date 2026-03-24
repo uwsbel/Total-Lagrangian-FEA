@@ -16,6 +16,7 @@
 #include <iomanip>
 #include <iostream>
 
+#include "../../lib_src/elements/FEAT10ConstraintManager.h"
 #include "../../lib_src/elements/FEAT10Data.cuh"
 #include "../../lib_src/solvers/SyncedNesterov.cuh"
 #include "../../lib_utils/cpu_utils.h"
@@ -89,7 +90,9 @@ int main() {
   std::cout << std::endl;
 
   // Set fixed nodes
-  gpu_t10_data.SetNodalFixed(h_fixed_nodes);
+  FEAT10ConstraintManager constraint_manager(&gpu_t10_data);
+  constraint_manager.AddNodesToWorldCD(h_fixed_nodes);
+  constraint_manager.Finalize();
 
   // set external force
   Eigen::VectorXd h_f_ext(gpu_t10_data.get_n_coef() * 3);

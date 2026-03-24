@@ -13,6 +13,7 @@
  *==============================================================*/
 
 #include <algorithm>
+#include <cstdlib>
 #include <cmath>
 #include <iomanip>
 #include <iostream>
@@ -264,6 +265,17 @@ __global__ void adamw_dual_update_kernel(ElementType *d_data,
 }
 
 void SyncedAdamWNocoopSolver::OneStepAdamWNocoop() {
+  if (type_ == TYPE_T10) {
+    auto *typed_data = static_cast<GPU_FEAT10_Data *>(h_data_);
+    if (typed_data->GetConstraintMode() == kFEAT10ConstraintGeneral) {
+      std::cerr << "SyncedAdamWNocoop currently supports FEAT10 fixed-node "
+                   "constraints only; use SyncedNewton for FEAT10 DP1 or "
+                   "revolute constraints."
+                << std::endl;
+      std::abort();
+    }
+  }
+
   constexpr int threadsPerBlock = 256;
 
   const int n_coef = n_coef_;
