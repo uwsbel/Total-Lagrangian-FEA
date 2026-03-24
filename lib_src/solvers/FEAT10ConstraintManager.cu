@@ -1,3 +1,15 @@
+/*==============================================================
+ *==============================================================
+ * Project: RoboDyna
+ * Author:  Json Zhou
+ * File:    FEAT10ConstraintManager.cu
+ * Brief:   Host-side FEAT10 constraint/joint construction utilities.
+ *          This file performs point-location in the reference mesh and lowers
+ *          high-level joint descriptions into FEAT10's scalar constraint
+ *          layout before handing control to GPU_FEAT10_Data.
+ *==============================================================
+ *==============================================================*/
+
 #include "FEAT10ConstraintManager.h"
 
 #include <cuda_runtime.h>
@@ -13,6 +25,10 @@
 
 namespace {
 
+// Host-side T10 basis evaluation helpers used during point-location and
+// geometry-based joint construction. These mirror the FEAT10 interpolation used
+// later on the GPU, but they run on the CPU because setup happens before the
+// runtime constraint layout is uploaded.
 constexpr int kT10NodeCount      = Quadrature::N_NODE_T10_10;
 constexpr int kNewtonMaxIters    = 16;
 constexpr double kNewtonTol      = 1e-11;
@@ -169,6 +185,10 @@ FEAT10ConstraintManager::~FEAT10ConstraintManager() {
   }
 }
 
+// Material-point queries are phrased in the reference configuration, so the
+// manager pulls one CPU-side snapshot of the undeformed node coordinates and
+// connectivity. Subsequent geometric queries reuse this cache instead of asking
+// GPU_FEAT10_Data to repatriate the mesh every time.
 void FEAT10ConstraintManager::EnsureReferenceCache() const {
   if (reference_cache_ready_) {
     return;
@@ -226,6 +246,10 @@ FEAT10ConstraintManager::LocateNodeReferencePoint(
   return LocateNodeReferencePoint(reference_point, FullElementRange());
 }
 
+// LocateReferencePoint() is the core geometric query used by the higher-level
+// joint builders. It searches the requested body range, runs a Newton solve in
+// reference coordinates, and stores the winning T10 interpolation weights as a
+// persistent ReferencePoint.
 FEAT10ConstraintManager::ReferencePoint
 FEAT10ConstraintManager::LocateReferencePoint(
     const Eigen::Vector3d& reference_point, const ElementRange& range) const {
@@ -242,6 +266,8 @@ FEAT10ConstraintManager::LocateReferencePoint(
   const double aabb_tol = 1e-8;
 
   for (int elem_idx = range.begin; elem_idx < range.end; ++elem_idx) {
+    // Rebuild the local reference element geometry on the CPU. This keeps the
+    // setup code simple and avoids introducing a separate host-side mesh view.
     Eigen::Matrix<double, 10, 3> x_elem;
     for (int local_node = 0; local_node < kT10NodeCount; ++local_node) {
       x_elem.row(local_node) =
@@ -395,6 +421,9 @@ Eigen::Vector3d FEAT10ConstraintManager::EvaluateReferencePoint(
   return position;
 }
 
+// DP1 rows are scaled by the reference lengths of the two defining fibers so
+// the effective row magnitude stays reasonably consistent as the user changes
+// the geometric offset used to create Q/S/T points.
 void FEAT10ConstraintManager::AddDP1Constraint(const ReferencePoint& p,
                                                const ReferencePoint& q,
                                                const ReferencePoint& r,
@@ -466,6 +495,13 @@ void FEAT10ConstraintManager::AddWorldDP1Constraint(
   scalar_constraints_.push_back(constraint);
 }
 
+void FEAT10ConstraintManager::AddSphericalJoint(const ReferencePoint& p,
+                                                const ReferencePoint& r) {
+  AddPointToPointCDAxis(p, r, 0);
+  AddPointToPointCDAxis(p, r, 1);
+  AddPointToPointCDAxis(p, r, 2);
+}
+
 void FEAT10ConstraintManager::AddRevoluteJoint(const ReferencePoint& p,
                                                const ReferencePoint& q,
                                                const ReferencePoint& r,
@@ -522,6 +558,25 @@ FEAT10ConstraintManager::LocateWithAdaptiveOffset(
       "FEAT10ConstraintManager::LocateWithAdaptiveOffset: failed to place offset reference point for joint construction");
 }
 
+void FEAT10ConstraintManager::AddSphericalJoint(
+    const ElementRange& body_b, const ElementRange& body_c,
+    const Eigen::Vector3d& hinge_point) {
+  const ReferencePoint p = LocateReferencePoint(hinge_point, body_b);
+  const ReferencePoint r = LocateReferencePoint(hinge_point, body_c);
+
+  AddSphericalJoint(p, r);
+}
+
+void FEAT10ConstraintManager::AddSphericalJointToWorld(
+    const ElementRange& body, const Eigen::Vector3d& hinge_point) {
+  const ReferencePoint p = LocateReferencePoint(hinge_point, body);
+  const Eigen::Vector3d p_ref = EvaluateReferencePoint(p);
+
+  AddPointToWorldCDAxis(p, 0, p_ref.x());
+  AddPointToWorldCDAxis(p, 1, p_ref.y());
+  AddPointToWorldCDAxis(p, 2, p_ref.z());
+}
+
 void FEAT10ConstraintManager::AddRevoluteJoint(
     const ElementRange& body_b, const ElementRange& body_c,
     const Eigen::Vector3d& hinge_point, const Eigen::Vector3d& hinge_axis,
@@ -533,21 +588,20 @@ void FEAT10ConstraintManager::AddRevoluteJoint(
   }
 
   const Eigen::Vector3d axis = hinge_axis / axis_norm;
-  const ReferencePoint p = LocateNodeReferencePoint(hinge_point, body_b);
-  const ReferencePoint r = LocateNodeReferencePoint(hinge_point, body_c);
-  const Eigen::Vector3d p_ref = EvaluateReferencePoint(p);
-  const Eigen::Vector3d r_ref = EvaluateReferencePoint(r);
+  const ReferencePoint p = LocateReferencePoint(hinge_point, body_b);
+  const ReferencePoint r = LocateReferencePoint(hinge_point, body_c);
 
   if (offset <= 0.0) {
     offset = DefaultJointOffset(p, r);
   }
 
-  const ReferencePoint q = LocateWithAdaptiveOffset(p_ref, axis, body_b, offset);
+  const ReferencePoint q =
+      LocateWithAdaptiveOffset(hinge_point, axis, body_b, offset);
 
   const Eigen::Vector3d p1 = BuildPerpendicularAxis1(axis);
   const Eigen::Vector3d p2 = axis.cross(p1).normalized();
-  const ReferencePoint s = LocateWithAdaptiveOffset(r_ref, p1, body_c, offset);
-  const ReferencePoint t = LocateWithAdaptiveOffset(r_ref, p2, body_c, offset);
+  const ReferencePoint s = LocateWithAdaptiveOffset(hinge_point, p1, body_c, offset);
+  const ReferencePoint t = LocateWithAdaptiveOffset(hinge_point, p2, body_c, offset);
 
   AddRevoluteJoint(p, q, r, s, t, 0.0, 0.0, dp1_weight);
 }
@@ -563,14 +617,15 @@ void FEAT10ConstraintManager::AddRevoluteJointToWorld(
   }
 
   const Eigen::Vector3d axis = hinge_axis / axis_norm;
-  const ReferencePoint p     = LocateNodeReferencePoint(hinge_point, body);
+  const ReferencePoint p = LocateReferencePoint(hinge_point, body);
   const Eigen::Vector3d p_ref = EvaluateReferencePoint(p);
 
   if (offset <= 0.0) {
     offset = 1e-2 * ComputeElementCharacteristicLength(p.element_idx);
   }
 
-  const ReferencePoint q = LocateWithAdaptiveOffset(p_ref, axis, body, offset);
+  const ReferencePoint q =
+      LocateWithAdaptiveOffset(hinge_point, axis, body, offset);
 
   const Eigen::Vector3d p1 = BuildPerpendicularAxis1(axis);
   const Eigen::Vector3d p2 = axis.cross(p1).normalized();
@@ -582,6 +637,10 @@ void FEAT10ConstraintManager::AddRevoluteJointToWorld(
   AddWorldDP1Constraint(p, q, p2, 0.0, dp1_weight);
 }
 
+// This is the lowering step that bridges the friendly API above to the sparse
+// scalar constraint representation inside GPU_FEAT10_Data. Each primitive is
+// expanded into scalar rows, row/column sparsity, and term descriptors for both
+// C_q and C_q^T assembly.
 FEAT10GeneralConstraintLayout
 FEAT10ConstraintManager::BuildGeneralConstraintLayout() const {
   EnsureReferenceCache();
@@ -589,6 +648,8 @@ FEAT10ConstraintManager::BuildGeneralConstraintLayout() const {
   std::vector<FEAT10GeneralConstraintScalar> scalars;
   scalars.reserve(constrained_nodes_.size() * 3 + scalar_constraints_.size());
 
+  // Legacy fixed-node requests are represented as one scalar CD row per axis
+  // so they can share the same lowering pipeline as the joint primitives.
   for (int i = 0; i < constrained_nodes_.size(); ++i) {
     const int node = constrained_nodes_(i);
     for (int axis = 0; axis < 3; ++axis) {
@@ -616,6 +677,8 @@ FEAT10ConstraintManager::BuildGeneralConstraintLayout() const {
   }
 
   const int n_constraints = static_cast<int>(scalars.size());
+  // row_dofs stores the sparsity of C_q by row, while dof_rows stores the
+  // transpose sparsity needed by the JT scatter path.
   const int n_dofs        = data_->get_n_coef() * 3;
 
   std::vector<std::vector<int>> row_dofs(static_cast<size_t>(n_constraints));
@@ -797,6 +860,9 @@ FEAT10ConstraintManager::BuildGeneralConstraintLayout() const {
   return layout;
 }
 
+// Finalize() chooses the cheapest FEAT10 runtime mode that can represent the
+// requested constraints. Pure node-to-world constraints stay on the original
+// fixed-node path; any joint primitive triggers the general sparse layout.
 void FEAT10ConstraintManager::Finalize() {
   if (finalized_) {
     return;

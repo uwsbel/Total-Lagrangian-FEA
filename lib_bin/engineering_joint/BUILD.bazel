@@ -14,7 +14,28 @@ cc_binary(
         "-lcublas",
     ],
     deps = [
-        "//lib_src/elements:FEAT10ConstraintManager",
+        "//lib_src/solvers:FEAT10ConstraintManager",
+        "//lib_src/elements:FEAT10Data",
+        "//lib_src/solvers:solvers_syncednewton",
+        "//lib_utils:cpu_utils",
+        "//lib_utils:mesh_manager",
+        "@eigen//:eigen",
+    ],
+)
+
+cc_binary(
+    name = "test_feat10_double_pendulum_spherical",
+    srcs = ["test_feat10_double_pendulum_spherical.cc"],
+    copts = ["--std=c++17"],
+    linkopts = [
+        "-L/usr/local/cuda/lib64",
+        "-lcusparse",
+        "-lcudart",
+        "-lcudss",
+        "-lcublas",
+    ],
+    deps = [
+        "//lib_src/solvers:FEAT10ConstraintManager",
         "//lib_src/elements:FEAT10Data",
         "//lib_src/solvers:solvers_syncednewton",
         "//lib_utils:cpu_utils",

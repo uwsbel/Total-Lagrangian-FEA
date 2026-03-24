@@ -25,7 +25,7 @@
 #include <string_view>
 
 #include "../../lib_src/collision/DemeMeshCollisionSystem.h"
-#include "../../lib_src/elements/FEAT10ConstraintManager.h"
+#include "../../lib_src/solvers/FEAT10ConstraintManager.h"
 #include "../../lib_src/elements/FEAT10Data.cuh"
 #include "../../lib_src/solvers/SyncedNewton.cuh"
 #include "../../lib_utils/cli_utils.h"

@@ -57,15 +57,3 @@ cuda_library(
     ],
 )
 
-cuda_library(
-    name = "FEAT10ConstraintManager",
-    srcs = ["FEAT10ConstraintManager.cu"],
-    hdrs = ["FEAT10ConstraintManager.h"],
-    copts = ["--std=c++17", "-O3", "--use_fast_math", "--extra-device-vectorization"],
-    linkopts = ["-lcudart"],
-    deps = [
-        ":FEAT10Data",
-        "//lib_utils:cuda_utils",
-        "@eigen//:eigen",
-    ],
-)

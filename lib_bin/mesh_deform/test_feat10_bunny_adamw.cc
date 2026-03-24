@@ -18,7 +18,7 @@
 #include <iomanip>
 #include <iostream>
 
-#include "../../lib_src/elements/FEAT10ConstraintManager.h"
+#include "../../lib_src/solvers/FEAT10ConstraintManager.h"
 #include "../../lib_src/elements/FEAT10Data.cuh"
 #include "../../lib_src/solvers/SyncedAdamW.cuh"
 #include "../../lib_utils/cpu_utils.h"

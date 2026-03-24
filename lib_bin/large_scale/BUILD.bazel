@@ -38,7 +38,7 @@ cc_binary(
     deps = [
         "//lib_src/collision:deme_mesh_collision_system",
         "//lib_src/elements:FEAT10Data",
-        "//lib_src/elements:FEAT10ConstraintManager",
+        "//lib_src/solvers:FEAT10ConstraintManager",
         "//lib_src/solvers:multi_element_newton",
         "//lib_src/solvers:multi_element_problem",
         "//lib_utils:cpu_utils",
@@ -70,7 +70,7 @@ cc_binary(
         "//lib_src/collision:deme_mesh_collision_system",
         "//lib_src/elements:ANCF3443Data",
         "//lib_src/elements:FEAT10Data",
-        "//lib_src/elements:FEAT10ConstraintManager",
+        "//lib_src/solvers:FEAT10ConstraintManager",
         "//lib_src/solvers:multi_element_newton",
         "//lib_src/solvers:multi_element_problem",
         "//lib_utils:cpu_utils",

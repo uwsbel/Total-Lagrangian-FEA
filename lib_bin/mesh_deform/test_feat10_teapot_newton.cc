@@ -16,7 +16,7 @@
 #include <string>
 #include <vector>
 
-#include "../../lib_src/elements/FEAT10ConstraintManager.h"
+#include "../../lib_src/solvers/FEAT10ConstraintManager.h"
 #include "../../lib_src/elements/FEAT10Data.cuh"
 #include "../../lib_src/solvers/SyncedNewton.cuh"
 #include "../../lib_utils/cpu_utils.h"

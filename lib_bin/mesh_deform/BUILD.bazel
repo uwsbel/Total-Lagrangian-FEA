@@ -13,7 +13,7 @@ cc_binary(
     ],
     deps = [
         "//lib_src/elements:FEAT10Data",
-        "//lib_src/elements:FEAT10ConstraintManager",
+        "//lib_src/solvers:FEAT10ConstraintManager",
         "//lib_src/solvers:solvers_syncedadamw",
         "//lib_src/solvers:solvers_syncednesterov",
         "//lib_src/solvers:solvers_syncednewton",
@@ -34,7 +34,7 @@ cc_binary(
     ],
     deps = [
         "//lib_src/elements:FEAT10Data",
-        "//lib_src/elements:FEAT10ConstraintManager",
+        "//lib_src/solvers:FEAT10ConstraintManager",
         "//lib_src/solvers:solvers_syncedadamwnocoop",
         "//lib_src/solvers:solvers_syncednesterov",
         "//lib_src/solvers:solvers_syncednewton",
@@ -56,7 +56,7 @@ cc_binary(
     ],
     deps = [
         "//lib_src/elements:FEAT10Data",
-        "//lib_src/elements:FEAT10ConstraintManager",
+        "//lib_src/solvers:FEAT10ConstraintManager",
         "//lib_src/solvers:solvers_syncedadamw",
         "//lib_src/solvers:solvers_syncednesterov",
         "//lib_src/solvers:solvers_syncednewton",
@@ -79,7 +79,7 @@ cc_binary(
     ],
     deps = [
         "//lib_src/elements:FEAT10Data",
-        "//lib_src/elements:FEAT10ConstraintManager",
+        "//lib_src/solvers:FEAT10ConstraintManager",
         "//lib_src/solvers:solvers_syncedadamw",
         "//lib_src/solvers:solvers_syncednesterov",
         "//lib_src/solvers:solvers_syncednewton",
@@ -102,7 +102,7 @@ cc_binary(
     ],
     deps = [
         "//lib_src/elements:FEAT10Data",
-        "//lib_src/elements:FEAT10ConstraintManager",
+        "//lib_src/solvers:FEAT10ConstraintManager",
         "//lib_src/solvers:solvers_syncedadamw",
         "//lib_src/solvers:solvers_syncednesterov",
         "//lib_src/solvers:solvers_syncednewton",

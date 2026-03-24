@@ -1,9 +1,9 @@
 /**
- * FEAT10 Double Pendulum Revolute-Joint Demo
+ * FEAT10 Double Pendulum Spherical-Joint Demo
  *
  * Builds a two-link T10 double pendulum from the pendulum beam mesh.
- * The upper link is attached to the world through a revolute joint, and the
- * lower link is attached to the upper link through a second revolute joint.
+ * The upper link is attached to the world through a spherical joint, and the
+ * lower link is attached to the upper link through a second spherical joint.
  * The combined mesh is exported to VTU for visualization.
  */
 
@@ -29,25 +29,23 @@ namespace {
 
 constexpr double kPi             = 3.14159265358979323846;
 constexpr double kGravity        = -9.81;
-constexpr double kDt             = 1e-4;
-constexpr int kNumStepsDefault   = 20000;
-constexpr int kExportIntervalDef = 20;
+constexpr double kDt             = 2e-4;
+constexpr int kNumStepsDefault   = 10000;
+constexpr int kExportIntervalDef = 10;
 
 constexpr double kBeamLength           = 0.5;
 constexpr double kUpperHingeLocalZ     = 0.0;
 constexpr double kLowerHingeLocalZ     = kBeamLength;
 constexpr double kLowerLinkHingeLocalZ = 0.0;
-constexpr double kJointOffset          = 0.001;
-
-constexpr double kUpperAngleDeg = 35.0;
-constexpr double kLowerAngleDeg = -25.0;
+constexpr double kUpperAngleDeg        = 35.0;
+constexpr double kLowerAngleDeg        = -25.0;
 
 const SolidMaterialProperties kLinkMaterial =
-    SolidMaterialProperties::SVK(1.0e7,   // E: pendulum links
+    SolidMaterialProperties::SVK(5.0e6,   // E: pendulum links
                                  0.30,    // nu
                                  1200.0,  // rho0
-                                 1.0e4,   // eta_damp
-                                 1.0e4    // lambda_damp
+                                 1.0e3,   // eta_damp
+                                 1.0e3    // lambda_damp
     );
 
 double DegToRad(double angle_deg) {
@@ -115,7 +113,7 @@ void AppendGravityForInstance(Eigen::VectorXd* h_f_ext,
 
 std::string MakeOutputPath(int frame) {
   std::ostringstream oss;
-  oss << "output/engineering_joint/double_pendulum_" << std::setw(6)
+  oss << "output/engineering_joint/double_pendulum_spherical_" << std::setw(6)
       << std::setfill('0') << frame << ".vtu";
   return oss.str();
 }
@@ -139,7 +137,7 @@ int main(int argc, char** argv) {
   }
 
   std::cout << "========================================\n";
-  std::cout << "FEAT10 Double Pendulum Revolute-Joint Demo\n";
+  std::cout << "FEAT10 Double Pendulum Spherical-Joint Demo\n";
   std::cout << "========================================\n";
   std::cout << "steps=" << max_steps << " export_interval=" << export_interval
             << "\n";
@@ -214,12 +212,10 @@ int main(int argc, char** argv) {
   gpu_t10_data.SetExternalForce(h_f_ext);
 
   FEAT10ConstraintManager constraint_manager(&gpu_t10_data);
-  constraint_manager.AddRevoluteJointToWorld(
-      MakeElementRange(inst_upper), top_hinge, Eigen::Vector3d::UnitY(),
-      kJointOffset, 1e2);
-  constraint_manager.AddRevoluteJoint(
-      MakeElementRange(inst_upper), MakeElementRange(inst_lower), lower_hinge,
-      Eigen::Vector3d::UnitY(), kJointOffset, 1);
+  constraint_manager.AddSphericalJointToWorld(MakeElementRange(inst_upper),
+                                              top_hinge);
+  constraint_manager.AddSphericalJoint(
+      MakeElementRange(inst_upper), MakeElementRange(inst_lower), lower_hinge);
   constraint_manager.Finalize();
 
   gpu_t10_data.CalcConstraintData();
@@ -228,7 +224,7 @@ int main(int argc, char** argv) {
   gpu_t10_data.CalcP();
   gpu_t10_data.CalcInternalForce();
 
-  SyncedNewtonParams params = {1e-4, 1e-4, 1e-8, 1e10, 8, 10, kDt, true};
+  SyncedNewtonParams params = {1e-4, 1e-4, 1e-8, 1e8, 8, 10, kDt, false};
   SyncedNewtonSolver solver(&gpu_t10_data, gpu_t10_data.get_n_constraint());
   solver.Setup();
   solver.SetParameters(&params);

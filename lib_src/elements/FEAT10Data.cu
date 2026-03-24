@@ -565,7 +565,10 @@ __global__ void build_general_constraint_jacobian_values_kernel(
     }
 
     d_data->j_csr_values()[j_index] += value;
-    d_data->cj_csr_values()[jt_index] = value;
+    // Multiple primitive terms can map to the same (dof, constraint) entry,
+    // especially for DP1 rows whose defining points share element support.
+    // J and J^T must therefore accumulate identically.
+    d_data->cj_csr_values()[jt_index] += value;
   }
 }
 }  // namespace

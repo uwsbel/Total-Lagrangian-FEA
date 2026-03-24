@@ -38,7 +38,7 @@
 
 #include "../../lib_src/collision/DemeMeshCollisionSystem.h"
 #include "../../lib_src/elements/FEAT10Data.cuh"
-#include "../../lib_src/elements/FEAT10ConstraintManager.h"
+#include "../../lib_src/solvers/FEAT10ConstraintManager.h"
 #include "../../lib_src/solvers/FEMultiElementProblem.h"
 #include "../../lib_src/solvers/MultiElementNewton.cuh"
 #include "../../lib_utils/cpu_utils.h"

@@ -386,6 +386,10 @@ __global__ void assemble_sparse_hessian_t10_exact_dp1_constraints(
   const double lambda = d_solver->lambda_guess()(constraint_idx);
   const double c_val = d_data->constraint()(constraint_idx);
   const double row_scale = d_data->general_constraint_row_scale(constraint_idx);
+  // constraint() and lambda_guess() already store the normalized DP1 row,
+  // while the block structure assembled below corresponds to the raw second
+  // derivative in Eq. (23). Under that convention, the curvature correction
+  // contributes one additional row-scale factor here.
   const double factor = h * h * (lambda + rho * c_val) * row_scale;
 
   if (fabs(factor) < 1e-30) {
