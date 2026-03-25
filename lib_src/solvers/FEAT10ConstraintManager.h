@@ -97,6 +97,16 @@ class FEAT10ConstraintManager {
                         const ReferencePoint& r, const ReferencePoint& s,
                         double target = 0.0, double weight = 1.0);
 
+  // Add a DP2 primitive with the same scalar equation as DP1:
+  //   (r_Q - r_P) dot (r_S - r_R) = target.
+  //
+  // The intended ownership pattern is that P, Q, and R lie on one body while
+  // S lies on the other. The builder also accepts repeated points, which the
+  // cylindrical-joint construction uses for the offset-collinearity rows.
+  void AddDP2Constraint(const ReferencePoint& p, const ReferencePoint& q,
+                        const ReferencePoint& r, const ReferencePoint& s,
+                        double target = 0.0, double weight = 1.0);
+
   // Add a spherical joint directly from its two attachment points.
   //
   // A spherical joint is just the three Cartesian coincidence constraints
@@ -147,6 +157,33 @@ class FEAT10ConstraintManager {
                                const Eigen::Vector3d& hinge_point,
                                const Eigen::Vector3d& hinge_axis,
                                double offset = -1.0, double dp1_weight = 1.0);
+
+  // Add a cylindrical joint from the seven-point construction in Appendix A.7
+  // of the engineering-joint notes:
+  //   - P/R are attachment points on the shared axis
+  //   - Q defines the axis direction on body b
+  //   - S/U define the two axis-parallelism directions on body c
+  //   - V/W define the two offset-collinearity directions on body b
+  //
+  // The resulting joint is assembled from two DP1 rows and two DP2 rows.
+  void AddCylindricalJoint(const ReferencePoint& p, const ReferencePoint& q,
+                           const ReferencePoint& r, const ReferencePoint& s,
+                           const ReferencePoint& u, const ReferencePoint& v,
+                           const ReferencePoint& w, double f_par1 = 0.0,
+                           double f_par2 = 0.0, double f_col1 = 0.0,
+                           double f_col2 = 0.0, double dp1_weight = 1.0,
+                           double dp2_weight = 1.0);
+
+  // Geometry-based cylindrical construction following Appendix A.7 of the
+  // engineering-joint document.
+  void AddCylindricalJoint(const ElementRange& body_b,
+                           const ElementRange& body_c,
+                           const Eigen::Vector3d& axis_point_b,
+                           const Eigen::Vector3d& axis_point_c,
+                           const Eigen::Vector3d& axis_direction,
+                           double offset = -1.0,
+                           double dp1_weight = 1.0,
+                           double dp2_weight = 1.0);
 
   // Freeze the host-side description and install it into GPU_FEAT10_Data.
   //
@@ -224,6 +261,13 @@ class FEAT10ConstraintManager {
   void AddWorldDP1Constraint(const ReferencePoint& p, const ReferencePoint& q,
                              const Eigen::Vector3d& world_direction,
                              double target = 0.0, double weight = 1.0);
+
+  // Shared host-side helper for FEAT10's bilinear dot-product primitives.
+  void AddDotProductConstraint(int type, const ReferencePoint& p,
+                               const ReferencePoint& q,
+                               const ReferencePoint& r,
+                               const ReferencePoint& s,
+                               double target = 0.0, double weight = 1.0);
 
   // Reconstruct the reference-space position of a stored material point.
   Eigen::Vector3d EvaluateReferencePoint(const ReferencePoint& point) const;

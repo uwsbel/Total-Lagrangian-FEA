@@ -46,6 +46,7 @@ enum FEAT10GeneralConstraintType {
   kFEAT10ConstraintPointPointCD,
   kFEAT10ConstraintWorldDP1,
   kFEAT10ConstraintDP1,
+  kFEAT10ConstraintDP2,
 };
 
 enum FEAT10GeneralConstraintTermKind {

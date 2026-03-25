@@ -528,6 +528,7 @@ __global__ void build_general_constraint_jacobian_values_kernel(
   double a[3] = {0.0, 0.0, 0.0};
   double d[3] = {0.0, 0.0, 0.0};
   if (constraint_type == kFEAT10ConstraintDP1 ||
+      constraint_type == kFEAT10ConstraintDP2 ||
       constraint_type == kFEAT10ConstraintWorldDP1) {
     eval_general_constraint_point(d_data, constraint_idx, 0, p);
     eval_general_constraint_point(d_data, constraint_idx, 1, q);
@@ -536,7 +537,8 @@ __global__ void build_general_constraint_jacobian_values_kernel(
     a[1] = q[1] - p[1];
     a[2] = q[2] - p[2];
 
-    if (constraint_type == kFEAT10ConstraintDP1) {
+    if (constraint_type == kFEAT10ConstraintDP1 ||
+        constraint_type == kFEAT10ConstraintDP2) {
       eval_general_constraint_point(d_data, constraint_idx, 2, r);
       eval_general_constraint_point(d_data, constraint_idx, 3, s);
       d[0] = s[0] - r[0];
@@ -1085,10 +1087,12 @@ void GPU_FEAT10_Data::SetGeneralConstraints(
     const auto &scalar = layout.scalars[static_cast<size_t>(i)];
     types[static_cast<size_t>(i)]   = scalar.type;
     if (scalar.type == kFEAT10ConstraintDP1 ||
+        scalar.type == kFEAT10ConstraintDP2 ||
         scalar.type == kFEAT10ConstraintWorldDP1) {
       ++n_general_constraint_dp1;
     }
-    if (scalar.type == kFEAT10ConstraintDP1) {
+    if (scalar.type == kFEAT10ConstraintDP1 ||
+        scalar.type == kFEAT10ConstraintDP2) {
       ++n_general_constraint_nonlinear_dp1;
     }
     axes[static_cast<size_t>(i)]    = scalar.axis;

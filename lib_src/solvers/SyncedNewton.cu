@@ -368,7 +368,7 @@ __global__ void assemble_sparse_hessian_constraints(
   }
 }
 
-__global__ void assemble_sparse_hessian_t10_exact_dp1_constraints(
+__global__ void assemble_sparse_hessian_t10_exact_dot_constraints(
     GPU_FEAT10_Data *d_data, SyncedNewtonSolver *d_solver,
     int *d_csr_row_offsets, int *d_csr_col_indices, double *d_csr_values) {
   const int constraint_idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -376,8 +376,9 @@ __global__ void assemble_sparse_hessian_t10_exact_dp1_constraints(
     return;
   }
 
-  if (d_data->general_constraint_type(constraint_idx) !=
-      kFEAT10ConstraintDP1) {
+  const int constraint_type = d_data->general_constraint_type(constraint_idx);
+  if (constraint_type != kFEAT10ConstraintDP1 &&
+      constraint_type != kFEAT10ConstraintDP2) {
     return;
   }
 
@@ -386,9 +387,9 @@ __global__ void assemble_sparse_hessian_t10_exact_dp1_constraints(
   const double lambda = d_solver->lambda_guess()(constraint_idx);
   const double c_val = d_data->constraint()(constraint_idx);
   const double row_scale = d_data->general_constraint_row_scale(constraint_idx);
-  // constraint() and lambda_guess() already store the normalized DP1 row,
-  // while the block structure assembled below corresponds to the raw second
-  // derivative in Eq. (23). Under that convention, the curvature correction
+  // constraint() and lambda_guess() already store the normalized dot-product
+  // row, while the block structure assembled below corresponds to the raw
+  // second derivative. Under that convention, the curvature correction
   // contributes one additional row-scale factor here.
   const double factor = h * h * (lambda + rho * c_val) * row_scale;
 
@@ -396,72 +397,57 @@ __global__ void assemble_sparse_hessian_t10_exact_dp1_constraints(
     return;
   }
 
+  constexpr double kRoleCoeff[4][4] = {
+      {0.0, 0.0, 1.0, -1.0},
+      {0.0, 0.0, -1.0, 1.0},
+      {1.0, -1.0, 0.0, 0.0},
+      {-1.0, 1.0, 0.0, 0.0},
+  };
+
   const auto connectivity = d_data->element_connectivity();
-
   for (int axis = 0; axis < 3; ++axis) {
-    for (int local_p = 0; local_p < Quadrature::N_NODE_T10_10; ++local_p) {
-      const double wp =
-          d_data->general_constraint_point_shape(constraint_idx, 0, local_p);
-      if (wp != 0.0) {
-        const int node_p = connectivity(
-            d_data->general_constraint_point_element(constraint_idx, 0),
-            local_p);
-        const int dof_p = node_p * 3 + axis;
-
-        for (int local_r = 0; local_r < Quadrature::N_NODE_T10_10; ++local_r) {
-          const double wr = d_data->general_constraint_point_shape(
-              constraint_idx, 2, local_r);
-          if (wr != 0.0) {
-            const int node_r = connectivity(
-                d_data->general_constraint_point_element(constraint_idx, 2),
-                local_r);
-            add_symmetric_sparse_hessian_entry(
-                dof_p, node_r * 3 + axis, factor * wp * wr,
-                d_csr_row_offsets, d_csr_col_indices, d_csr_values);
-          }
-
-          const double ws = d_data->general_constraint_point_shape(
-              constraint_idx, 3, local_r);
-          if (ws != 0.0) {
-            const int node_s = connectivity(
-                d_data->general_constraint_point_element(constraint_idx, 3),
-                local_r);
-            add_symmetric_sparse_hessian_entry(
-                dof_p, node_s * 3 + axis, -factor * wp * ws,
-                d_csr_row_offsets, d_csr_col_indices, d_csr_values);
-          }
-        }
+    for (int role_a = 0; role_a < 4; ++role_a) {
+      const int elem_a =
+          d_data->general_constraint_point_element(constraint_idx, role_a);
+      if (elem_a < 0) {
+        continue;
       }
 
-      const double wq =
-          d_data->general_constraint_point_shape(constraint_idx, 1, local_p);
-      if (wq != 0.0) {
-        const int node_q = connectivity(
-            d_data->general_constraint_point_element(constraint_idx, 1),
-            local_p);
-        const int dof_q = node_q * 3 + axis;
+      for (int local_a = 0; local_a < Quadrature::N_NODE_T10_10; ++local_a) {
+        const double wa = d_data->general_constraint_point_shape(
+            constraint_idx, role_a, local_a);
+        if (wa == 0.0) {
+          continue;
+        }
 
-        for (int local_r = 0; local_r < Quadrature::N_NODE_T10_10; ++local_r) {
-          const double wr = d_data->general_constraint_point_shape(
-              constraint_idx, 2, local_r);
-          if (wr != 0.0) {
-            const int node_r = connectivity(
-                d_data->general_constraint_point_element(constraint_idx, 2),
-                local_r);
-            add_symmetric_sparse_hessian_entry(
-                dof_q, node_r * 3 + axis, -factor * wq * wr,
-                d_csr_row_offsets, d_csr_col_indices, d_csr_values);
+        const int node_a = connectivity(elem_a, local_a);
+        const int dof_a  = node_a * 3 + axis;
+
+        for (int role_b = 0; role_b < 4; ++role_b) {
+          const double coeff = kRoleCoeff[role_a][role_b];
+          if (coeff == 0.0) {
+            continue;
           }
 
-          const double ws = d_data->general_constraint_point_shape(
-              constraint_idx, 3, local_r);
-          if (ws != 0.0) {
-            const int node_s = connectivity(
-                d_data->general_constraint_point_element(constraint_idx, 3),
-                local_r);
-            add_symmetric_sparse_hessian_entry(
-                dof_q, node_s * 3 + axis, factor * wq * ws,
-                d_csr_row_offsets, d_csr_col_indices, d_csr_values);
+          const int elem_b =
+              d_data->general_constraint_point_element(constraint_idx, role_b);
+          if (elem_b < 0) {
+            continue;
+          }
+
+          for (int local_b = 0; local_b < Quadrature::N_NODE_T10_10;
+               ++local_b) {
+            const double wb = d_data->general_constraint_point_shape(
+                constraint_idx, role_b, local_b);
+            if (wb == 0.0) {
+              continue;
+            }
+
+            const int node_b = connectivity(elem_b, local_b);
+            const int dof_b  = node_b * 3 + axis;
+            add_sparse_hessian_entry(
+                dof_a, dof_b, factor * coeff * wa * wb, d_csr_row_offsets,
+                d_csr_col_indices, d_csr_values);
           }
         }
       }
@@ -1478,7 +1464,7 @@ void SyncedNewtonSolver::OneStepNewtonCuDSS() {
 
           if constexpr (std::is_same_v<decltype(*typed_data), GPU_FEAT10_Data&>) {
             if (use_symmetric_constraint_hessian_) {
-              assemble_sparse_hessian_t10_exact_dp1_constraints<<<
+              assemble_sparse_hessian_t10_exact_dot_constraints<<<
                   numBlocks_sparse_constraint, threadsPerBlock>>>(
                   typed_data, d_newton_solver_, d_csr_row_offsets_,
                   d_csr_col_indices_, d_csr_values_);

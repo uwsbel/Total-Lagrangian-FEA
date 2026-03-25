@@ -421,22 +421,24 @@ Eigen::Vector3d FEAT10ConstraintManager::EvaluateReferencePoint(
   return position;
 }
 
-// DP1 rows are scaled by the reference lengths of the two defining fibers so
-// the effective row magnitude stays reasonably consistent as the user changes
-// the geometric offset used to create Q/S/T points.
-void FEAT10ConstraintManager::AddDP1Constraint(const ReferencePoint& p,
-                                               const ReferencePoint& q,
-                                               const ReferencePoint& r,
-                                               const ReferencePoint& s,
-                                               double target,
-                                               double weight) {
+// FEAT10's bilinear dot-product constraints use the same scalar equation for
+// both DP1 and DP2. They differ only in the intended body ownership pattern
+// and, later on, in the exact Hessian assembly for repeated-point cases.
+void FEAT10ConstraintManager::AddDotProductConstraint(
+    int type, const ReferencePoint& p, const ReferencePoint& q,
+    const ReferencePoint& r, const ReferencePoint& s, double target,
+    double weight) {
   if (finalized_) {
     throw std::logic_error(
-        "FEAT10ConstraintManager::AddDP1Constraint: manager already finalized");
+        "FEAT10ConstraintManager::AddDotProductConstraint: manager already finalized");
   }
   if (weight <= 0.0) {
     throw std::invalid_argument(
-        "FEAT10ConstraintManager::AddDP1Constraint: weight must be positive");
+        "FEAT10ConstraintManager::AddDotProductConstraint: weight must be positive");
+  }
+  if (type != kFEAT10ConstraintDP1 && type != kFEAT10ConstraintDP2) {
+    throw std::invalid_argument(
+        "FEAT10ConstraintManager::AddDotProductConstraint: invalid dot-product constraint type");
   }
 
   const Eigen::Vector3d p_ref = EvaluateReferencePoint(p);
@@ -447,17 +449,36 @@ void FEAT10ConstraintManager::AddDP1Constraint(const ReferencePoint& p,
   const double d_norm         = (s_ref - r_ref).norm();
 
   ScalarConstraint constraint;
-  constraint.type      = kFEAT10ConstraintDP1;
+  constraint.type      = type;
   constraint.target    = target;
   constraint.row_scale = weight;
-  if (a_norm > 1e-12 && d_norm > 1e-12) {
-    constraint.row_scale *= 1.0 / (a_norm * d_norm);
+  const double row_norm = std::sqrt(a_norm * a_norm + d_norm * d_norm);
+  if (row_norm > 1e-12) {
+    constraint.row_scale *= 1.0 / row_norm;
   }
   constraint.points[0] = p;
   constraint.points[1] = q;
   constraint.points[2] = r;
   constraint.points[3] = s;
   scalar_constraints_.push_back(constraint);
+}
+
+void FEAT10ConstraintManager::AddDP1Constraint(const ReferencePoint& p,
+                                               const ReferencePoint& q,
+                                               const ReferencePoint& r,
+                                               const ReferencePoint& s,
+                                               double target,
+                                               double weight) {
+  AddDotProductConstraint(kFEAT10ConstraintDP1, p, q, r, s, target, weight);
+}
+
+void FEAT10ConstraintManager::AddDP2Constraint(const ReferencePoint& p,
+                                               const ReferencePoint& q,
+                                               const ReferencePoint& r,
+                                               const ReferencePoint& s,
+                                               double target,
+                                               double weight) {
+  AddDotProductConstraint(kFEAT10ConstraintDP2, p, q, r, s, target, weight);
 }
 
 void FEAT10ConstraintManager::AddWorldDP1Constraint(
@@ -478,17 +499,13 @@ void FEAT10ConstraintManager::AddWorldDP1Constraint(
         "FEAT10ConstraintManager::AddWorldDP1Constraint: world direction must be non-zero");
   }
 
-  const Eigen::Vector3d p_ref = EvaluateReferencePoint(p);
-  const Eigen::Vector3d q_ref = EvaluateReferencePoint(q);
-  const double a_norm         = (q_ref - p_ref).norm();
-
   ScalarConstraint constraint;
   constraint.type            = kFEAT10ConstraintWorldDP1;
   constraint.target          = target;
   constraint.world_direction = world_direction;
   constraint.row_scale       = weight;
-  if (a_norm > 1e-12) {
-    constraint.row_scale *= 1.0 / (a_norm * d_norm);
+  if (d_norm > 1e-12) {
+    constraint.row_scale *= 1.0 / d_norm;
   }
   constraint.points[0] = p;
   constraint.points[1] = q;
@@ -514,6 +531,18 @@ void FEAT10ConstraintManager::AddRevoluteJoint(const ReferencePoint& p,
   AddPointToPointCDAxis(p, r, 2);
   AddDP1Constraint(p, q, r, s, f1, dp1_weight);
   AddDP1Constraint(p, q, r, t, f2, dp1_weight);
+}
+
+void FEAT10ConstraintManager::AddCylindricalJoint(
+    const ReferencePoint& p, const ReferencePoint& q, const ReferencePoint& r,
+    const ReferencePoint& s, const ReferencePoint& u,
+    const ReferencePoint& v, const ReferencePoint& w, double f_par1,
+    double f_par2, double f_col1, double f_col2, double dp1_weight,
+    double dp2_weight) {
+  AddDP1Constraint(p, q, r, s, f_par1, dp1_weight);
+  AddDP1Constraint(p, q, r, u, f_par2, dp1_weight);
+  AddDP2Constraint(p, v, p, r, f_col1, dp2_weight);
+  AddDP2Constraint(p, w, p, r, f_col2, dp2_weight);
 }
 
 double FEAT10ConstraintManager::ComputeElementCharacteristicLength(
@@ -635,6 +664,64 @@ void FEAT10ConstraintManager::AddRevoluteJointToWorld(
   AddPointToWorldCDAxis(p, 2, p_ref.z());
   AddWorldDP1Constraint(p, q, p1, 0.0, dp1_weight);
   AddWorldDP1Constraint(p, q, p2, 0.0, dp1_weight);
+}
+
+void FEAT10ConstraintManager::AddCylindricalJoint(
+    const ElementRange& body_b, const ElementRange& body_c,
+    const Eigen::Vector3d& axis_point_b, const Eigen::Vector3d& axis_point_c,
+    const Eigen::Vector3d& axis_direction, double offset, double dp1_weight,
+    double dp2_weight) {
+  const double axis_norm = axis_direction.norm();
+  if (axis_norm < 1e-12) {
+    throw std::invalid_argument(
+        "FEAT10ConstraintManager::AddCylindricalJoint: axis direction must be non-zero");
+  }
+
+  const Eigen::Vector3d axis = axis_direction / axis_norm;
+  const ReferencePoint p = LocateReferencePoint(axis_point_b, body_b);
+  const ReferencePoint r = LocateReferencePoint(axis_point_c, body_c);
+
+  if (offset <= 0.0) {
+    offset = DefaultJointOffset(p, r);
+  }
+
+  const ReferencePoint q =
+      LocateWithAdaptiveOffset(axis_point_b, axis, body_b, offset);
+
+  const Eigen::Vector3d p1 = BuildPerpendicularAxis1(axis);
+  const Eigen::Vector3d p2 = axis.cross(p1).normalized();
+
+  const ReferencePoint s =
+      LocateWithAdaptiveOffset(axis_point_c, p1, body_c, offset);
+  const ReferencePoint u =
+      LocateWithAdaptiveOffset(axis_point_c, p2, body_c, offset);
+  const ReferencePoint v =
+      LocateWithAdaptiveOffset(axis_point_b, p1, body_b, offset);
+  const ReferencePoint w =
+      LocateWithAdaptiveOffset(axis_point_b, p2, body_b, offset);
+
+  const Eigen::Vector3d p_ref = EvaluateReferencePoint(p);
+  const Eigen::Vector3d q_ref = EvaluateReferencePoint(q);
+  const Eigen::Vector3d r_ref = EvaluateReferencePoint(r);
+  const Eigen::Vector3d s_ref = EvaluateReferencePoint(s);
+  const Eigen::Vector3d u_ref = EvaluateReferencePoint(u);
+  const Eigen::Vector3d v_ref = EvaluateReferencePoint(v);
+  const Eigen::Vector3d w_ref = EvaluateReferencePoint(w);
+
+  const Eigen::Vector3d a_ref  = q_ref - p_ref;
+  const Eigen::Vector3d d1_ref = s_ref - r_ref;
+  const Eigen::Vector3d d2_ref = u_ref - r_ref;
+  const Eigen::Vector3d p1_ref = v_ref - p_ref;
+  const Eigen::Vector3d p2_ref = w_ref - p_ref;
+  const Eigen::Vector3d b_ref  = r_ref - p_ref;
+
+  const double f_par1 = a_ref.dot(d1_ref);
+  const double f_par2 = a_ref.dot(d2_ref);
+  const double f_col1 = p1_ref.dot(b_ref);
+  const double f_col2 = p2_ref.dot(b_ref);
+
+  AddCylindricalJoint(p, q, r, s, u, v, w, f_par1, f_par2, f_col1, f_col2,
+                      dp1_weight, dp2_weight);
 }
 
 // This is the lowering step that bridges the friendly API above to the sparse
