@@ -5,8 +5,9 @@
  * The upper link is attached to the world through a spherical joint, and the
  * lower link is attached to the upper link through a welded joint.
  * The combined mesh is exported to VTU for visualization.
- * This demo not yet working though, as enforcing one welded joint is not
- * sufficient to lock
+ * This demo is not yet working though, as enforcing one welded joint is not
+ * sufficient to lock all rigid-body modes of the mechanism; additional
+ * constraints or supports are required.
  */
 
 #include <cuda_runtime.h>
