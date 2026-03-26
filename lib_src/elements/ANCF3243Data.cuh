@@ -443,6 +443,7 @@ struct GPU_ANCF3243_Data : public ElementBase {
       : n_nodes(num_nodes), n_elements(num_elements) {
     n_beam          = num_elements;  // Initialize n_beam with n_elements
     n_coef          = 4 * n_nodes;   // Non-overlapping DOFs: 4 DOFs per node
+    n_constraint    = 0;
     type            = TYPE_3243;
     constraint_mode = kConstraintNone;
   }

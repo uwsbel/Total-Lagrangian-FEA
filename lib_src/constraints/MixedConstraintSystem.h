@@ -1,7 +1,7 @@
 /*==============================================================
  *==============================================================
  * Project: RoboDyna
- * Author:  OpenAI Codex
+ * Author:  Json Zhou
  * File:    MixedConstraintSystem.h
  * Brief:   Global mixed-element constraint builder for holistic solves.
  *          Supports point-based scalar constraints spanning ANCF3243 beam
@@ -138,6 +138,9 @@ class MixedConstraintSystem {
                         const Eigen::Vector3d& hinge_point,
                         const Eigen::Vector3d& hinge_axis,
                         double offset = -1.0, double dp1_weight = 1.0);
+  void AddFixedJoint(int block_idx_a, int block_idx_b,
+                     const Eigen::Vector3d& joint_point,
+                     double offset = -1.0, double dp1_weight = 1.0);
   void AddCylindricalJoint(int block_idx_a, int block_idx_b,
                            const Eigen::Vector3d& axis_point_a,
                            const Eigen::Vector3d& axis_point_b,
