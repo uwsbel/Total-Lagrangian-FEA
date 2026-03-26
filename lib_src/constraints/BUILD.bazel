@@ -1,0 +1,20 @@
+load("@rules_cuda//cuda:defs.bzl", "cuda_library")
+
+package(default_visibility = ["//visibility:public"])
+
+cuda_library(
+    name = "FEAT10ConstraintManager",
+    srcs = [
+        "FEAT10ConstraintManager.cu",
+        "FEAT10ConstraintJoints.cu",
+        "FEAT10ConstraintPrimitives.cu",
+    ],
+    hdrs = ["FEAT10ConstraintManager.h"],
+    copts = ["--std=c++17", "-O3", "--use_fast_math", "--extra-device-vectorization"],
+    linkopts = ["-lcudart"],
+    deps = [
+        "//lib_src/elements:FEAT10Data",
+        "//lib_utils:cuda_utils",
+        "@eigen//:eigen",
+    ],
+)
