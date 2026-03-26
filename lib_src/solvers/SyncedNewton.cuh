@@ -78,7 +78,7 @@ class SyncedNewtonSolver : public SolverBase {
       n_total_qp_ = Quadrature::N_QP_T10_5;
       n_shape_    = Quadrature::N_NODE_T10_10;
       use_symmetric_constraint_hessian_ =
-          typed_data->HasGeneralNonlinearDP1ConstraintsHost();
+          typed_data->HasGeneralNonlinearDotConstraintsHost();
     } else {
       d_data_ = nullptr;
       std::cerr << "Unknown element type!" << std::endl;
