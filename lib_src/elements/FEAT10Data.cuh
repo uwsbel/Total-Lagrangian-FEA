@@ -46,6 +46,7 @@ enum FEAT10GeneralConstraintType {
   kFEAT10ConstraintPointPointCD,
   kFEAT10ConstraintWorldDP1,
   kFEAT10ConstraintDP1,
+  kFEAT10ConstraintDP2,
 };
 
 enum FEAT10GeneralConstraintTermKind {
@@ -281,20 +282,20 @@ struct GPU_FEAT10_Data : public ElementBase {
                                                         : n_constraint / 3;
   }
 
-  __host__ __device__ bool HasGeneralDP1Constraints() const {
-    return n_general_constraint_dp1 > 0;
+  __host__ __device__ bool HasGeneralDotConstraints() const {
+    return n_general_dot_constraint > 0;
   }
 
-  __host__ __device__ int GetGeneralDP1ConstraintCount() const {
-    return n_general_constraint_dp1;
+  __host__ __device__ int GetGeneralDotConstraintCount() const {
+    return n_general_dot_constraint;
   }
 
-  __host__ __device__ bool HasGeneralNonlinearDP1Constraints() const {
-    return n_general_constraint_nonlinear_dp1 > 0;
+  __host__ __device__ bool HasGeneralNonlinearDotConstraints() const {
+    return n_general_nonlinear_dot_constraint > 0;
   }
 
-  __host__ __device__ int GetGeneralNonlinearDP1ConstraintCount() const {
-    return n_general_constraint_nonlinear_dp1;
+  __host__ __device__ int GetGeneralNonlinearDotConstraintCount() const {
+    return n_general_nonlinear_dot_constraint;
   }
 
   __device__ int general_constraint_type(int constraint_idx) const {
@@ -578,8 +579,8 @@ struct GPU_FEAT10_Data : public ElementBase {
   }
 #endif
 
-  bool HasGeneralNonlinearDP1ConstraintsHost() const {
-    return n_general_constraint_nonlinear_dp1 > 0;
+  bool HasGeneralNonlinearDotConstraintsHost() const {
+    return n_general_nonlinear_dot_constraint > 0;
   }
 
   __host__ __device__ int get_n_elem() const {
@@ -1420,8 +1421,8 @@ struct GPU_FEAT10_Data : public ElementBase {
   double *d_general_constraint_term_scales  = nullptr;
   int *d_general_constraint_term_j_indices  = nullptr;
   int *d_general_constraint_term_jt_indices = nullptr;
-  int n_general_constraint_dp1              = 0;
-  int n_general_constraint_nonlinear_dp1    = 0;
+  int n_general_dot_constraint              = 0;
+  int n_general_nonlinear_dot_constraint    = 0;
   // Constraint Jacobian J^T in CSR format
   int *d_cj_csr_offsets, *d_cj_csr_columns;
   double *d_cj_csr_values;

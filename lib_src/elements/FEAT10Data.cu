@@ -528,6 +528,7 @@ __global__ void build_general_constraint_jacobian_values_kernel(
   double a[3] = {0.0, 0.0, 0.0};
   double d[3] = {0.0, 0.0, 0.0};
   if (constraint_type == kFEAT10ConstraintDP1 ||
+      constraint_type == kFEAT10ConstraintDP2 ||
       constraint_type == kFEAT10ConstraintWorldDP1) {
     eval_general_constraint_point(d_data, constraint_idx, 0, p);
     eval_general_constraint_point(d_data, constraint_idx, 1, q);
@@ -536,7 +537,8 @@ __global__ void build_general_constraint_jacobian_values_kernel(
     a[1] = q[1] - p[1];
     a[2] = q[2] - p[2];
 
-    if (constraint_type == kFEAT10ConstraintDP1) {
+    if (constraint_type == kFEAT10ConstraintDP1 ||
+        constraint_type == kFEAT10ConstraintDP2) {
       eval_general_constraint_point(d_data, constraint_idx, 2, r);
       eval_general_constraint_point(d_data, constraint_idx, 3, s);
       d[0] = s[0] - r[0];
@@ -1035,8 +1037,8 @@ void GPU_FEAT10_Data::SetNodalFixed(const Eigen::VectorXi &fixed_nodes) {
 
   constraint_mode_ = kFEAT10ConstraintFixedNodes;
   n_constraint = fixed_nodes.size() * 3;
-  n_general_constraint_dp1 = 0;
-  n_general_constraint_nonlinear_dp1 = 0;
+  n_general_dot_constraint = 0;
+  n_general_nonlinear_dot_constraint = 0;
 
   HANDLE_ERROR(cudaMalloc(&d_constraint, n_constraint * sizeof(double)));
   HANDLE_ERROR(cudaMalloc(&d_fixed_nodes, fixed_nodes.size() * sizeof(int)));
@@ -1062,8 +1064,8 @@ void GPU_FEAT10_Data::SetGeneralConstraints(
 
   n_constraint     = static_cast<int>(layout.scalars.size());
   constraint_mode_ = kFEAT10ConstraintGeneral;
-  n_general_constraint_dp1 = 0;
-  n_general_constraint_nonlinear_dp1 = 0;
+  n_general_dot_constraint = 0;
+  n_general_nonlinear_dot_constraint = 0;
   if (n_constraint == 0) {
     return;
   }
@@ -1085,11 +1087,13 @@ void GPU_FEAT10_Data::SetGeneralConstraints(
     const auto &scalar = layout.scalars[static_cast<size_t>(i)];
     types[static_cast<size_t>(i)]   = scalar.type;
     if (scalar.type == kFEAT10ConstraintDP1 ||
+        scalar.type == kFEAT10ConstraintDP2 ||
         scalar.type == kFEAT10ConstraintWorldDP1) {
-      ++n_general_constraint_dp1;
+      ++n_general_dot_constraint;
     }
-    if (scalar.type == kFEAT10ConstraintDP1) {
-      ++n_general_constraint_nonlinear_dp1;
+    if (scalar.type == kFEAT10ConstraintDP1 ||
+        scalar.type == kFEAT10ConstraintDP2) {
+      ++n_general_nonlinear_dot_constraint;
     }
     axes[static_cast<size_t>(i)]    = scalar.axis;
     nodes[static_cast<size_t>(i)]   = scalar.node_id;
@@ -1235,8 +1239,8 @@ void GPU_FEAT10_Data::UpdateNodalFixed(const Eigen::VectorXi &fixed_nodes) {
   }
 
   constraint_mode_ = kFEAT10ConstraintFixedNodes;
-  n_general_constraint_dp1 = 0;
-  n_general_constraint_nonlinear_dp1 = 0;
+  n_general_dot_constraint = 0;
+  n_general_nonlinear_dot_constraint = 0;
   int new_n_constraint = fixed_nodes.size() * 3;
 
   // If constraints not set up yet, just call SetNodalFixed
