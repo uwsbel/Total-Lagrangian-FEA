@@ -490,8 +490,6 @@ int main(int argc, char** argv) {
   gpu_t10_data.CalcDnDuPre();
   gpu_t10_data.CalcMassMatrix();
 
-  Eigen::VectorXd h_f_ext = Eigen::VectorXd::Zero(n_nodes * 3);
-
   FEAT10ConstraintManager constraint_manager(&gpu_t10_data);
   const auto piston_axis_reference = constraint_manager.LocateReferencePoint(
       piston_axis_point, MakeElementRange(inst_piston));
