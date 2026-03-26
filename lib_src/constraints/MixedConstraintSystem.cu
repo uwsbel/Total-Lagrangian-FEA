@@ -1,7 +1,7 @@
 /*==============================================================
  *==============================================================
  * Project: RoboDyna
- * Author:  OpenAI Codex
+ * Author:  Json Zhou
  * File:    MixedConstraintSystem.cu
  * Brief:   Host-side mixed-element constraint builder and device-side
  *          constraint/Jacobian evaluation for holistic ANCF3243 + FEAT10
@@ -674,6 +674,51 @@ void MixedConstraintSystem::AddRevoluteJoint(
   const double f1 = (q_ref - p_ref).dot(s_ref - r_ref);
   const double f2 = (q_ref - p_ref).dot(t_ref - r_ref);
   AddRevoluteJoint(p, q, r, s, t, f1, f2, dp1_weight);
+}
+
+void MixedConstraintSystem::AddFixedJoint(
+    int block_idx_a, int block_idx_b, const Eigen::Vector3d& joint_point,
+    double offset, double dp1_weight) {
+  const MixedConstraintPointBinding p =
+      LocateReferencePoint(block_idx_a, joint_point);
+  const MixedConstraintPointBinding r =
+      LocateReferencePoint(block_idx_b, joint_point);
+  if (offset <= 0.0) {
+    offset = ComputeDefaultOffset(p, r);
+  }
+
+  // A weld removes all relative orientation, so any deterministic,
+  // non-degenerate reference frame is acceptable for constructing the
+  // offset directions used by the DP1 rows.
+  const Eigen::Vector3d axis = Eigen::Vector3d::UnitZ();
+  const Eigen::Vector3d p1 = BuildPerpendicularAxis1(axis);
+  const Eigen::Vector3d p2 = axis.cross(p1).normalized();
+
+  const MixedConstraintPointBinding q =
+      LocateWithAdaptiveOffset(block_idx_a, joint_point, axis, offset);
+  const MixedConstraintPointBinding w =
+      LocateWithAdaptiveOffset(block_idx_a, joint_point, p1, offset);
+  const MixedConstraintPointBinding s =
+      LocateWithAdaptiveOffset(block_idx_b, joint_point, p1, offset);
+  const MixedConstraintPointBinding t =
+      LocateWithAdaptiveOffset(block_idx_b, joint_point, p2, offset);
+
+  const Eigen::Vector3d p_ref = EvaluateReferencePoint(p);
+  const Eigen::Vector3d q_ref = EvaluateReferencePoint(q);
+  const Eigen::Vector3d w_ref = EvaluateReferencePoint(w);
+  const Eigen::Vector3d r_ref = EvaluateReferencePoint(r);
+  const Eigen::Vector3d s_ref = EvaluateReferencePoint(s);
+  const Eigen::Vector3d t_ref = EvaluateReferencePoint(t);
+
+  const Eigen::Vector3d a1_ref = q_ref - p_ref;
+  const Eigen::Vector3d a2_ref = w_ref - p_ref;
+  const Eigen::Vector3d d1_ref = s_ref - r_ref;
+  const Eigen::Vector3d d2_ref = t_ref - r_ref;
+
+  const double f1 = a1_ref.dot(d1_ref);
+  const double f2 = a1_ref.dot(d2_ref);
+  const double f3 = a2_ref.dot(d2_ref);
+  AddFixedJoint(p, q, w, r, s, t, f1, f2, f3, dp1_weight);
 }
 
 void MixedConstraintSystem::AddCylindricalJoint(

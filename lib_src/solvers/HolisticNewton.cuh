@@ -1,7 +1,7 @@
 /*==============================================================
  *==============================================================
  * Project: RoboDyna
- * Author:  OpenAI Codex
+ * Author:  Json Zhou
  * File:    HolisticNewton.cuh
  * Brief:   Monolithic Newton solver for multi-element FE problems with
  *          global mixed constraints spanning multiple element blocks.

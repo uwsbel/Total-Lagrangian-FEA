@@ -993,7 +993,7 @@ compute_hessian_assemble_csr_global<GPU_ANCF3243_Data>(
     const int coef_idx_row    = node_global_row * 4 + dof_local_row;
 
     for (int r_dof = 0; r_dof < 3; r_dof++) {
-      int global_row = 3 * coef_idx_row + r_dof;
+      int global_row = 3 * (coef_offset + coef_idx_row) + r_dof;
       int local_row  = 3 * local_row_idx2 + r_dof;
 
       int row_begin = d_csr_row_offsets[global_row];
@@ -1007,7 +1007,7 @@ compute_hessian_assemble_csr_global<GPU_ANCF3243_Data>(
         const int coef_idx_col = node_global_col * 4 + dof_local_col;
 
         for (int c_dof = 0; c_dof < 3; c_dof++) {
-          int global_col = 3 * coef_idx_col + c_dof;
+          int global_col = 3 * (coef_offset + coef_idx_col) + c_dof;
           int local_col  = 3 * local_col_idx + c_dof;
 
           int pos = binary_search_column_csr_3243(&d_csr_col_indices[row_begin],
