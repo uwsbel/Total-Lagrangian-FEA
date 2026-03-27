@@ -5,12 +5,11 @@
  * Email:   ganesh.arivoli@gmail.com, zzhou292@wisc.edu
  * File:    test_feat10_hand_tendon_curl.cc
  * Brief:   FEAT10 Tendon-Driven Hand Curl Demo.
- *          Extends the single-finger curl demo to a four-finger hand.
- *          Each finger is a four-block chain with its own tendon, arranged
- *          side-by-side along Y. The proximal blocks are grounded, inter-block
- *          revolute joints provide hinge motion, cylindrical guides route each
- *          tendon, and a weld attaches each tendon to its distal block. All
- *          tendons are pulled simultaneously.
+ *          Four fingers (three blocks each) attach to a shared palm base via
+ *          revolute joints. Each finger has its own tendon routed through
+ *          cylindrical guides in the blocks and palm, welded to the distal
+ *          block. The palm back face is grounded. All tendons are pulled
+ *          simultaneously.
  *==============================================================
  *==============================================================*/
 
@@ -42,11 +41,15 @@ constexpr int kExportIntervalDef = 25;
 constexpr int kPullRampSteps     = 400;
 
 constexpr int kNumFingers      = 4;
-constexpr int kNumFingerBlocks = 4;
+constexpr int kNumFingerBlocks = 3;
 
 constexpr double kBlockLength = 0.025;
 constexpr double kBlockWidth  = 0.020;
 constexpr double kBlockHeight = 0.016;
+
+constexpr double kFingerBaseX = -kNumFingerBlocks * kBlockLength;
+constexpr double kPalmBackX   = kBlockLength;
+constexpr double kPalmGuideX  = 0.5 * kBlockLength;
 
 constexpr double kFingerGapY     = 0.005;
 constexpr double kFingerSpacingY = kBlockWidth + kFingerGapY;
@@ -86,7 +89,6 @@ struct FingerData {
   int tendon_mesh_id;
   std::vector<ANCFCPUUtils::MeshInstance> block_instances;
   ANCFCPUUtils::MeshInstance tendon_instance;
-  std::vector<int> fixed_base_nodes;
   std::vector<int> tendon_pull_nodes;
   double y_offset;
   FEAT10ConstraintManager::ReferencePoint tip_reference;
@@ -151,6 +153,53 @@ std::string MakeOutputPath(int frame) {
   return oss.str();
 }
 
+void AddFinger(FEAT10ConstraintManager& cm,
+               const FingerData& finger,
+               const FEAT10ConstraintManager::ElementRange& palm_range,
+               const Eigen::Vector3d& hinge_axis) {
+  const double guide_y = finger.y_offset + kGuideY;
+  const auto tendon_range = MakeElementRange(finger.tendon_instance);
+
+  // Revolute joints between adjacent blocks
+  for (int ji = 0; ji < kNumFingerBlocks - 1; ++ji) {
+    const double hinge_x = kFingerBaseX + (ji + 1) * kBlockLength;
+    cm.AddRevoluteJoint(
+        MakeElementRange(finger.block_instances[ji]),
+        MakeElementRange(finger.block_instances[ji + 1]),
+        Eigen::Vector3d(hinge_x, guide_y, kHingeZ),
+        hinge_axis, kJointOffset, 1.0);
+  }
+
+  // Revolute joint: proximal block to palm
+  cm.AddRevoluteJoint(
+      MakeElementRange(finger.block_instances.back()), palm_range,
+      Eigen::Vector3d(0.0, guide_y, kHingeZ),
+      hinge_axis, kJointOffset, 1.0);
+
+  // Cylindrical guides for tendon through each block
+  for (int bi = 0; bi < kNumFingerBlocks; ++bi) {
+    const double guide_x = kFingerBaseX + (bi + 0.5) * kBlockLength;
+    const Eigen::Vector3d guide_point(guide_x, guide_y, kGuideZ);
+    cm.AddCylindricalJoint(
+        MakeElementRange(finger.block_instances[bi]),
+        tendon_range, guide_point, guide_point,
+        Eigen::Vector3d::UnitX(), kJointOffset, 1.0, 1.0);
+  }
+
+  // Cylindrical guide for tendon through palm
+  const Eigen::Vector3d palm_guide(kPalmGuideX, guide_y, kGuideZ);
+  cm.AddCylindricalJoint(
+      palm_range, tendon_range, palm_guide,
+      palm_guide, Eigen::Vector3d::UnitX(), kJointOffset, 1.0, 1.0);
+
+  // Weld tendon to distal block
+  cm.AddFixedJoint(
+      MakeElementRange(finger.block_instances.front()),
+      tendon_range,
+      Eigen::Vector3d(kFingerBaseX + kDistalAttachX, guide_y, kGuideZ),
+      kJointOffset, 1.0);
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -173,7 +222,7 @@ int main(int argc, char** argv) {
   std::cout << "FEAT10 Tendon-Driven Hand Curl Demo\n";
   std::cout << "========================================\n";
   std::cout << "fingers=" << kNumFingers << " blocks_per_finger="
-            << kNumFingerBlocks << "\n";
+            << kNumFingerBlocks << " + shared palm\n";
   std::cout << "steps=" << max_steps << " export_interval=" << export_interval
             << "\n";
 
@@ -182,9 +231,19 @@ int main(int argc, char** argv) {
   const std::string mesh_dir = "data/meshes/T10/finger";
   const std::string block_prefix = mesh_dir + "/finger_block.1";
   const std::string tendon_prefix = mesh_dir + "/tendon.1";
+  const std::string palm_prefix = mesh_dir + "/palm.1";
+
+  // --- Load shared palm mesh ---
+  ANCFCPUUtils::MeshManager mesh_manager;
+
+  const int palm_mesh_id = mesh_manager.LoadMesh(
+      palm_prefix + ".node", palm_prefix + ".ele", "palm", kFingerMaterial);
+  if (palm_mesh_id < 0) {
+    std::cerr << "Failed to load palm mesh\n";
+    return 1;
+  }
 
   // --- Load meshes for all fingers ---
-  ANCFCPUUtils::MeshManager mesh_manager;
   std::vector<FingerData> fingers(kNumFingers);
 
   for (int fi = 0; fi < kNumFingers; ++fi) {
@@ -201,8 +260,8 @@ int main(int argc, char** argv) {
         std::cerr << "Failed to load finger block mesh\n";
         return 1;
       }
-      mesh_manager.TranslateMesh(mesh_id, bi * kBlockLength, finger.y_offset,
-                                 0.0);
+      mesh_manager.TranslateMesh(mesh_id, kFingerBaseX + bi * kBlockLength,
+                                 finger.y_offset, 0.0);
       finger.block_mesh_ids.push_back(mesh_id);
     }
 
@@ -214,14 +273,21 @@ int main(int argc, char** argv) {
       std::cerr << "Failed to load tendon mesh\n";
       return 1;
     }
-    mesh_manager.TranslateMesh(finger.tendon_mesh_id, 0.0,
+    mesh_manager.TranslateMesh(finger.tendon_mesh_id, kFingerBaseX,
                                finger.y_offset + kGuideY - 0.5 * kTendonWidth,
                                kGuideZ - 0.5 * kTendonThickness);
   }
 
   // --- Cache mesh instances and select boundary nodes ---
   const Eigen::MatrixXd& all_nodes = mesh_manager.GetAllNodes();
-  const double base_x_max = kNumFingerBlocks * kBlockLength;
+
+  const auto palm_instance = mesh_manager.GetMeshInstance(palm_mesh_id);
+  const auto palm_range = MakeElementRange(palm_instance);
+  const auto palm_fixed_nodes = SelectNodesOnPlane(
+      all_nodes, palm_instance, 0, kPalmBackX, kBasePatchTolerance);
+  if (palm_fixed_nodes.empty()) {
+    throw std::runtime_error("Failed to identify palm base-face nodes");
+  }
 
   for (int fi = 0; fi < kNumFingers; ++fi) {
     FingerData& finger = fingers[fi];
@@ -232,16 +298,10 @@ int main(int argc, char** argv) {
     }
     finger.tendon_instance = mesh_manager.GetMeshInstance(finger.tendon_mesh_id);
 
-    finger.fixed_base_nodes = SelectNodesOnPlane(
-        all_nodes, finger.block_instances.back(), 0, base_x_max,
-        kBasePatchTolerance);
     finger.tendon_pull_nodes = SelectNodesOnPlane(
-        all_nodes, finger.tendon_instance, 0, kTendonLength, kFaceTolerance);
+        all_nodes, finger.tendon_instance, 0, kFingerBaseX + kTendonLength,
+        kFaceTolerance);
 
-    if (finger.fixed_base_nodes.empty()) {
-      throw std::runtime_error(
-          "Failed to identify base-face nodes for finger " + std::to_string(fi));
-    }
     if (finger.tendon_pull_nodes.empty()) {
       throw std::runtime_error(
           "Failed to identify tendon pull-face nodes for finger " +
@@ -254,6 +314,9 @@ int main(int argc, char** argv) {
   const int n_elems                = mesh_manager.GetTotalElements();
 
   // --- Print geometry summary ---
+  std::cout << "palm: " << palm_instance.num_nodes << " nodes, "
+            << palm_instance.num_elements << " elems, fixed nodes: "
+            << palm_fixed_nodes.size() << "\n";
   for (int fi = 0; fi < kNumFingers; ++fi) {
     const FingerData& finger = fingers[fi];
     std::cout << "finger[" << fi << "] y_offset=" << finger.y_offset << "\n";
@@ -264,8 +327,7 @@ int main(int argc, char** argv) {
     }
     std::cout << "  tendon: " << finger.tendon_instance.num_nodes << " nodes, "
               << finger.tendon_instance.num_elements << " elems\n";
-    std::cout << "  fixed base nodes: " << finger.fixed_base_nodes.size()
-              << "  tendon pull nodes: " << finger.tendon_pull_nodes.size()
+    std::cout << "  tendon pull nodes: " << finger.tendon_pull_nodes.size()
               << "\n";
   }
   std::cout << "total: " << n_nodes << " nodes, " << n_elems << " elements\n";
@@ -293,45 +355,19 @@ int main(int argc, char** argv) {
   FEAT10ConstraintManager constraint_manager(&gpu_t10_data);
   const Eigen::Vector3d hinge_axis = -Eigen::Vector3d::UnitY();
 
+  // Ground palm back face
+  for (int node : palm_fixed_nodes) {
+    constraint_manager.AddNodeToWorldCD(node);
+  }
+
   for (int fi = 0; fi < kNumFingers; ++fi) {
     FingerData& finger = fingers[fi];
-    const double fy = finger.y_offset;
+    AddFinger(constraint_manager, finger, palm_range, hinge_axis);
 
-    // Fix proximal block back face
-    for (int node : finger.fixed_base_nodes) {
-      constraint_manager.AddNodeToWorldCD(node);
-    }
-
-    // Revolute joints between adjacent blocks
-    for (int ji = 0; ji < kNumFingerBlocks - 1; ++ji) {
-      const double hinge_x = (ji + 1) * kBlockLength;
-      const Eigen::Vector3d hinge_point(hinge_x, fy + kGuideY, kHingeZ);
-      constraint_manager.AddRevoluteJoint(
-          MakeElementRange(finger.block_instances[ji]),
-          MakeElementRange(finger.block_instances[ji + 1]), hinge_point,
-          hinge_axis, kJointOffset, 1.0);
-    }
-
-    // Cylindrical guides for tendon through each block
-    for (int bi = 0; bi < kNumFingerBlocks; ++bi) {
-      const double guide_x = (bi + 0.5) * kBlockLength;
-      const Eigen::Vector3d guide_point(guide_x, fy + kGuideY, kGuideZ);
-      constraint_manager.AddCylindricalJoint(
-          MakeElementRange(finger.block_instances[bi]),
-          MakeElementRange(finger.tendon_instance), guide_point, guide_point,
-          Eigen::Vector3d::UnitX(), kJointOffset, 1.0, 1.0);
-    }
-
-    // Weld tendon to distal block
-    const Eigen::Vector3d distal_attach(kDistalAttachX, fy + kGuideY, kGuideZ);
-    constraint_manager.AddFixedJoint(
-        MakeElementRange(finger.block_instances.front()),
-        MakeElementRange(finger.tendon_instance), distal_attach, kJointOffset,
-        1.0);
-
-    // Reference points for diagnostics
+    const double guide_y = finger.y_offset + kGuideY;
     finger.tip_reference = constraint_manager.LocateReferencePoint(
-        Eigen::Vector3d(0.001, fy + kGuideY, kBlockHeight - 0.001),
+        Eigen::Vector3d(kFingerBaseX + 0.001, guide_y,
+                        kBlockHeight - 0.001),
         MakeElementRange(finger.block_instances.front()));
   }
 
@@ -366,16 +402,18 @@ int main(int argc, char** argv) {
 
   // --- Time stepping ---
   int output_frame = 1;
+  Eigen::VectorXd step_f_ext(n_nodes * 3);
   for (int step = 1; step <= max_steps; ++step) {
     const double ramp =
         std::min(1.0, static_cast<double>(step) / kPullRampSteps);
-    Eigen::VectorXd step_f_ext = Eigen::VectorXd::Zero(n_nodes * 3);
+    step_f_ext.setZero();
     for (int fi = 0; fi < kNumFingers; ++fi) {
       AddDistributedForce(&step_f_ext, fingers[fi].tendon_pull_nodes,
                           ramp * kTendonPullForce * Eigen::Vector3d::UnitX());
     }
     gpu_t10_data.SetExternalForce(step_f_ext);
 
+    std::cout << "Step " << step << "\n";
     solver.Solve();
 
     if (step % export_interval == 0 || step == max_steps) {
