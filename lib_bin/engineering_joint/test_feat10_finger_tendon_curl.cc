@@ -41,7 +41,7 @@ constexpr double kBlockLength = 0.025;
 constexpr double kBlockWidth  = 0.020;
 constexpr double kBlockHeight = 0.016;
 
-constexpr double kTendonLength    = 0.125;
+constexpr double kTendonLength    = 0.150;
 constexpr double kTendonWidth     = 0.005;
 constexpr double kTendonThickness = 0.003;
 
@@ -170,7 +170,7 @@ int main(int argc, char** argv) {
 
   std::filesystem::create_directories("output/engineering_joint");
 
-  const std::string mesh_dir = "data/meshes/T10/finger";
+  const std::string mesh_dir = "data/meshes/T10/hand_simple";
   const std::string block_prefix = mesh_dir + "/finger_block.1";
   const std::string tendon_prefix = mesh_dir + "/tendon.1";
 

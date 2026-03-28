@@ -46,11 +46,11 @@ constexpr double kBlockWidth  = 0.020;
 constexpr double kBlockHeight = 0.016;
 
 constexpr double kFingerBaseX = -kNumFingerBlocks * kBlockLength;
-constexpr double kPalmLength  = 4 * kBlockLength;
+constexpr double kPalmLength  = 3 * kBlockLength;
 constexpr double kPalmBackX   = kPalmLength;
-constexpr double kPalmGuideX  = 0.5 * kPalmLength;
+constexpr double kPalmGuideX  = 0.4 * kPalmLength;
 
-constexpr double kTendonLength    = 0.125;
+constexpr double kTendonLength    = 0.150;
 constexpr double kTendonWidth     = 0.005;
 constexpr double kTendonThickness = 0.003;
 
@@ -74,7 +74,7 @@ const FingerSpec kFingerSpecs[] = {
     {{0.0, 0.035, 0.0}, 0.0},
     {{0.0, 0.060, 0.0}, 0.0},
     {{0.0, 0.085, 0.0}, 0.0},
-    {{0.05, 0.0, 0.0}, M_PI / 4},
+    {{0.05, 0.008, 0.0}, M_PI / 4},
 };
 constexpr int kNumFingers = sizeof(kFingerSpecs) / sizeof(kFingerSpecs[0]);
 
@@ -280,7 +280,7 @@ int main(int argc, char** argv) {
 
   std::filesystem::create_directories("output/engineering_joint");
 
-  const std::string mesh_dir = "data/meshes/T10/finger";
+  const std::string mesh_dir = "data/meshes/T10/hand_simple";
   const std::string block_prefix = mesh_dir + "/finger_block.1";
   const std::string tendon_prefix = mesh_dir + "/tendon.1";
   const std::string palm_prefix = mesh_dir + "/palm.1";
@@ -485,7 +485,6 @@ int main(int argc, char** argv) {
     }
     gpu_t10_data.SetExternalForce(step_f_ext);
 
-    std::cout << "Step " << step << "\n";
     solver.Solve();
 
     if (step % export_interval == 0 || step == max_steps) {
