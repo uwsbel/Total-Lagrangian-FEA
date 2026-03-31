@@ -3,7 +3,7 @@
  * Project: RoboDyna
  * Author:  Ganesh Arivoli, Json Zhou
  * Email:   ganesh.arivoli@gmail.com, zzhou292@wisc.edu
- * File:    test_feat10_hand_tendon_curl.cc
+ * File:    test_feat10_simple_hand_curl.cc
  * Brief:   FEAT10 Tendon-Driven Hand Curl Demo.
  *          Four fingers + thumb on a shared palm. Each finger: 3 block
  *          segments, revolute joints, tendon with cylindrical guides.
@@ -194,7 +194,7 @@ Eigen::Vector3d EvaluateCurrentPointPosition(
 
 std::string MakeOutputPath(int frame) {
   std::ostringstream oss;
-  oss << "output/engineering_joint/hand_tendon_curl_" << std::setw(6)
+  oss << "output/engineering_joint/simple_hand_curl_" << std::setw(6)
       << std::setfill('0') << frame << ".vtu";
   return oss.str();
 }
