@@ -633,7 +633,7 @@ struct GPU_FEAT10_Data : public ElementBase {
 
   void RetrieveExternalForceToCPU(Eigen::VectorXd &external_force);
 
-  void RetrieveConstraintDataToCPU(Eigen::VectorXd &constraint) override {}
+  void RetrieveConstraintDataToCPU(Eigen::VectorXd &constraint) override;
 
   void RetrieveConstraintJacobianToCPU(
       Eigen::MatrixXd &constraint_jac) override {}

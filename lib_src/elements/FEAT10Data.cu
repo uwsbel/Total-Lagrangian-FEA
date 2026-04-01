@@ -884,6 +884,18 @@ void GPU_FEAT10_Data::RetrieveExternalForceToCPU(
                           total_dofs * sizeof(double), cudaMemcpyDeviceToHost));
 }
 
+void GPU_FEAT10_Data::RetrieveConstraintDataToCPU(Eigen::VectorXd &constraint) {
+  constraint.resize(n_constraint);
+
+  if (!is_constraints_setup || n_constraint == 0) {
+    return;
+  }
+
+  HANDLE_ERROR(cudaMemcpy(constraint.data(), d_constraint,
+                          static_cast<size_t>(n_constraint) * sizeof(double),
+                          cudaMemcpyDeviceToHost));
+}
+
 void GPU_FEAT10_Data::RetrievePositionToCPU(Eigen::VectorXd &x12,
                                             Eigen::VectorXd &y12,
                                             Eigen::VectorXd &z12) {

@@ -352,6 +352,10 @@ class SyncedNewtonSolver : public SolverBase {
     return d_v_guess_;
   }
 
+  double *GetLambdaGuessDevicePtr() const {
+    return d_lambda_guess_;
+  }
+
   void SetInitialVelocity(const Eigen::VectorXd& h_v0) {
     if (h_v0.size() != n_coef_ * 3) {
       std::cerr << "SetInitialVelocity: size mismatch (got " << h_v0.size()
