@@ -10,8 +10,10 @@
 #include <cuda_runtime.h>
 
 #include <Eigen/Dense>
+#include <cmath>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <sstream>
@@ -142,14 +144,30 @@ Eigen::Vector3d EvaluateCurrentPointPosition(
 int main(int argc, char** argv) {
   int max_steps       = kNumStepsDefault;
   int export_interval = kExportIntervalDef;
-  if (argc > 1) {
-    const int parsed_steps = std::atoi(argv[1]);
+  bool debug          = false;
+  std::vector<std::string> positional_args;
+  positional_args.reserve(static_cast<size_t>(argc > 1 ? argc - 1 : 0));
+  for (int argi = 1; argi < argc; ++argi) {
+    const std::string arg(argv[argi]);
+    if (arg == "--debug") {
+      debug = true;
+      continue;
+    }
+    positional_args.push_back(arg);
+  }
+  if (positional_args.size() > 2) {
+    std::cerr << "Usage: " << argv[0]
+              << " [max_steps] [export_interval] [--debug]" << std::endl;
+    return 1;
+  }
+  if (!positional_args.empty()) {
+    const int parsed_steps = std::atoi(positional_args[0].c_str());
     if (parsed_steps > 0) {
       max_steps = parsed_steps;
     }
   }
-  if (argc > 2) {
-    const int parsed_interval = std::atoi(argv[2]);
+  if (positional_args.size() > 1) {
+    const int parsed_interval = std::atoi(positional_args[1].c_str());
     if (parsed_interval > 0) {
       export_interval = parsed_interval;
     }
@@ -159,9 +177,11 @@ int main(int argc, char** argv) {
   std::cout << "FEAT10 Double Pendulum Revolute-Joint Demo\n";
   std::cout << "========================================\n";
   std::cout << "steps=" << max_steps << " export_interval=" << export_interval
-            << "\n";
+            << " debug=" << (debug ? "on" : "off") << "\n";
 
   std::filesystem::create_directories("output/engineering_joint");
+  const std::string debug_csv_path =
+      "output/engineering_joint/double_pendulum_debug.csv";
 
   const std::string mesh_prefix =
       "data/meshes/T10/double_pendulum/pendulum_beam.1";
@@ -259,6 +279,7 @@ int main(int argc, char** argv) {
   std::cout << "constraints: " << gpu_t10_data.get_n_constraint() << "\n";
   Eigen::VectorXd x_curr, y_curr, z_curr;
   gpu_t10_data.RetrievePositionToCPU(x_curr, y_curr, z_curr);
+  const Eigen::VectorXd y_ref = y_curr;
   const Eigen::Vector3d lower_upper_initial = EvaluateCurrentPointPosition(
       lower_hinge_on_upper, all_elems, x_curr, y_curr, z_curr);
   const Eigen::Vector3d lower_lower_initial = EvaluateCurrentPointPosition(
@@ -271,6 +292,88 @@ int main(int argc, char** argv) {
             << (lower_upper_initial - lower_lower_initial).norm() << "\n";
   std::cout << "writing initial frame to " << MakeOutputPath(0) << "\n";
   gpu_t10_data.WriteOutputVTU(MakeOutputPath(0));
+
+  std::ofstream debug_csv;
+  Eigen::VectorXd constraint_curr;
+  Eigen::VectorXd lambda_curr;
+  Eigen::VectorXd velocity_curr;
+  auto write_debug_row = [&](int step, const Eigen::Vector3d& lower_upper_pos,
+                             const Eigen::Vector3d& lower_lower_pos) {
+    if (!debug_csv.is_open()) {
+      return;
+    }
+
+    const int n_constraints = gpu_t10_data.get_n_constraint();
+    constraint_curr.resize(n_constraints);
+    if (n_constraints > 0) {
+      HANDLE_ERROR(cudaMemcpy(constraint_curr.data(), gpu_t10_data.Get_Constraint_Ptr(),
+                              static_cast<size_t>(n_constraints) * sizeof(double),
+                              cudaMemcpyDeviceToHost));
+      lambda_curr.resize(n_constraints);
+      HANDLE_ERROR(cudaMemcpy(lambda_curr.data(), solver.GetLambdaGuessDevicePtr(),
+                              static_cast<size_t>(n_constraints) * sizeof(double),
+                              cudaMemcpyDeviceToHost));
+    } else {
+      constraint_curr.resize(0);
+      lambda_curr.resize(0);
+    }
+
+    velocity_curr.resize(n_nodes * 3);
+    HANDLE_ERROR(cudaMemcpy(velocity_curr.data(), solver.GetVelocityGuessDevicePtr(),
+                            static_cast<size_t>(n_nodes) * 3 * sizeof(double),
+                            cudaMemcpyDeviceToHost));
+
+    const Eigen::VectorXd y_drift = y_curr - y_ref;
+    const double max_abs_y_drift =
+        y_drift.size() > 0 ? y_drift.cwiseAbs().maxCoeff() : 0.0;
+    const double rms_y_drift =
+        y_drift.size() > 0
+            ? std::sqrt(y_drift.squaredNorm() / static_cast<double>(y_drift.size()))
+            : 0.0;
+    double kinetic_energy = 0.0;
+    for (int node = 0; node < n_nodes; ++node) {
+      const double vx = velocity_curr(3 * node + 0);
+      const double vy = velocity_curr(3 * node + 1);
+      const double vz = velocity_curr(3 * node + 2);
+      kinetic_energy += 0.5 * lumped_mass[static_cast<size_t>(node)] *
+                        (vx * vx + vy * vy + vz * vz);
+    }
+
+    auto lambda_eff = [&](int idx) {
+      if (idx < 0 || idx >= n_constraints) {
+        return 0.0;
+      }
+      return lambda_curr(idx) + params.rho * constraint_curr(idx);
+    };
+
+    debug_csv << step << "," << (static_cast<double>(step) * kDt) << ","
+              << constraint_curr.norm() << ","
+              << (lower_upper_pos - lower_lower_pos).norm() << ","
+              << max_abs_y_drift << "," << rms_y_drift << ","
+              << kinetic_energy << "," << lambda_eff(0) << ","
+              << lambda_eff(1) << "," << lambda_eff(2) << ","
+              << lambda_eff(3) << "," << lambda_eff(4) << ","
+              << lambda_eff(5) << "," << lambda_eff(6) << ","
+              << lambda_eff(7) << "," << lambda_eff(8) << ","
+              << lambda_eff(9) << "\n";
+  };
+
+  if (debug) {
+    debug_csv.open(debug_csv_path);
+    if (!debug_csv.is_open()) {
+      std::cerr << "Failed to open debug CSV: " << debug_csv_path << std::endl;
+      gpu_t10_data.Destroy();
+      return 1;
+    }
+    debug_csv << "step,time,constraint_norm,lower_hinge_mismatch,"
+                 "max_abs_y_drift,rms_y_drift,kinetic_energy,"
+                 "lambda_eff_top_cd_0,lambda_eff_top_cd_1,lambda_eff_top_cd_2,"
+                 "lambda_eff_top_dp1_0,lambda_eff_top_dp1_1,"
+                 "lambda_eff_mid_cd_0,lambda_eff_mid_cd_1,lambda_eff_mid_cd_2,"
+                 "lambda_eff_mid_dp1_0,lambda_eff_mid_dp1_1\n";
+    write_debug_row(0, lower_upper_initial, lower_lower_initial);
+    std::cout << "debug CSV: " << debug_csv_path << "\n";
+  }
 
   int output_frame = 1;
   for (int step = 1; step <= max_steps; ++step) {
@@ -288,6 +391,9 @@ int main(int argc, char** argv) {
               << (lower_upper_current - lower_lower_current).norm() << "\n";
     std::cout << "step " << step << " lower hinge travel from reference: "
               << (lower_upper_current - lower_hinge).norm() << "\n";
+    if (debug) {
+      write_debug_row(step, lower_upper_current, lower_lower_current);
+    }
     if (step % export_interval == 0) {
       gpu_t10_data.WriteOutputVTU(MakeOutputPath(output_frame));
       ++output_frame;

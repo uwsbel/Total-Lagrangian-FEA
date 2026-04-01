@@ -669,12 +669,36 @@ __device__ __forceinline__ void compute_hessian_assemble_csr(
     int* d_csr_row_offsets, int* d_csr_col_indices, double* d_csr_values,
     double h);
 
+template <typename ElementType>
+__device__ __forceinline__ void compute_hessian_assemble_csr_global(
+    ElementType* d_data, int elem_idx, int qp_idx, int coef_offset,
+    int* d_csr_row_offsets, int* d_csr_col_indices, double* d_csr_values,
+    double h);
+
+template <>
+__device__ __forceinline__ void
+compute_hessian_assemble_csr_global<GPU_FEAT10_Data>(
+    GPU_FEAT10_Data* d_data, int elem_idx, int qp_idx, int coef_offset,
+    int* d_csr_row_offsets, int* d_csr_col_indices, double* d_csr_values,
+    double h);
+
 // Explicit specialization for FEAT10
 template <>
 __device__ __forceinline__ void compute_hessian_assemble_csr<GPU_FEAT10_Data>(
     GPU_FEAT10_Data* d_data, SyncedNewtonSolver* d_solver, int elem_idx,
     int qp_idx, int* d_csr_row_offsets, int* d_csr_col_indices,
     double* d_csr_values, double h) {
+  compute_hessian_assemble_csr_global(d_data, elem_idx, qp_idx, 0,
+                                      d_csr_row_offsets, d_csr_col_indices,
+                                      d_csr_values, h);
+}
+
+template <>
+__device__ __forceinline__ void
+compute_hessian_assemble_csr_global<GPU_FEAT10_Data>(
+    GPU_FEAT10_Data* d_data, int elem_idx, int qp_idx, int coef_offset,
+    int* d_csr_row_offsets, int* d_csr_col_indices, double* d_csr_values,
+    double h) {
   // Reuse all local computations from compute_hessian_assemble and then
   // scatter by searching the CSR row for each (global_row, global_col).
 
@@ -823,7 +847,7 @@ __device__ __forceinline__ void compute_hessian_assemble_csr<GPU_FEAT10_Data>(
   for (int local_row_node = 0; local_row_node < 10; local_row_node++) {
     int global_node_row = global_node_indices[local_row_node];
     for (int r_dof = 0; r_dof < 3; r_dof++) {
-      int global_row = 3 * global_node_row + r_dof;
+      int global_row = 3 * (coef_offset + global_node_row) + r_dof;
       int local_row  = 3 * local_row_node + r_dof;
 
       int row_begin = d_csr_row_offsets[global_row];
@@ -833,7 +857,7 @@ __device__ __forceinline__ void compute_hessian_assemble_csr<GPU_FEAT10_Data>(
       for (int local_col_node = 0; local_col_node < 10; local_col_node++) {
         int global_node_col = global_node_indices[local_col_node];
         for (int c_dof = 0; c_dof < 3; c_dof++) {
-          int global_col = 3 * global_node_col + c_dof;
+          int global_col = 3 * (coef_offset + global_node_col) + c_dof;
           int local_col  = 3 * local_col_node + c_dof;
 
           int pos = binary_search_column_csr(&d_csr_col_indices[row_begin],
@@ -926,7 +950,7 @@ __device__ __forceinline__ void compute_hessian_assemble_csr<GPU_FEAT10_Data>(
   for (int local_row_node = 0; local_row_node < 10; local_row_node++) {
     int global_node_row = global_node_indices[local_row_node];
     for (int r_dof = 0; r_dof < 3; r_dof++) {
-      int global_row = 3 * global_node_row + r_dof;
+      int global_row = 3 * (coef_offset + global_node_row) + r_dof;
       int local_row  = 3 * local_row_node + r_dof;
 
       int row_begin = d_csr_row_offsets[global_row];
@@ -936,7 +960,7 @@ __device__ __forceinline__ void compute_hessian_assemble_csr<GPU_FEAT10_Data>(
       for (int local_col_node = 0; local_col_node < 10; local_col_node++) {
         int global_node_col = global_node_indices[local_col_node];
         for (int c_dof = 0; c_dof < 3; c_dof++) {
-          int global_col = 3 * global_node_col + c_dof;
+          int global_col = 3 * (coef_offset + global_node_col) + c_dof;
           int local_col  = 3 * local_col_node + c_dof;
 
           int pos = binary_search_column_csr(&d_csr_col_indices[row_begin],

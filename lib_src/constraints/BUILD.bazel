@@ -18,3 +18,19 @@ cuda_library(
         "@eigen//:eigen",
     ],
 )
+
+cuda_library(
+    name = "mixed_constraint_system",
+    srcs = ["MixedConstraintSystem.cu"],
+    hdrs = ["MixedConstraintSystem.h"],
+    copts = ["--std=c++17", "-O3", "--use_fast_math", "--extra-device-vectorization"],
+    linkopts = ["-lcudart"],
+    deps = [
+        "//lib_src/elements:ANCF3243Data",
+        "//lib_src/elements:FEAT10Data",
+        "//lib_src/solvers:multi_element_problem",
+        "//lib_utils:cpu_utils",
+        "//lib_utils:cuda_utils",
+        "@eigen//:eigen",
+    ],
+)

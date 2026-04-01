@@ -87,3 +87,49 @@ cc_binary(
         "@eigen//:eigen",
     ],
 )
+
+cc_binary(
+    name = "test_feat10_double_pendulum_revolute_holistic",
+    srcs = ["test_feat10_double_pendulum_revolute_holistic.cc"],
+    copts = ["--std=c++17"],
+    linkopts = [
+        "-L/usr/local/cuda/lib64",
+        "-lcusparse",
+        "-lcudart",
+        "-lcudss",
+        "-lcublas",
+    ],
+    deps = [
+        "//lib_src/constraints:mixed_constraint_system",
+        "//lib_src/elements:FEAT10Data",
+        "//lib_src/solvers:holistic_newton",
+        "//lib_src/solvers:multi_element_problem",
+        "//lib_utils:cpu_utils",
+        "//lib_utils:cuda_utils",
+        "//lib_utils:mesh_manager",
+        "@eigen//:eigen",
+    ],
+)
+
+cc_binary(
+    name = "test_feat10_piston_pump_cylindrical_holistic",
+    srcs = ["test_feat10_piston_pump_cylindrical_holistic.cc"],
+    copts = ["--std=c++17"],
+    linkopts = [
+        "-L/usr/local/cuda/lib64",
+        "-lcusparse",
+        "-lcudart",
+        "-lcudss",
+        "-lcublas",
+    ],
+    deps = [
+        "//lib_src/constraints:mixed_constraint_system",
+        "//lib_src/elements:FEAT10Data",
+        "//lib_src/solvers:holistic_newton",
+        "//lib_src/solvers:multi_element_problem",
+        "//lib_utils:cpu_utils",
+        "//lib_utils:cuda_utils",
+        "//lib_utils:mesh_manager",
+        "@eigen//:eigen",
+    ],
+)
