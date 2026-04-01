@@ -16,8 +16,8 @@
 #include <string>
 #include <vector>
 
-#include "../../lib_src/solvers/FEAT10ConstraintManager.h"
 #include "../../lib_src/elements/FEAT10Data.cuh"
+#include "../../lib_src/solvers/FEAT10ConstraintManager.h"
 #include "../../lib_src/solvers/SyncedNewton.cuh"
 #include "../../lib_utils/cpu_utils.h"
 #include "../../lib_utils/quadrature_utils.h"
@@ -170,6 +170,11 @@ int main(int argc, char** argv) {
 
   // Newton solve
   SyncedNewtonParams params = {1e-4, 1e-4, 1e-4, 1e14, 5, 10, 5e-4, false};
+  if (res == 8) {
+    params.inner_atol = 1e-3;
+    params.inner_rtol = 1e-3;
+    params.outer_tol  = 1e-3;
+  }
   SyncedNewtonSolver solver(&gpu_t10_data, gpu_t10_data.get_n_constraint());
   solver.Setup();
   solver.SetParameters(&params);

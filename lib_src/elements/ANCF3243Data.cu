@@ -660,6 +660,23 @@ void GPU_ANCF3243_Data::RetrieveConnectivityToCPU(
   connectivity = connectivity_row_major;
 }
 
+void GPU_ANCF3243_Data::RetrieveElementDimensionsToCPU(
+    Eigen::VectorXd &length, Eigen::VectorXd &width, Eigen::VectorXd &height) {
+  length.resize(n_beam);
+  width.resize(n_beam);
+  height.resize(n_beam);
+
+  HANDLE_ERROR(cudaMemcpy(length.data(), d_L, static_cast<size_t>(n_beam) *
+                                            sizeof(double),
+                          cudaMemcpyDeviceToHost));
+  HANDLE_ERROR(cudaMemcpy(width.data(), d_W, static_cast<size_t>(n_beam) *
+                                           sizeof(double),
+                          cudaMemcpyDeviceToHost));
+  HANDLE_ERROR(cudaMemcpy(height.data(), d_H, static_cast<size_t>(n_beam) *
+                                            sizeof(double),
+                          cudaMemcpyDeviceToHost));
+}
+
 void GPU_ANCF3243_Data::RetrieveMassCSRToCPU(std::vector<int> &offsets,
                                              std::vector<int> &columns,
                                              std::vector<double> &values) {

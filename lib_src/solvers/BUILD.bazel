@@ -138,3 +138,22 @@ cuda_library(
         "@eigen//:eigen",
     ],
 )
+
+cuda_library(
+    name = "holistic_newton",
+    srcs = ["HolisticNewton.cu"],
+    hdrs = [
+        "HolisticNewton.cuh",
+        "SolverBase.h",
+    ],
+    copts = ["--std=c++17", "-O3", "--use_fast_math", "--extra-device-vectorization"],
+    linkopts = ["-lcusolver", "-lcublas", "-lcusparse", "-lcudss"],
+    deps = [
+        ":multi_element_problem",
+        "//lib_src/constraints:mixed_constraint_system",
+        "//lib_src/elements:ANCF3243Data",
+        "//lib_src/elements:FEAT10Data",
+        "//lib_utils:cuda_utils",
+        "@eigen//:eigen",
+    ],
+)

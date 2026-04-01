@@ -1062,6 +1062,9 @@ struct GPU_ANCF3243_Data : public ElementBase {
   void PrintDsDuPre();
 
   void RetrieveConnectivityToCPU(Eigen::MatrixXi &connectivity);
+  void RetrieveElementDimensionsToCPU(Eigen::VectorXd &length,
+                                      Eigen::VectorXd &width,
+                                      Eigen::VectorXd &height);
 
   void RetrieveDetJToCPU(std::vector<std::vector<double>> &detJ);
 
