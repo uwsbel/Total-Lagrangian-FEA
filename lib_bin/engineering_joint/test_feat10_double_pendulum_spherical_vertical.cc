@@ -32,7 +32,7 @@ namespace {
 
 constexpr double kPi             = 3.14159265358979323846;
 constexpr double kGravity        = -9.81;
-constexpr double kDt             = 2e-4;
+constexpr double kDt             = 5e-4;
 constexpr int kNumStepsDefault   = 1000;
 constexpr int kExportIntervalDef = 50;
 
@@ -41,19 +41,19 @@ constexpr double kUpperHingeLocalZ     = 0.0;
 constexpr double kLowerHingeLocalZ     = kBeamLength;
 constexpr double kLowerLinkHingeLocalZ = 0.0;
 
-constexpr double kVerticalAngleX    = 0.0;
-constexpr double kVerticalAngleY    = kPi;
-constexpr double kPullForceZ        = 25.0;
-constexpr double kPullRegionLength  = 0.05;
-constexpr int kPullRampSteps        = 200;
-constexpr double kTopHingeHeight    = 1.1;
+constexpr double kVerticalAngleX   = 0.0;
+constexpr double kVerticalAngleY   = kPi;
+constexpr double kPullForceZ       = 25.0;
+constexpr double kPullRegionLength = 0.05;
+constexpr int kPullRampSteps       = 200;
+constexpr double kTopHingeHeight   = 1.1;
 
 const SolidMaterialProperties kLinkMaterial =
     SolidMaterialProperties::SVK(5.0e6,   // E: pendulum links
                                  0.30,    // nu
                                  1200.0,  // rho0
-                                 1.0e3,   // eta_damp
-                                 1.0e3    // lambda_damp
+                                 1.0e4,   // eta_damp
+                                 1.0e4    // lambda_damp
     );
 
 Eigen::Vector3d TransformPoint(const Eigen::Matrix4d& transform,
@@ -149,14 +149,16 @@ std::vector<int> SelectLowerTipRegionNodes(
     const Eigen::MatrixXd& all_nodes,
     const ANCFCPUUtils::MeshInstance& lower_instance, double region_length) {
   double min_z = std::numeric_limits<double>::infinity();
-  for (int local_node = 0; local_node < lower_instance.num_nodes; ++local_node) {
+  for (int local_node = 0; local_node < lower_instance.num_nodes;
+       ++local_node) {
     const int global_node = lower_instance.node_offset + local_node;
-    min_z = std::min(min_z, all_nodes(global_node, 2));
+    min_z                 = std::min(min_z, all_nodes(global_node, 2));
   }
 
   std::vector<int> selected_nodes;
   selected_nodes.reserve(static_cast<size_t>(lower_instance.num_nodes));
-  for (int local_node = 0; local_node < lower_instance.num_nodes; ++local_node) {
+  for (int local_node = 0; local_node < lower_instance.num_nodes;
+       ++local_node) {
     const int global_node = lower_instance.node_offset + local_node;
     if (all_nodes(global_node, 2) <= min_z + region_length) {
       selected_nodes.push_back(global_node);
@@ -164,7 +166,8 @@ std::vector<int> SelectLowerTipRegionNodes(
   }
 
   if (selected_nodes.empty()) {
-    throw std::runtime_error("Lower tip region node selection returned no nodes");
+    throw std::runtime_error(
+        "Lower tip region node selection returned no nodes");
   }
   return selected_nodes;
 }
@@ -188,7 +191,8 @@ std::string MakeOutputPath(int frame) {
 }
 
 std::string MakeCsvOutputPath() {
-  return "output/engineering_joint/double_pendulum_spherical_vertical_metrics.csv";
+  return "output/engineering_joint/"
+         "double_pendulum_spherical_vertical_metrics.csv";
 }
 
 bool TryParsePositiveInt(const std::string& arg, int* value) {
@@ -208,7 +212,7 @@ bool TryParseNonnegativeDouble(const std::string& arg, double* value) {
   char* end_ptr    = nullptr;
   const double raw = std::strtod(arg.c_str(), &end_ptr);
   const bool okay  = end_ptr != arg.c_str() && end_ptr != nullptr &&
-                    *end_ptr == '\0' && std::isfinite(raw) && raw >= 0.0;
+                     *end_ptr == '\0' && std::isfinite(raw) && raw >= 0.0;
   if (!okay) {
     return false;
   }
@@ -317,9 +321,8 @@ int main(int argc, char** argv) {
 
   const Eigen::Vector3d lower_hinge = TransformPoint(
       upper_transform, Eigen::Vector3d(0.0, 0.0, kLowerHingeLocalZ));
-  const Eigen::Matrix4d lower_transform =
-      MakeBeamTransform(kVerticalAngleX, kVerticalAngleY, lower_hinge,
-                        kLowerLinkHingeLocalZ);
+  const Eigen::Matrix4d lower_transform = MakeBeamTransform(
+      kVerticalAngleX, kVerticalAngleY, lower_hinge, kLowerLinkHingeLocalZ);
   mesh_manager.TransformMesh(mesh_lower, lower_transform);
 
   const Eigen::MatrixXd& all_nodes = mesh_manager.GetAllNodes();
@@ -358,9 +361,9 @@ int main(int argc, char** argv) {
   gpu_t10_data.CalcMassMatrix();
 
   const std::vector<double> lumped_mass = ComputeLumpedMass(gpu_t10_data);
-  const double upper_mass               = ComputeInstanceMass(lumped_mass, inst_upper);
-  const double lower_mass               = ComputeInstanceMass(lumped_mass, inst_lower);
-  Eigen::VectorXd gravity_f_ext         = Eigen::VectorXd::Zero(n_nodes * 3);
+  const double upper_mass       = ComputeInstanceMass(lumped_mass, inst_upper);
+  const double lower_mass       = ComputeInstanceMass(lumped_mass, inst_lower);
+  Eigen::VectorXd gravity_f_ext = Eigen::VectorXd::Zero(n_nodes * 3);
   AppendGravityForInstance(&gravity_f_ext, lumped_mass, inst_upper, kGravity);
   AppendGravityForInstance(&gravity_f_ext, lumped_mass, inst_lower, kGravity);
   gpu_t10_data.SetExternalForce(gravity_f_ext);
@@ -397,7 +400,7 @@ int main(int argc, char** argv) {
   solver.SetFixedSparsityPattern(true);
 
   std::cout << "constraints: " << gpu_t10_data.get_n_constraint() << "\n";
-  constexpr int kRowsPerSphericalJoint = 3;
+  constexpr int kRowsPerSphericalJoint               = 3;
   const std::vector<int> upper_joint_constraint_rows = {0, 1, 2};
   const std::vector<int> lower_joint_constraint_rows = {3, 4, 5};
   if (gpu_t10_data.get_n_constraint() != 2 * kRowsPerSphericalJoint) {
@@ -426,13 +429,11 @@ int main(int argc, char** argv) {
       constraint_j_offsets, constraint_j_columns, constraint_j_values);
 
   const Eigen::Vector3d lower_upper_initial =
-      engineering_joint::EvaluateCurrentPointPosition(lower_hinge_on_upper,
-                                                      all_elems, x_curr, y_curr,
-                                                      z_curr);
+      engineering_joint::EvaluateCurrentPointPosition(
+          lower_hinge_on_upper, all_elems, x_curr, y_curr, z_curr);
   const Eigen::Vector3d lower_lower_initial =
-      engineering_joint::EvaluateCurrentPointPosition(lower_hinge_on_lower,
-                                                      all_elems, x_curr, y_curr,
-                                                      z_curr);
+      engineering_joint::EvaluateCurrentPointPosition(
+          lower_hinge_on_lower, all_elems, x_curr, y_curr, z_curr);
   const Eigen::Vector3d pull_region_centroid_initial =
       ComputeNodeCentroid(lower_tip_region_nodes, x_curr, y_curr, z_curr);
 
@@ -456,9 +457,8 @@ int main(int argc, char** argv) {
   int output_frame = 1;
   for (int step = 1; step <= max_steps; ++step) {
     Eigen::VectorXd step_f_ext = gravity_f_ext;
-    const double load_scale =
-        std::min(1.0, static_cast<double>(step) /
-                          static_cast<double>(kPullRampSteps));
+    const double load_scale    = std::min(
+        1.0, static_cast<double>(step) / static_cast<double>(kPullRampSteps));
     AddDistributedForce(&step_f_ext, lower_tip_region_nodes,
                         Eigen::Vector3d(0.0, 0.0, -pull_force_z * load_scale));
     gpu_t10_data.SetExternalForce(step_f_ext);
@@ -481,23 +481,19 @@ int main(int argc, char** argv) {
                    cudaMemcpyDeviceToHost));
 
     const Eigen::Vector3d lower_upper_current =
-        engineering_joint::EvaluateCurrentPointPosition(lower_hinge_on_upper,
-                                                        all_elems, x_curr,
-                                                        y_curr, z_curr);
+        engineering_joint::EvaluateCurrentPointPosition(
+            lower_hinge_on_upper, all_elems, x_curr, y_curr, z_curr);
     const Eigen::Vector3d lower_lower_current =
-        engineering_joint::EvaluateCurrentPointPosition(lower_hinge_on_lower,
-                                                        all_elems, x_curr,
-                                                        y_curr, z_curr);
+        engineering_joint::EvaluateCurrentPointPosition(
+            lower_hinge_on_lower, all_elems, x_curr, y_curr, z_curr);
     const Eigen::Vector3d lower_tip_current =
-        engineering_joint::EvaluateCurrentPointPosition(lower_tip_on_lower,
-                                                        all_elems, x_curr,
-                                                        y_curr, z_curr);
+        engineering_joint::EvaluateCurrentPointPosition(
+            lower_tip_on_lower, all_elems, x_curr, y_curr, z_curr);
     const Eigen::Vector3d upper_dir_current = lower_upper_current - top_hinge;
     const Eigen::Vector3d lower_dir_current =
         lower_tip_current - lower_lower_current;
-    const Eigen::Vector3d lower_hinge_current =
-        engineering_joint::AveragePoint(lower_upper_current,
-                                        lower_lower_current);
+    const Eigen::Vector3d lower_hinge_current = engineering_joint::AveragePoint(
+        lower_upper_current, lower_lower_current);
     const Eigen::Vector3d pull_region_centroid_current =
         ComputeNodeCentroid(lower_tip_region_nodes, x_curr, y_curr, z_curr);
     const double lower_hinge_mismatch_norm =
@@ -511,9 +507,8 @@ int main(int argc, char** argv) {
     }
 
     if (write_csv) {
-      const double potential_energy =
-          engineering_joint::ComputePotentialEnergy(lumped_mass, z_curr,
-                                                    kGravity);
+      const double potential_energy = engineering_joint::ComputePotentialEnergy(
+          lumped_mass, z_curr, kGravity);
       const double elastic_strain_energy =
           engineering_joint::ComputeElasticStrainEnergy(gpu_t10_data,
                                                         kLinkMaterial);
@@ -558,15 +553,14 @@ int main(int argc, char** argv) {
                                                   kRowsPerSphericalJoint),
           engineering_joint::ComputeIndexedInfinityNorm(
               constraint_values, upper_joint_constraint_rows),
-          engineering_joint::ComputeSegmentL2Norm(
-              constraint_values, kRowsPerSphericalJoint,
-              kRowsPerSphericalJoint),
+          engineering_joint::ComputeSegmentL2Norm(constraint_values,
+                                                  kRowsPerSphericalJoint,
+                                                  kRowsPerSphericalJoint),
           engineering_joint::ComputeIndexedInfinityNorm(
               constraint_values, lower_joint_constraint_rows),
-          total_energy, kinetic_energy, potential_energy,
-          elastic_strain_energy, upper_joint_reaction, lower_joint_reaction,
-          lower_hinge_mismatch_norm, upper_dir_current, lower_dir_current,
-          lower_tip_current);
+          total_energy, kinetic_energy, potential_energy, elastic_strain_energy,
+          upper_joint_reaction, lower_joint_reaction, lower_hinge_mismatch_norm,
+          upper_dir_current, lower_dir_current, lower_tip_current);
     }
 
     if (step % export_interval == 0) {
