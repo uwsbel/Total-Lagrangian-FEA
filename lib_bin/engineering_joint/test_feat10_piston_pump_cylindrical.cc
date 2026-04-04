@@ -31,20 +31,22 @@
 #include "../../lib_utils/cpu_utils.h"
 #include "../../lib_utils/mesh_manager.h"
 #include "../../lib_utils/quadrature_utils.h"
+#include "double_pendulum_csv_utils.h"
 
 namespace {
 
-constexpr double kDt             = 1e-4;
-constexpr int kNumStepsDefault   = 1200;
-constexpr int kExportIntervalDef = 20;
-constexpr int kForceReleaseSteps = 200;
+constexpr double kDt             = 5e-4;
+constexpr int kNumStepsDefault   = 400;
+constexpr int kExportIntervalDef = 10;
+constexpr int kForceReleaseSteps = 0;
 
 constexpr double kCupOuterAnnulusRadiusFraction = 0.70;
 constexpr double kBottomFaceTolerance           = 1e-8;
 constexpr double kJointOffset                   = 0.002;
 
-constexpr double kHandleAxialForce  = 30.0;
-constexpr double kHandleCoupleForce = 10.0;
+constexpr double kHandleAxialForce        = 20.0;
+constexpr double kHandleCoupleForce       = 5.0;
+constexpr double kHandleBendForceYDefault = 0.0;
 
 const SolidMaterialProperties kCupMaterial =
     SolidMaterialProperties::SVK(2.0e7,   // E
@@ -55,7 +57,7 @@ const SolidMaterialProperties kCupMaterial =
     );
 
 const SolidMaterialProperties kPistonMaterial =
-    SolidMaterialProperties::SVK(5.0e7,   // E
+    SolidMaterialProperties::SVK(2.0e8,   // E
                                  0.32,    // nu
                                  1750.0,  // rho0
                                  1.5e3,   // eta_damp
@@ -350,16 +352,48 @@ Eigen::Vector3d ComputeCurrentNodeCentroid(const std::vector<int>& nodes,
 int main(int argc, char** argv) {
   int max_steps       = kNumStepsDefault;
   int export_interval = kExportIntervalDef;
-  if (argc > 1) {
-    const int parsed_steps = std::atoi(argv[1]);
-    if (parsed_steps > 0) {
-      max_steps = parsed_steps;
+  double bend_force_y = kHandleBendForceYDefault;
+  bool write_csv      = false;
+  std::string csv_path =
+      "output/engineering_joint/piston_pump_cylindrical_metrics.csv";
+  int positional_arg_index = 0;
+  for (int argi = 1; argi < argc; ++argi) {
+    const std::string arg(argv[argi]);
+    if (arg.rfind("--", 0) != 0) {
+      const int parsed_value = std::atoi(arg.c_str());
+      if (parsed_value > 0) {
+        if (positional_arg_index == 0) {
+          max_steps = parsed_value;
+        } else if (positional_arg_index == 1) {
+          export_interval = parsed_value;
+        } else {
+          std::cerr << "Unexpected positional argument: " << arg << std::endl;
+          return 1;
+        }
+        ++positional_arg_index;
+        continue;
+      }
+      std::cerr << "Invalid positional argument: " << arg << std::endl;
+      return 1;
     }
-  }
-  if (argc > 2) {
-    const int parsed_interval = std::atoi(argv[2]);
-    if (parsed_interval > 0) {
-      export_interval = parsed_interval;
+    if (arg.rfind("--bend_force_y=", 0) == 0) {
+      try {
+        bend_force_y =
+            std::stod(arg.substr(std::string("--bend_force_y=").size()));
+      } catch (const std::exception&) {
+        std::cerr << "Invalid value for --bend_force_y: " << arg << std::endl;
+        return 1;
+      }
+    } else if (arg == "--csv") {
+      write_csv = true;
+    } else if (arg.rfind("--csv=", 0) == 0) {
+      write_csv = true;
+      csv_path  = arg.substr(std::string("--csv=").size());
+    } else {
+      std::cerr << "Unknown option: " << arg << "\n"
+                << "Expected --bend_force_y=<force>, --csv, or --csv=<path>"
+                << std::endl;
+      return 1;
     }
   }
 
@@ -367,7 +401,7 @@ int main(int argc, char** argv) {
   std::cout << "FEAT10 Piston Pump Cylindrical-Joint Demo\n";
   std::cout << "========================================\n";
   std::cout << "steps=" << max_steps << " export_interval=" << export_interval
-            << "\n";
+            << " bend_force_y=" << bend_force_y << "\n";
 
   std::filesystem::create_directories("output/engineering_joint");
 
@@ -418,17 +452,17 @@ int main(int argc, char** argv) {
   // Choose the piston attachment point on the shaft while it is still inside
   // the cup's guided overlap region, so the cylindrical guide represents the
   // actual pump interface rather than a point above the cup.
-  const double piston_joint_z =
-      std::clamp(cup_bounds.max.z() - 0.05, overlap_z_min, overlap_z_max);
-  const Eigen::Vector3d piston_axis_point(0.0, 0.0, piston_joint_z);
+  const double overlap_span = overlap_z_max - overlap_z_min;
+  const double lower_joint_z = overlap_z_min + 0.25 * overlap_span;
+  const double upper_joint_z = overlap_z_min + 0.75 * overlap_span;
+  const Eigen::Vector3d lower_piston_axis_point(0.0, 0.0, lower_joint_z);
+  const Eigen::Vector3d upper_piston_axis_point(0.0, 0.0, upper_joint_z);
+  const Eigen::Vector3d cup_axis_probe_point =
+      cup_axis_anchor + kJointOffset * Eigen::Vector3d::UnitZ();
 
   std::vector<int> fixed_cup_nodes = SelectBottomCupOuterAnnulusNodes(
       all_nodes, inst_cup, cup_bounds, kCupOuterAnnulusRadiusFraction,
       kBottomFaceTolerance);
-  fixed_cup_nodes.erase(
-      std::remove(fixed_cup_nodes.begin(), fixed_cup_nodes.end(),
-                  cup_axis_anchor_node),
-      fixed_cup_nodes.end());
   const Eigen::Vector3d handle_bar_center =
       ComputeTopHandleBarCenter(all_nodes, inst_piston, piston_bounds);
   const std::vector<int> center_handle_nodes = SelectCenteredHandleNodes(
@@ -454,7 +488,8 @@ int main(int argc, char** argv) {
             << piston_bounds.max.z() << "]\n";
   std::cout << "cup outer annulus r cut = " << cup_outer_annulus_r_cut << "\n";
   std::cout << "joint overlap z = [" << overlap_z_min << ", " << overlap_z_max
-            << "] piston_joint_z=" << piston_joint_z << "\n";
+            << "] lower_joint_z=" << lower_joint_z
+            << " upper_joint_z=" << upper_joint_z << "\n";
   std::cout << "fixed cup nodes: " << fixed_cup_nodes.size() << "\n";
   std::cout << "center handle nodes: " << center_handle_nodes.size() << "\n";
   std::cout << "left handle nodes:   " << left_handle_nodes.size() << "\n";
@@ -471,6 +506,7 @@ int main(int argc, char** argv) {
   std::cout << "handle center:  [" << handle_bar_center.transpose() << "]\n";
   std::cout << "axial handle force = " << kHandleAxialForce
             << " couple side force = " << kHandleCoupleForce
+            << " additive bend force y = " << bend_force_y
             << " release_last_steps = " << kForceReleaseSteps << "\n";
 
   GPU_FEAT10_Data gpu_t10_data(n_elems, n_nodes);
@@ -491,14 +527,26 @@ int main(int argc, char** argv) {
   gpu_t10_data.CalcMassMatrix();
 
   FEAT10ConstraintManager constraint_manager(&gpu_t10_data);
-  const auto piston_axis_reference = constraint_manager.LocateReferencePoint(
-      piston_axis_point, MakeElementRange(inst_piston));
+  const auto cup_axis_reference = constraint_manager.LocateReferencePoint(
+      cup_axis_anchor, MakeElementRange(inst_cup));
+  const auto cup_axis_probe_reference = constraint_manager.LocateReferencePoint(
+      cup_axis_probe_point, MakeElementRange(inst_cup));
+  const auto lower_piston_axis_reference =
+      constraint_manager.LocateReferencePoint(lower_piston_axis_point,
+                                              MakeElementRange(inst_piston));
+  const auto upper_piston_axis_reference =
+      constraint_manager.LocateReferencePoint(upper_piston_axis_point,
+                                              MakeElementRange(inst_piston));
   for (int node : fixed_cup_nodes) {
     constraint_manager.AddNodeToWorldCD(node);
   }
   constraint_manager.AddCylindricalJoint(
       MakeElementRange(inst_cup), MakeElementRange(inst_piston),
-      cup_axis_anchor, piston_axis_point, Eigen::Vector3d::UnitZ(),
+      cup_axis_anchor, lower_piston_axis_point, Eigen::Vector3d::UnitZ(),
+      kJointOffset, 1.0, 1.0);
+  constraint_manager.AddCylindricalJoint(
+      MakeElementRange(inst_cup), MakeElementRange(inst_piston),
+      cup_axis_anchor, upper_piston_axis_point, Eigen::Vector3d::UnitZ(),
       kJointOffset, 1.0, 1.0);
   constraint_manager.Finalize();
 
@@ -508,7 +556,7 @@ int main(int argc, char** argv) {
   gpu_t10_data.CalcP();
   gpu_t10_data.CalcInternalForce();
 
-  SyncedNewtonParams params = {1e-4, 1e-4, 1e-7, 1e12, 8, 12, kDt, false};
+  SyncedNewtonParams params = {1e-6, 1e-6, 1e-10, 1e12, 8, 12, kDt, false};
   SyncedNewtonSolver solver(&gpu_t10_data, gpu_t10_data.get_n_constraint());
   solver.Setup();
   solver.SetParameters(&params);
@@ -516,13 +564,70 @@ int main(int argc, char** argv) {
   solver.SetFixedSparsityPattern(true);
 
   std::cout << "constraints: " << gpu_t10_data.get_n_constraint() << "\n";
+  constexpr int kRowsPerFixedNode                = 3;
+  constexpr int kRowsPerCylindricalJoint         = 4;
+  constexpr int kParallelRowsPerCylindricalJoint = 2;
+  constexpr int kNumCylindricalJoints            = 2;
+  const int cylindrical_joint_row_begin =
+      static_cast<int>(fixed_cup_nodes.size()) * kRowsPerFixedNode;
+  const int cylindrical_joint_row_end =
+      cylindrical_joint_row_begin +
+      kNumCylindricalJoints * kRowsPerCylindricalJoint;
+  std::vector<int> cylindrical_constraint_rows;
+  std::vector<int> parallel_constraint_rows;
+  std::vector<int> collocation_constraint_rows;
+  for (int joint_idx = 0; joint_idx < kNumCylindricalJoints; ++joint_idx) {
+    const int joint_row_begin =
+        cylindrical_joint_row_begin + joint_idx * kRowsPerCylindricalJoint;
+    for (int row = 0; row < kRowsPerCylindricalJoint; ++row) {
+      cylindrical_constraint_rows.push_back(joint_row_begin + row);
+    }
+    for (int row = 0; row < kParallelRowsPerCylindricalJoint; ++row) {
+      parallel_constraint_rows.push_back(joint_row_begin + row);
+    }
+    for (int row = kParallelRowsPerCylindricalJoint;
+         row < kRowsPerCylindricalJoint; ++row) {
+      collocation_constraint_rows.push_back(joint_row_begin + row);
+    }
+  }
   std::cout << "writing initial frame to " << MakeOutputPath(0) << "\n";
   gpu_t10_data.WriteOutputVTU(MakeOutputPath(0));
 
+  engineering_joint::PistonPumpCsvWriter csv_writer;
+  Eigen::VectorXd constraint_values;
+  Eigen::VectorXd lambda_values =
+      Eigen::VectorXd::Zero(gpu_t10_data.get_n_constraint());
+  Eigen::VectorXd augmented_dual_values =
+      Eigen::VectorXd::Zero(gpu_t10_data.get_n_constraint());
+  std::vector<int> constraint_j_offsets;
+  std::vector<int> constraint_j_columns;
+  std::vector<double> constraint_j_values;
   Eigen::VectorXd x_curr, y_curr, z_curr;
   gpu_t10_data.RetrievePositionToCPU(x_curr, y_curr, z_curr);
-  const Eigen::Vector3d piston_axis_initial = EvaluateCurrentPointPosition(
-      piston_axis_reference, all_elems, x_curr, y_curr, z_curr);
+  gpu_t10_data.CalcConstraintData();
+  gpu_t10_data.BuildConstraintJacobianCSR();
+  gpu_t10_data.RetrieveConstraintDataToCPU(constraint_values);
+  gpu_t10_data.RetrieveConstraintJacobianCSRToCPU(
+      constraint_j_offsets, constraint_j_columns, constraint_j_values);
+  const Eigen::Vector3d cup_axis_initial_base = EvaluateCurrentPointPosition(
+      cup_axis_reference, all_elems, x_curr, y_curr, z_curr);
+  const Eigen::Vector3d cup_axis_initial_probe = EvaluateCurrentPointPosition(
+      cup_axis_probe_reference, all_elems, x_curr, y_curr, z_curr);
+  Eigen::Vector3d cup_axis_initial_direction =
+      engineering_joint::SafeNormalized(cup_axis_initial_probe -
+                                        cup_axis_initial_base);
+  if (cup_axis_initial_direction.squaredNorm() < 1e-24) {
+    cup_axis_initial_direction = Eigen::Vector3d::UnitZ();
+  }
+  const Eigen::Vector3d lower_piston_axis_initial =
+      EvaluateCurrentPointPosition(lower_piston_axis_reference, all_elems,
+                                   x_curr, y_curr, z_curr);
+  const Eigen::Vector3d upper_piston_axis_initial =
+      EvaluateCurrentPointPosition(upper_piston_axis_reference, all_elems,
+                                   x_curr, y_curr, z_curr);
+  const Eigen::Vector3d piston_axis_initial =
+      engineering_joint::AveragePoint(lower_piston_axis_initial,
+                                      upper_piston_axis_initial);
   const Eigen::Vector3d handle_tip_initial(x_curr(handle_tip_node),
                                            y_curr(handle_tip_node),
                                            z_curr(handle_tip_node));
@@ -538,46 +643,48 @@ int main(int argc, char** argv) {
     initial_bar_direction.normalize();
   }
 
-  auto update_handle_forces = [&](const Eigen::VectorXd& x_pos,
-                                  const Eigen::VectorXd& y_pos,
-                                  const Eigen::VectorXd& z_pos,
-                                  bool apply_forces) {
-    Eigen::VectorXd step_f_ext = Eigen::VectorXd::Zero(n_nodes * 3);
-    const Eigen::Vector3d left_center =
-        ComputeCurrentNodeCentroid(left_handle_nodes, x_pos, y_pos, z_pos);
-    const Eigen::Vector3d right_center =
-        ComputeCurrentNodeCentroid(right_handle_nodes, x_pos, y_pos, z_pos);
+  auto update_handle_forces =
+      [&](const Eigen::VectorXd& x_pos, const Eigen::VectorXd& y_pos,
+          const Eigen::VectorXd& z_pos, bool apply_forces) {
+        Eigen::VectorXd step_f_ext = Eigen::VectorXd::Zero(n_nodes * 3);
+        const Eigen::Vector3d left_center =
+            ComputeCurrentNodeCentroid(left_handle_nodes, x_pos, y_pos, z_pos);
+        const Eigen::Vector3d right_center =
+            ComputeCurrentNodeCentroid(right_handle_nodes, x_pos, y_pos, z_pos);
 
-    Eigen::Vector3d bar_direction = right_center - left_center;
-    if (bar_direction.norm() < 1e-12) {
-      bar_direction = initial_bar_direction;
-    } else {
-      bar_direction.normalize();
-    }
+        Eigen::Vector3d bar_direction = right_center - left_center;
+        if (bar_direction.norm() < 1e-12) {
+          bar_direction = initial_bar_direction;
+        } else {
+          bar_direction.normalize();
+        }
 
-    Eigen::Vector3d couple_direction =
-        Eigen::Vector3d::UnitZ().cross(bar_direction);
-    if (couple_direction.norm() < 1e-12) {
-      couple_direction = Eigen::Vector3d::UnitY();
-    } else {
-      couple_direction.normalize();
-    }
+        Eigen::Vector3d couple_direction =
+            Eigen::Vector3d::UnitZ().cross(bar_direction);
+        if (couple_direction.norm() < 1e-12) {
+          couple_direction = Eigen::Vector3d::UnitY();
+        } else {
+          couple_direction.normalize();
+        }
 
-    if (apply_forces) {
-      const Eigen::Vector3d left_force =
-          0.5 * kHandleAxialForce * Eigen::Vector3d::UnitZ() -
-          kHandleCoupleForce * couple_direction;
-      const Eigen::Vector3d right_force =
-          0.5 * kHandleAxialForce * Eigen::Vector3d::UnitZ() +
-          kHandleCoupleForce * couple_direction;
+        if (apply_forces) {
+          const Eigen::Vector3d left_force =
+              0.5 * kHandleAxialForce * Eigen::Vector3d::UnitZ() -
+              kHandleCoupleForce * couple_direction;
+          const Eigen::Vector3d right_force =
+              0.5 * kHandleAxialForce * Eigen::Vector3d::UnitZ() +
+              kHandleCoupleForce * couple_direction;
+          const Eigen::Vector3d bend_force =
+              bend_force_y * Eigen::Vector3d::UnitY();
 
-      AddDistributedForce(&step_f_ext, left_handle_nodes, left_force);
-      AddDistributedForce(&step_f_ext, right_handle_nodes, right_force);
-    }
-    gpu_t10_data.SetExternalForce(step_f_ext);
+          AddDistributedForce(&step_f_ext, left_handle_nodes, left_force);
+          AddDistributedForce(&step_f_ext, right_handle_nodes, right_force);
+          AddDistributedForce(&step_f_ext, center_handle_nodes, bend_force);
+        }
+        gpu_t10_data.SetExternalForce(step_f_ext);
 
-    return std::make_pair(bar_direction, couple_direction);
-  };
+        return std::make_pair(bar_direction, couple_direction);
+      };
 
   const auto initial_load_dirs =
       update_handle_forces(x_curr, y_curr, z_curr, true);
@@ -589,18 +696,54 @@ int main(int argc, char** argv) {
             << initial_load_dirs.first.transpose() << "]\n";
   std::cout << "initial couple dir:       ["
             << initial_load_dirs.second.transpose() << "]\n";
+  if (write_csv) {
+    const std::filesystem::path csv_parent =
+        std::filesystem::path(csv_path).parent_path();
+    if (!csv_parent.empty()) {
+      std::filesystem::create_directories(csv_parent);
+    }
+    csv_writer.Open(csv_path);
+    std::cout << "writing csv metrics to " << csv_path << "\n";
+  }
 
   int output_frame = 1;
   for (int step = 1; step <= max_steps; ++step) {
-    const bool apply_forces =
-        (max_steps <= kForceReleaseSteps) || (step <= max_steps - kForceReleaseSteps);
+    const bool apply_forces = (max_steps <= kForceReleaseSteps) ||
+                              (step <= max_steps - kForceReleaseSteps);
     const auto load_dirs =
         update_handle_forces(x_curr, y_curr, z_curr, apply_forces);
     solver.Solve();
 
     gpu_t10_data.RetrievePositionToCPU(x_curr, y_curr, z_curr);
-    const Eigen::Vector3d piston_axis_current = EvaluateCurrentPointPosition(
-        piston_axis_reference, all_elems, x_curr, y_curr, z_curr);
+    gpu_t10_data.CalcConstraintData();
+    gpu_t10_data.BuildConstraintJacobianCSR();
+    gpu_t10_data.RetrieveConstraintDataToCPU(constraint_values);
+    gpu_t10_data.RetrieveConstraintJacobianCSRToCPU(
+        constraint_j_offsets, constraint_j_columns, constraint_j_values);
+    HANDLE_ERROR(
+        cudaMemcpy(lambda_values.data(), solver.GetLambdaGuessDevicePtr(),
+                   static_cast<size_t>(lambda_values.size()) * sizeof(double),
+                   cudaMemcpyDeviceToHost));
+    augmented_dual_values = lambda_values + params.rho * constraint_values;
+    const Eigen::Vector3d lower_piston_axis_current =
+        EvaluateCurrentPointPosition(lower_piston_axis_reference, all_elems,
+                                     x_curr, y_curr, z_curr);
+    const Eigen::Vector3d upper_piston_axis_current =
+        EvaluateCurrentPointPosition(upper_piston_axis_reference, all_elems,
+                                     x_curr, y_curr, z_curr);
+    const Eigen::Vector3d piston_axis_current =
+        engineering_joint::AveragePoint(lower_piston_axis_current,
+                                        upper_piston_axis_current);
+    const Eigen::Vector3d cup_axis_current_base = EvaluateCurrentPointPosition(
+        cup_axis_reference, all_elems, x_curr, y_curr, z_curr);
+    const Eigen::Vector3d cup_axis_current_probe = EvaluateCurrentPointPosition(
+        cup_axis_probe_reference, all_elems, x_curr, y_curr, z_curr);
+    Eigen::Vector3d cup_axis_current_direction =
+        engineering_joint::SafeNormalized(cup_axis_current_probe -
+                                          cup_axis_current_base);
+    if (cup_axis_current_direction.squaredNorm() < 1e-24) {
+      cup_axis_current_direction = cup_axis_initial_direction;
+    }
     const Eigen::Vector3d handle_tip_current(x_curr(handle_tip_node),
                                              y_curr(handle_tip_node),
                                              z_curr(handle_tip_node));
@@ -609,12 +752,15 @@ int main(int argc, char** argv) {
     const Eigen::Vector3d right_handle_current =
         ComputeCurrentNodeCentroid(right_handle_nodes, x_curr, y_curr, z_curr);
 
+    const double piston_axis_relative_radial_drift =
+        engineering_joint::ComputePointLineDistance(
+            piston_axis_current, cup_axis_current_base,
+            cup_axis_current_direction);
     std::cout << "step " << step << " piston axis: ["
               << piston_axis_current.transpose() << "]"
               << " axial_disp="
               << (piston_axis_current.z() - piston_axis_initial.z())
-              << " radial_drift="
-              << std::hypot(piston_axis_current.x(), piston_axis_current.y())
+              << " relative_radial_drift=" << piston_axis_relative_radial_drift
               << "\n";
     std::cout << "step " << step << " handle tip:  ["
               << handle_tip_current.transpose() << "]"
@@ -623,8 +769,39 @@ int main(int argc, char** argv) {
     std::cout << "step " << step << " handle bar:  ["
               << (right_handle_current - left_handle_current).transpose() << "]"
               << " couple_dir=[" << load_dirs.second.transpose() << "]"
-              << " forces_active=" << (apply_forces ? "yes" : "no")
-              << "\n";
+              << " forces_active=" << (apply_forces ? "yes" : "no") << "\n";
+
+    if (write_csv) {
+      const Eigen::VectorXd joint_reaction =
+          engineering_joint::ComputeGeneralizedReactionFromCSR(
+              n_nodes * 3, constraint_j_offsets, constraint_j_columns,
+              constraint_j_values, augmented_dual_values,
+              cylindrical_joint_row_begin, cylindrical_joint_row_end);
+      const engineering_joint::HingeWrench piston_joint_reaction =
+          engineering_joint::ScaleHingeWrench(
+              engineering_joint::EstimateHingeWrench(
+                  joint_reaction, inst_piston.node_offset,
+                  inst_piston.num_nodes, x_curr, y_curr, z_curr,
+                  piston_axis_current),
+              kDt);
+      csv_writer.WriteRow(step, step * kDt,
+                          engineering_joint::ComputeIndexedL2Norm(
+                              constraint_values, cylindrical_constraint_rows),
+                          engineering_joint::ComputeIndexedInfinityNorm(
+                              constraint_values, cylindrical_constraint_rows),
+                          engineering_joint::ComputeIndexedL2Norm(
+                              constraint_values, parallel_constraint_rows),
+                          engineering_joint::ComputeIndexedInfinityNorm(
+                              constraint_values, parallel_constraint_rows),
+                          engineering_joint::ComputeIndexedL2Norm(
+                              constraint_values, collocation_constraint_rows),
+                          engineering_joint::ComputeIndexedInfinityNorm(
+                              constraint_values, collocation_constraint_rows),
+                          piston_joint_reaction, piston_axis_current,
+                          piston_axis_current.z() - piston_axis_initial.z(),
+                          piston_axis_relative_radial_drift,
+                          handle_tip_current);
+    }
 
     if (step % export_interval == 0) {
       gpu_t10_data.WriteOutputVTU(MakeOutputPath(output_frame));

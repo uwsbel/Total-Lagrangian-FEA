@@ -37,6 +37,20 @@ struct SyncedNewtonParams {
   bool enable_line_search = false;
 };
 
+struct SyncedNewtonSolveStats {
+  int outer_iterations             = 0;
+  int inner_iterations             = 0;
+  int line_search_calls            = 0;
+  int line_search_backtracks_total = 0;
+  int line_search_failures         = 0;
+  double line_search_alpha_min     = 0.0;
+  double line_search_alpha_sum     = 0.0;
+  double final_residual_norm       = 0.0;
+  double final_constraint_norm     = 0.0;
+  double solve_ms                  = 0.0;
+  bool converged                   = false;
+};
+
 class SyncedNewtonSolver : public SolverBase {
  public:
   SyncedNewtonSolver(ElementBase *data, int n_constraints)
@@ -393,6 +407,10 @@ class SyncedNewtonSolver : public SolverBase {
     fixed_sparsity_pattern_ = fixed;
   }
 
+  const SyncedNewtonSolveStats& GetLastSolveStats() const {
+    return last_solve_stats_;
+  }
+
   double compute_l2_norm_cublas(double *d_vec, int n_dofs);
   void AnalyzeHessianSparsity();
 
@@ -445,4 +463,5 @@ class SyncedNewtonSolver : public SolverBase {
   bool analysis_done_;  // Internal state: tracks if analysis has been performed
   bool factorization_done_;  // Internal state: tracks if factorization has been
                              // performed (needed for refactorization)
+  SyncedNewtonSolveStats last_solve_stats_;
 };

@@ -16,13 +16,17 @@
 
 #include <cuda_runtime.h>
 
+#include <algorithm>
 #include <Eigen/Dense>
+#include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <limits>
+#include <memory>
 #include <sstream>
 #include <string>
 #include <unordered_map>
@@ -123,10 +127,24 @@ int main(int argc, char** argv) {
   std::cout << "========================================\n";
 
   bool split_items_into_patches = false;
+  bool write_csv               = false;
+  std::string csv_path         = "output/multiitem_drop/diagnostics.csv";
   for (int ai = 1; ai < argc; ++ai) {
     const std::string arg(argv[ai]);
     if (arg == "--split_patches") {
       split_items_into_patches = true;
+    } else if (arg == "--csv") {
+      write_csv = true;
+      if (ai + 1 < argc) {
+        const std::string next_arg(argv[ai + 1]);
+        if (next_arg.rfind("--", 0) != 0) {
+          csv_path = next_arg;
+          ++ai;
+        }
+      }
+    } else if (arg.rfind("--csv=", 0) == 0) {
+      write_csv = true;
+      csv_path  = arg.substr(6);
     }
   }
 
@@ -135,8 +153,8 @@ int main(int argc, char** argv) {
   // -------------------------------------------------------------------------
   constexpr double gravity = -9.81;
   constexpr double dt      = 1e-4;
-  constexpr int steps      = 10000;
-  constexpr int vtu_every  = 50;
+  constexpr int steps      = 100000;
+  constexpr int vtu_every  = 200;
 
   // Beam geometry (shell mid-surface); thickness used only by FE.
   constexpr double beam_x = 0.8;
@@ -183,6 +201,29 @@ int main(int argc, char** argv) {
   }
 
   std::filesystem::create_directories("output/multiitem_drop");
+
+  std::ofstream csv_file;
+  if (write_csv) {
+    const std::filesystem::path csv_fs_path(csv_path);
+    if (!csv_fs_path.parent_path().empty()) {
+      std::filesystem::create_directories(csv_fs_path.parent_path());
+    }
+    csv_file.open(csv_path);
+    if (!csv_file) {
+      std::cerr << "Failed to open CSV output path: " << csv_path << "\n";
+      return 1;
+    }
+    csv_file << std::setprecision(17);
+    csv_file
+        << "step,time,num_contacts,collision_step_ms,solver_wall_ms,"
+           "solver_block_ms_sum,solver_converged_blocks,"
+           "solver_total_outer_iterations,solver_total_inner_iterations,"
+           "solver_residual_norm_sum,solver_constraint_norm_sum,"
+           "solver_max_residual_norm,solver_max_constraint_norm,"
+           "line_search_calls,line_search_backtracks_total,"
+           "line_search_failures,line_search_alpha_min,line_search_alpha_avg\n";
+    std::cout << "CSV logging enabled: " << csv_path << "\n";
+  }
 
   // -------------------------------------------------------------------------
   // Load + place FEAT10 meshes (teapot + tire) using MeshManager
@@ -1227,11 +1268,17 @@ int main(int argc, char** argv) {
     coll_in.n_nodes     = n_coll_nodes;
     coll_in.d_vel_xyz   = nullptr;  // optional
     coll_in.dt          = dt;
+    const auto collision_t0 = std::chrono::steady_clock::now();
     collision_system->Step(coll_in, coll_params);
     // DEME may use internal streams; synchronize here so any runtime errors
     // surface at the correct time step.
     HANDLE_ERROR(cudaDeviceSynchronize());
     HANDLE_ERROR(cudaGetLastError());
+    const auto collision_t1 = std::chrono::steady_clock::now();
+    const double collision_step_ms =
+        std::chrono::duration_cast<std::chrono::duration<double, std::milli>>(
+            collision_t1 - collision_t0)
+            .count();
     const int num_contacts = collision_system->GetNumContacts();
 
     // 3) External forces = gravity + contact (add onto unified buffer).
@@ -1244,7 +1291,69 @@ int main(int argc, char** argv) {
     HANDLE_ERROR(cudaGetLastError());
 
     // 4) Co-simulation Newton step.
+    const auto solver_t0 = std::chrono::steady_clock::now();
     solver.Solve();
+    const auto solver_t1 = std::chrono::steady_clock::now();
+    const double solver_wall_ms =
+        std::chrono::duration_cast<std::chrono::duration<double, std::milli>>(
+            solver_t1 - solver_t0)
+            .count();
+
+    int solver_converged_blocks        = 0;
+    int solver_total_outer_iterations  = 0;
+    int solver_total_inner_iterations  = 0;
+    int line_search_calls              = 0;
+    int line_search_backtracks_total   = 0;
+    int line_search_failures           = 0;
+    double solver_block_ms_sum         = 0.0;
+    double solver_residual_norm_sum    = 0.0;
+    double solver_constraint_norm_sum  = 0.0;
+    double solver_max_residual_norm    = 0.0;
+    double solver_max_constraint_norm  = 0.0;
+    double line_search_alpha_sum       = 0.0;
+    double line_search_alpha_min       = 0.0;
+    for (int block_idx = 0; block_idx < solver.GetNumBlocks(); ++block_idx) {
+      const SyncedNewtonSolveStats& stats =
+          solver.GetBlockSolver(block_idx)->GetLastSolveStats();
+      solver_converged_blocks += stats.converged ? 1 : 0;
+      solver_total_outer_iterations += stats.outer_iterations;
+      solver_total_inner_iterations += stats.inner_iterations;
+      line_search_calls += stats.line_search_calls;
+      line_search_backtracks_total += stats.line_search_backtracks_total;
+      line_search_failures += stats.line_search_failures;
+      solver_block_ms_sum += stats.solve_ms;
+      solver_residual_norm_sum += stats.final_residual_norm;
+      solver_constraint_norm_sum += stats.final_constraint_norm;
+      solver_max_residual_norm =
+          std::max(solver_max_residual_norm, stats.final_residual_norm);
+      solver_max_constraint_norm =
+          std::max(solver_max_constraint_norm, stats.final_constraint_norm);
+      line_search_alpha_sum += stats.line_search_alpha_sum;
+      if (stats.line_search_alpha_min > 0.0 &&
+          (line_search_alpha_min == 0.0 ||
+           stats.line_search_alpha_min < line_search_alpha_min)) {
+        line_search_alpha_min = stats.line_search_alpha_min;
+      }
+    }
+    const double line_search_alpha_avg =
+        (line_search_calls > 0)
+            ? (line_search_alpha_sum / static_cast<double>(line_search_calls))
+            : 0.0;
+
+    if (write_csv) {
+      csv_file << step << "," << ((step + 1) * dt) << "," << num_contacts << ","
+               << collision_step_ms << "," << solver_wall_ms << ","
+               << solver_block_ms_sum << "," << solver_converged_blocks << ","
+               << solver_total_outer_iterations << ","
+               << solver_total_inner_iterations << ","
+               << solver_residual_norm_sum << ","
+               << solver_constraint_norm_sum << ","
+               << solver_max_residual_norm << ","
+               << solver_max_constraint_norm << "," << line_search_calls << ","
+               << line_search_backtracks_total << "," << line_search_failures
+               << "," << line_search_alpha_min << ","
+               << line_search_alpha_avg << "\n";
+    }
 
     // 5) Export.
     if (vtu_every > 0 && (step % vtu_every) == 0) {

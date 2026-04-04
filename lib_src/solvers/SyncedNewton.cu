@@ -1145,6 +1145,12 @@ void SyncedNewtonSolver::AnalyzeHessianSparsity() {
 }
 
 void SyncedNewtonSolver::OneStepNewtonCuDSS() {
+  SyncedNewtonSolveStats stats;
+  stats.final_residual_norm =
+      std::numeric_limits<double>::infinity();
+  stats.final_constraint_norm =
+      (n_constraints_ > 0) ? std::numeric_limits<double>::infinity() : 0.0;
+
   // CuDSS solve requires a pre-built sparse Hessian CSR pattern
   // (`d_csr_row_offsets_`, `d_csr_col_indices_`, and `h_nnz_`).
   // Lazily build the sparsity pattern on first use if needed.
@@ -1162,6 +1168,7 @@ void SyncedNewtonSolver::OneStepNewtonCuDSS() {
     n_qp_per_elem = Quadrature::N_TOTAL_QP_4_4_3;
   } else {
     std::cerr << "Unsupported element type!" << std::endl;
+    last_solve_stats_ = stats;
     return;
   }
 
@@ -1353,6 +1360,7 @@ void SyncedNewtonSolver::OneStepNewtonCuDSS() {
 
   auto armijo_line_search = [&](auto *typed_data, double norm_g) {
     const double phi0 = 0.5 * norm_g * norm_g;
+    stats.line_search_calls += 1;
 
     if (!copy_device_vector(d_v_guess_, d_dv_,
                             "cublasDcopy(line search backup)")) {
@@ -1361,6 +1369,7 @@ void SyncedNewtonSolver::OneStepNewtonCuDSS() {
 
     double alpha          = 1.0;
     double accepted_alpha = -1.0;
+    int backtracks        = 0;
 
     for (int ls_iter = 0; ls_iter < max_armijo_backtracks; ++ls_iter) {
       if (!copy_device_vector(d_dv_, d_v_guess_,
@@ -1386,9 +1395,12 @@ void SyncedNewtonSolver::OneStepNewtonCuDSS() {
       }
 
       alpha *= armijo_shrink;
+      backtracks += 1;
     }
 
     if (accepted_alpha < 0.0) {
+      stats.line_search_backtracks_total += backtracks;
+      stats.line_search_failures += 1;
       if (!copy_device_vector(d_dv_, d_v_guess_,
                               "cublasDcopy(line search reject restore)")) {
         return false;
@@ -1401,6 +1413,13 @@ void SyncedNewtonSolver::OneStepNewtonCuDSS() {
       std::cout << "    Armijo line search failed; keeping previous iterate"
                 << std::endl;
       return false;
+    }
+
+    stats.line_search_backtracks_total += backtracks;
+    stats.line_search_alpha_sum += accepted_alpha;
+    if (stats.line_search_alpha_min == 0.0 ||
+        accepted_alpha < stats.line_search_alpha_min) {
+      stats.line_search_alpha_min = accepted_alpha;
     }
 
     if (accepted_alpha <= 1.0) {
@@ -1416,6 +1435,7 @@ void SyncedNewtonSolver::OneStepNewtonCuDSS() {
         typed_data, d_newton_solver_);
 
     for (int outer_iter = 0; outer_iter < h_max_outer_; ++outer_iter) {
+      stats.outer_iterations += 1;
       std::cout << "Outer iter " << outer_iter << std::endl;
 
       double norm_g0          = -1.0;
@@ -1424,10 +1444,12 @@ void SyncedNewtonSolver::OneStepNewtonCuDSS() {
       bool line_search_failed = false;
 
       for (int newton_iter = 0; newton_iter < h_max_inner_; ++newton_iter) {
+        stats.inner_iterations += 1;
         std::cout << "  Newton iter " << newton_iter << std::endl;
 
         const double norm_g = evaluate_state(typed_data);
         last_norm_g         = norm_g;
+        stats.final_residual_norm = norm_g;
         std::cout << "    ||g|| = " << std::scientific << norm_g << std::endl;
 
         if (norm_g0 < 0.0) {
@@ -1537,6 +1559,7 @@ void SyncedNewtonSolver::OneStepNewtonCuDSS() {
       if (n_constraints_ > 0) {
         const double norm_constraint =
             compute_l2_norm_cublas(d_constraint_ptr_, n_constraints_);
+        stats.final_constraint_norm = norm_constraint;
         std::cout << "  Outer iter " << outer_iter
                   << ": ||c|| = " << std::scientific << norm_constraint
                   << std::endl;
@@ -1550,6 +1573,7 @@ void SyncedNewtonSolver::OneStepNewtonCuDSS() {
       }
 
       if (inner_converged && constraints_converged) {
+        stats.converged = true;
         break;
       }
     }
@@ -1578,6 +1602,8 @@ void SyncedNewtonSolver::OneStepNewtonCuDSS() {
   HANDLE_ERROR(cudaEventRecord(stop));
   HANDLE_ERROR(cudaDeviceSynchronize());
   HANDLE_ERROR(cudaEventElapsedTime(&milliseconds, start, stop));
+  stats.solve_ms = static_cast<double>(milliseconds);
+  last_solve_stats_ = stats;
 
   std::cout << "OneStepNewtonCuDSS kernel time: " << milliseconds << " ms"
             << std::endl;

@@ -115,6 +115,19 @@ inline double ComputeAngleBetween(const Eigen::Vector3d& a,
   return std::acos(ClampUnit(a.dot(b) / (a_norm * b_norm)));
 }
 
+inline double ComputePointLineDistance(const Eigen::Vector3d& point,
+                                       const Eigen::Vector3d& line_point,
+                                       const Eigen::Vector3d& line_direction) {
+  const Eigen::Vector3d line_dir_unit = SafeNormalized(line_direction);
+  if (line_dir_unit.squaredNorm() < 1e-24) {
+    return (point - line_point).norm();
+  }
+  const Eigen::Vector3d delta = point - line_point;
+  const Eigen::Vector3d radial =
+      delta - delta.dot(line_dir_unit) * line_dir_unit;
+  return radial.norm();
+}
+
 inline double ComputeSwingAngleFromNegativeZ(const Eigen::Vector3d& direction) {
   return ComputeAngleBetween(direction, -Eigen::Vector3d::UnitZ());
 }
@@ -556,6 +569,87 @@ class DoublePendulumSphericalCsvWriter {
         << lower_dir_unit.x() << ',' << lower_dir_unit.y() << ','
         << lower_dir_unit.z() << ',' << tip_position.x() << ','
         << tip_position.y() << ',' << tip_position.z() << '\n';
+    stream_ << row.str();
+    stream_.flush();
+  }
+
+ private:
+  std::ofstream stream_;
+};
+
+class PistonPumpCsvWriter {
+ public:
+  PistonPumpCsvWriter() = default;
+
+  explicit PistonPumpCsvWriter(const std::string& path) {
+    Open(path);
+  }
+
+  void Open(const std::string& path) {
+    if (stream_.is_open()) {
+      stream_.close();
+    }
+    stream_.clear();
+    std::filesystem::remove(path);
+    stream_.open(path, std::ios::out | std::ios::trunc);
+    stream_ << std::setprecision(16);
+    stream_ << "step,time"
+            << ",cylindrical_constraint_violation_l2"
+            << ",cylindrical_constraint_violation_linf"
+            << ",parallel_constraint_violation_l2"
+            << ",parallel_constraint_violation_linf"
+            << ",collocation_constraint_violation_l2"
+            << ",collocation_constraint_violation_linf"
+            << ",joint_reaction_force_l2"
+            << ",joint_reaction_force_x"
+            << ",joint_reaction_force_y"
+            << ",joint_reaction_force_z"
+            << ",piston_axis_x"
+            << ",piston_axis_y"
+            << ",piston_axis_z"
+            << ",piston_axial_disp"
+            << ",piston_axis_relative_radial_drift"
+            << ",handle_tip_x"
+            << ",handle_tip_y"
+            << ",handle_tip_z\n";
+  }
+
+  bool is_open() const {
+    return stream_.is_open();
+  }
+
+  void WriteRow(int step, double time,
+                double cylindrical_constraint_violation_l2,
+                double cylindrical_constraint_violation_linf,
+                double parallel_constraint_violation_l2,
+                double parallel_constraint_violation_linf,
+                double collocation_constraint_violation_l2,
+                double collocation_constraint_violation_linf,
+                const HingeWrench& joint_reaction,
+                const Eigen::Vector3d& piston_axis_position,
+                double piston_axial_disp,
+                double piston_axis_radial_drift,
+                const Eigen::Vector3d& handle_tip_position) {
+    std::ostringstream row;
+    row << std::setprecision(16) << step << ',' << time << ','
+        << cylindrical_constraint_violation_l2 << ','
+        << cylindrical_constraint_violation_linf << ','
+        << parallel_constraint_violation_l2 << ','
+        << parallel_constraint_violation_linf << ','
+        << collocation_constraint_violation_l2 << ','
+        << collocation_constraint_violation_linf << ','
+        << joint_reaction.force.norm() << ','
+        << joint_reaction.force.x() << ','
+        << joint_reaction.force.y() << ','
+        << joint_reaction.force.z() << ','
+        << piston_axis_position.x() << ','
+        << piston_axis_position.y() << ','
+        << piston_axis_position.z() << ','
+        << piston_axial_disp << ','
+        << piston_axis_radial_drift << ','
+        << handle_tip_position.x() << ','
+        << handle_tip_position.y() << ','
+        << handle_tip_position.z() << '\n';
     stream_ << row.str();
     stream_.flush();
   }

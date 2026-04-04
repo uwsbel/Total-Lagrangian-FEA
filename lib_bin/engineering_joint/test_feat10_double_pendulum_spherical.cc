@@ -32,8 +32,8 @@ namespace {
 
 constexpr double kPi             = 3.14159265358979323846;
 constexpr double kGravity        = -9.81;
-constexpr double kDt             = 2e-4;
-constexpr int kNumStepsDefault   = 40000;
+constexpr double kDt             = 5e-4;
+constexpr int kNumStepsDefault   = 5000;
 constexpr int kExportIntervalDef = 50;
 
 constexpr double kBeamLength           = 0.5;
@@ -45,13 +45,11 @@ constexpr double kLowerAngleDeg        = -25.0;
 constexpr double kUpperOutOfPlaneDeg   = 18.0;
 constexpr double kLowerOutOfPlaneDeg   = -27.0;
 
-const SolidMaterialProperties kLinkMaterial =
-    SolidMaterialProperties::SVK(5.0e6,   // E: pendulum links
-                                 0.30,    // nu
-                                 1200.0,  // rho0
-                                 1.0e3,   // eta_damp
-                                 1.0e3    // lambda_damp
-    );
+constexpr double kYoungsModulus     = 2.0e6;
+constexpr double kPoissonsRatio     = 0.30;
+constexpr double kDensity           = 1200.0;
+constexpr double kEtaDampDefault    = 1.0e4;
+constexpr double kLambdaDampDefault = 1.0e4;
 
 double DegToRad(double angle_deg) {
   return angle_deg * kPi / 180.0;
@@ -119,15 +117,32 @@ void AppendGravityForInstance(Eigen::VectorXd* h_f_ext,
   }
 }
 
-std::string MakeOutputPath(int frame) {
+std::string FormatDoubleForPath(double value) {
+  if (std::abs(value) < 1e-12) {
+    return "0";
+  }
   std::ostringstream oss;
-  oss << "output/engineering_joint/double_pendulum_spherical_" << std::setw(6)
+  oss << std::scientific << std::setprecision(1) << value;
+  return oss.str();
+}
+
+std::string MakeOutputDirectory(double eta_damp, double lambda_damp) {
+  std::ostringstream oss;
+  oss << "output/engineering_joint/double_pendulum_spherical_eta_"
+      << FormatDoubleForPath(eta_damp) << "_lambda_"
+      << FormatDoubleForPath(lambda_damp);
+  return oss.str();
+}
+
+std::string MakeOutputPath(const std::string& output_dir, int frame) {
+  std::ostringstream oss;
+  oss << output_dir << "/double_pendulum_spherical_" << std::setw(6)
       << std::setfill('0') << frame << ".vtu";
   return oss.str();
 }
 
-std::string MakeCsvOutputPath() {
-  return "output/engineering_joint/double_pendulum_spherical_metrics.csv";
+std::string MakeCsvOutputPath(const std::string& output_dir) {
+  return output_dir + "/double_pendulum_spherical_metrics.csv";
 }
 
 bool TryParsePositiveInt(const std::string& arg, int* value) {
@@ -143,6 +158,19 @@ bool TryParsePositiveInt(const std::string& arg, int* value) {
   return true;
 }
 
+bool TryParseNonnegativeDouble(const std::string& arg, double* value) {
+  char* end_ptr        = nullptr;
+  const double raw     = std::strtod(arg.c_str(), &end_ptr);
+  const bool is_finite = std::isfinite(raw);
+  const bool okay      = end_ptr != arg.c_str() && end_ptr != nullptr &&
+                         *end_ptr == '\0' && raw >= 0.0 && is_finite;
+  if (!okay) {
+    return false;
+  }
+  *value = raw;
+  return true;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -150,6 +178,8 @@ int main(int argc, char** argv) {
   int export_interval = kExportIntervalDef;
   bool write_csv      = false;
   std::string csv_path;
+  double eta_damp    = kEtaDampDefault;
+  double lambda_damp = kLambdaDampDefault;
 
   int positional_index = 0;
   for (int argi = 1; argi < argc; ++argi) {
@@ -165,6 +195,25 @@ int main(int argc, char** argv) {
       continue;
     }
 
+    if (arg.rfind("--eta_damp=", 0) == 0) {
+      const std::string value = arg.substr(std::string("--eta_damp=").size());
+      if (!TryParseNonnegativeDouble(value, &eta_damp)) {
+        std::cerr << "Invalid --eta_damp value: " << value << "\n";
+        return 1;
+      }
+      continue;
+    }
+
+    if (arg.rfind("--lambda_damp=", 0) == 0) {
+      const std::string value =
+          arg.substr(std::string("--lambda_damp=").size());
+      if (!TryParseNonnegativeDouble(value, &lambda_damp)) {
+        std::cerr << "Invalid --lambda_damp value: " << value << "\n";
+        return 1;
+      }
+      continue;
+    }
+
     int parsed_value = 0;
     if (TryParsePositiveInt(arg, &parsed_value)) {
       if (positional_index == 0) {
@@ -175,7 +224,7 @@ int main(int argc, char** argv) {
         std::cerr << "Unexpected extra positional argument: " << arg << "\n"
                   << "Usage: " << argv[0]
                   << " [max_steps] [export_interval] [--csv[=path]]"
-                  << std::endl;
+                  << " [--eta_damp=value] [--lambda_damp=value]" << std::endl;
         return 1;
       }
       ++positional_index;
@@ -184,12 +233,14 @@ int main(int argc, char** argv) {
 
     std::cerr << "Unknown argument: " << arg << "\n"
               << "Usage: " << argv[0]
-              << " [max_steps] [export_interval] [--csv[=path]]" << std::endl;
+              << " [max_steps] [export_interval] [--csv[=path]]"
+              << " [--eta_damp=value] [--lambda_damp=value]" << std::endl;
     return 1;
   }
 
+  const std::string output_dir = MakeOutputDirectory(eta_damp, lambda_damp);
   if (write_csv && csv_path.empty()) {
-    csv_path = MakeCsvOutputPath();
+    csv_path = MakeCsvOutputPath(output_dir);
   }
 
   std::cout << "========================================\n";
@@ -197,20 +248,25 @@ int main(int argc, char** argv) {
   std::cout << "========================================\n";
   std::cout << "steps=" << max_steps << " export_interval=" << export_interval
             << "\n";
+  std::cout << "eta_damp=" << eta_damp << " lambda_damp=" << lambda_damp
+            << "\n";
+  std::cout << "output_dir=" << output_dir << "\n";
   if (write_csv) {
     std::cout << "csv=" << csv_path << "\n";
   }
 
-  std::filesystem::create_directories("output/engineering_joint");
+  std::filesystem::create_directories(output_dir);
 
   const std::string mesh_prefix =
       "data/meshes/T10/double_pendulum/pendulum_beam.1";
+  const SolidMaterialProperties link_material = SolidMaterialProperties::SVK(
+      kYoungsModulus, kPoissonsRatio, kDensity, eta_damp, lambda_damp);
 
   ANCFCPUUtils::MeshManager mesh_manager;
   const int mesh_upper = mesh_manager.LoadMesh(
-      mesh_prefix + ".node", mesh_prefix + ".ele", "upper", kLinkMaterial);
+      mesh_prefix + ".node", mesh_prefix + ".ele", "upper", link_material);
   const int mesh_lower = mesh_manager.LoadMesh(
-      mesh_prefix + ".node", mesh_prefix + ".ele", "lower", kLinkMaterial);
+      mesh_prefix + ".node", mesh_prefix + ".ele", "lower", link_material);
   if (mesh_upper < 0 || mesh_lower < 0) {
     std::cerr << "Failed to load pendulum beam meshes from " << mesh_prefix
               << std::endl;
@@ -294,7 +350,7 @@ int main(int argc, char** argv) {
   gpu_t10_data.CalcP();
   gpu_t10_data.CalcInternalForce();
 
-  SyncedNewtonParams params = {1e-4, 1e-4, 1e-8, 1e8, 8, 10, kDt, false};
+  SyncedNewtonParams params = {1e-6, 1e-6, 1e-8, 1e10, 8, 10, kDt, false};
   SyncedNewtonSolver solver(&gpu_t10_data, gpu_t10_data.get_n_constraint());
   solver.Setup();
   solver.SetParameters(&params);
@@ -302,11 +358,10 @@ int main(int argc, char** argv) {
   solver.SetFixedSparsityPattern(true);
 
   std::cout << "constraints: " << gpu_t10_data.get_n_constraint() << "\n";
-  constexpr int kRowsPerSphericalJoint = 3;
+  constexpr int kRowsPerSphericalJoint               = 3;
   const std::vector<int> upper_joint_constraint_rows = {0, 1, 2};
   const std::vector<int> lower_joint_constraint_rows = {3, 4, 5};
-  if (gpu_t10_data.get_n_constraint() !=
-      2 * kRowsPerSphericalJoint) {
+  if (gpu_t10_data.get_n_constraint() != 2 * kRowsPerSphericalJoint) {
     std::cerr << "Unexpected spherical constraint count: "
               << gpu_t10_data.get_n_constraint() << " (expected "
               << 2 * kRowsPerSphericalJoint << ")" << std::endl;
@@ -331,17 +386,14 @@ int main(int argc, char** argv) {
   gpu_t10_data.RetrieveConstraintJacobianCSRToCPU(
       constraint_j_offsets, constraint_j_columns, constraint_j_values);
   const Eigen::Vector3d lower_upper_initial =
-      engineering_joint::EvaluateCurrentPointPosition(lower_hinge_on_upper,
-                                                      all_elems, x_curr, y_curr,
-                                                      z_curr);
+      engineering_joint::EvaluateCurrentPointPosition(
+          lower_hinge_on_upper, all_elems, x_curr, y_curr, z_curr);
   const Eigen::Vector3d lower_lower_initial =
-      engineering_joint::EvaluateCurrentPointPosition(lower_hinge_on_lower,
-                                                      all_elems, x_curr, y_curr,
-                                                      z_curr);
+      engineering_joint::EvaluateCurrentPointPosition(
+          lower_hinge_on_lower, all_elems, x_curr, y_curr, z_curr);
   const Eigen::Vector3d lower_tip_initial =
-      engineering_joint::EvaluateCurrentPointPosition(lower_tip_on_lower,
-                                                      all_elems, x_curr, y_curr,
-                                                      z_curr);
+      engineering_joint::EvaluateCurrentPointPosition(
+          lower_tip_on_lower, all_elems, x_curr, y_curr, z_curr);
   const Eigen::Vector3d upper_dir_initial = lower_upper_initial - top_hinge;
   const Eigen::Vector3d lower_dir_initial =
       lower_tip_initial - lower_lower_initial;
@@ -351,8 +403,9 @@ int main(int argc, char** argv) {
             << lower_lower_initial.transpose() << "]\n";
   std::cout << "initial lower hinge mismatch norm: "
             << (lower_upper_initial - lower_lower_initial).norm() << "\n";
-  std::cout << "writing initial frame to " << MakeOutputPath(0) << "\n";
-  gpu_t10_data.WriteOutputVTU(MakeOutputPath(0));
+  std::cout << "writing initial frame to " << MakeOutputPath(output_dir, 0)
+            << "\n";
+  gpu_t10_data.WriteOutputVTU(MakeOutputPath(output_dir, 0));
 
   if (write_csv) {
     const std::filesystem::path csv_parent =
@@ -365,7 +418,7 @@ int main(int argc, char** argv) {
         lumped_mass, z_curr, kGravity);
     const double elastic_strain_energy =
         engineering_joint::ComputeElasticStrainEnergy(gpu_t10_data,
-                                                      kLinkMaterial);
+                                                      link_material);
     const double kinetic_energy =
         engineering_joint::ComputeKineticEnergy(lumped_mass, velocity_xyz);
     const double total_energy =
@@ -416,33 +469,28 @@ int main(int argc, char** argv) {
                    cudaMemcpyDeviceToHost));
 
     const Eigen::Vector3d lower_upper_current =
-        engineering_joint::EvaluateCurrentPointPosition(lower_hinge_on_upper,
-                                                        all_elems, x_curr,
-                                                        y_curr, z_curr);
+        engineering_joint::EvaluateCurrentPointPosition(
+            lower_hinge_on_upper, all_elems, x_curr, y_curr, z_curr);
     const Eigen::Vector3d lower_lower_current =
-        engineering_joint::EvaluateCurrentPointPosition(lower_hinge_on_lower,
-                                                        all_elems, x_curr,
-                                                        y_curr, z_curr);
+        engineering_joint::EvaluateCurrentPointPosition(
+            lower_hinge_on_lower, all_elems, x_curr, y_curr, z_curr);
     const Eigen::Vector3d lower_tip_current =
-        engineering_joint::EvaluateCurrentPointPosition(lower_tip_on_lower,
-                                                        all_elems, x_curr,
-                                                        y_curr, z_curr);
+        engineering_joint::EvaluateCurrentPointPosition(
+            lower_tip_on_lower, all_elems, x_curr, y_curr, z_curr);
     const Eigen::Vector3d upper_dir_current = lower_upper_current - top_hinge;
     const Eigen::Vector3d lower_dir_current =
         lower_tip_current - lower_lower_current;
-    const Eigen::Vector3d lower_hinge_current =
-        engineering_joint::AveragePoint(lower_upper_current,
-                                        lower_lower_current);
+    const Eigen::Vector3d lower_hinge_current = engineering_joint::AveragePoint(
+        lower_upper_current, lower_lower_current);
     const double lower_hinge_mismatch_norm =
         (lower_upper_current - lower_lower_current).norm();
 
     if (write_csv) {
-      const double potential_energy =
-          engineering_joint::ComputePotentialEnergy(lumped_mass, z_curr,
-                                                    kGravity);
+      const double potential_energy = engineering_joint::ComputePotentialEnergy(
+          lumped_mass, z_curr, kGravity);
       const double elastic_strain_energy =
           engineering_joint::ComputeElasticStrainEnergy(gpu_t10_data,
-                                                        kLinkMaterial);
+                                                        link_material);
       const double kinetic_energy =
           engineering_joint::ComputeKineticEnergy(lumped_mass, velocity_xyz);
       const double total_energy =
@@ -458,14 +506,18 @@ int main(int argc, char** argv) {
               constraint_j_values, augmented_dual_values,
               kRowsPerSphericalJoint, 2 * kRowsPerSphericalJoint);
       const engineering_joint::HingeWrench upper_joint_reaction =
-          engineering_joint::EstimateHingeWrench(
-              upper_joint_reaction_vector, inst_upper.node_offset,
-              inst_upper.num_nodes, x_curr, y_curr, z_curr, top_hinge);
+          engineering_joint::ScaleHingeWrench(
+              engineering_joint::EstimateHingeWrench(
+                  upper_joint_reaction_vector, inst_upper.node_offset,
+                  inst_upper.num_nodes, x_curr, y_curr, z_curr, top_hinge),
+              kDt);
       const engineering_joint::HingeWrench lower_joint_reaction =
-          engineering_joint::EstimateHingeWrench(
-              lower_joint_reaction_vector, inst_lower.node_offset,
-              inst_lower.num_nodes, x_curr, y_curr, z_curr,
-              lower_hinge_current);
+          engineering_joint::ScaleHingeWrench(
+              engineering_joint::EstimateHingeWrench(
+                  lower_joint_reaction_vector, inst_lower.node_offset,
+                  inst_lower.num_nodes, x_curr, y_curr, z_curr,
+                  lower_hinge_current),
+              kDt);
       csv_writer.WriteRow(
           step, step * kDt,
           engineering_joint::ComputeSwingAngleFromNegativeZ(upper_dir_current),
@@ -480,24 +532,23 @@ int main(int argc, char** argv) {
                                                   kRowsPerSphericalJoint),
           engineering_joint::ComputeIndexedInfinityNorm(
               constraint_values, upper_joint_constraint_rows),
-          engineering_joint::ComputeSegmentL2Norm(
-              constraint_values, kRowsPerSphericalJoint,
-              kRowsPerSphericalJoint),
+          engineering_joint::ComputeSegmentL2Norm(constraint_values,
+                                                  kRowsPerSphericalJoint,
+                                                  kRowsPerSphericalJoint),
           engineering_joint::ComputeIndexedInfinityNorm(
               constraint_values, lower_joint_constraint_rows),
-          total_energy, kinetic_energy, potential_energy,
-          elastic_strain_energy, upper_joint_reaction, lower_joint_reaction,
-          lower_hinge_mismatch_norm, upper_dir_current, lower_dir_current,
-          lower_tip_current);
+          total_energy, kinetic_energy, potential_energy, elastic_strain_energy,
+          upper_joint_reaction, lower_joint_reaction, lower_hinge_mismatch_norm,
+          upper_dir_current, lower_dir_current, lower_tip_current);
     }
 
     if (step % export_interval == 0) {
-      gpu_t10_data.WriteOutputVTU(MakeOutputPath(output_frame));
+      gpu_t10_data.WriteOutputVTU(MakeOutputPath(output_dir, output_frame));
       ++output_frame;
     }
   }
 
   gpu_t10_data.Destroy();
-  std::cout << "Done. Output written to output/engineering_joint/\n";
+  std::cout << "Done. Output written to " << output_dir << "/\n";
   return 0;
 }

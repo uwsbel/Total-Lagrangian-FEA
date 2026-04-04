@@ -123,7 +123,10 @@ cc_binary(
 
 cc_binary(
     name = "test_feat10_piston_pump_cylindrical",
-    srcs = ["test_feat10_piston_pump_cylindrical.cc"],
+    srcs = [
+        "double_pendulum_csv_utils.h",
+        "test_feat10_piston_pump_cylindrical.cc",
+    ],
     copts = ["--std=c++17"],
     linkopts = [
         "-L/usr/local/cuda/lib64",
