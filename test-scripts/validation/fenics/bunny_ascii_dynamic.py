@@ -63,8 +63,10 @@ if rank == 0:
 # Z-RANGE (for info only — thresholds are absolute constants)
 # ============================================================================
 z_coords = domain.geometry.x[:, 2]
-z_min = domain.comm.allreduce(float(np.min(z_coords)), op=MPI.MIN)
-z_max = domain.comm.allreduce(float(np.max(z_coords)), op=MPI.MAX)
+local_z_min = float(np.min(z_coords)) if z_coords.size > 0 else np.inf
+local_z_max = float(np.max(z_coords)) if z_coords.size > 0 else -np.inf
+z_min = domain.comm.allreduce(local_z_min, op=MPI.MIN)
+z_max = domain.comm.allreduce(local_z_max, op=MPI.MAX)
 
 z_fix_thresh   = -4.0   # Fixed BC: z <= -4.0 (absolute)
 z_force_thresh =  4.0   # Force region: z >= +4.0 (absolute)

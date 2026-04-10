@@ -70,8 +70,10 @@ if rank == 0:
 # Z-RANGE COMPUTATION (requires MPI reduction for parallel correctness)
 # ============================================================================
 z_coords = domain.geometry.x[:, 2]
-z_min = domain.comm.allreduce(float(np.min(z_coords)), op=MPI.MIN)
-z_max = domain.comm.allreduce(float(np.max(z_coords)), op=MPI.MAX)
+local_z_min = float(np.min(z_coords)) if z_coords.size > 0 else np.inf
+local_z_max = float(np.max(z_coords)) if z_coords.size > 0 else -np.inf
+z_min = domain.comm.allreduce(local_z_min, op=MPI.MIN)
+z_max = domain.comm.allreduce(local_z_max, op=MPI.MAX)
 z_range = z_max - z_min
 
 z_fix_thresh   = z_min + 0.2 * z_range   # Fix bottom 20%

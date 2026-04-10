@@ -74,8 +74,10 @@ z_fix_thresh   = -0.4   # Fixed BC: z <= -0.4
 z_force_thresh =  0.4   # Force region: z >= +0.4
 
 z_coords = domain.geometry.x[:, 2]
-z_min = domain.comm.allreduce(float(np.min(z_coords)), op=MPI.MIN)
-z_max = domain.comm.allreduce(float(np.max(z_coords)), op=MPI.MAX)
+local_z_min = float(np.min(z_coords)) if z_coords.size > 0 else np.inf
+local_z_max = float(np.max(z_coords)) if z_coords.size > 0 else -np.inf
+z_min = domain.comm.allreduce(local_z_min, op=MPI.MIN)
+z_max = domain.comm.allreduce(local_z_max, op=MPI.MAX)
 
 if rank == 0:
     print(f"\nZ-range: [{z_min:.4f}, {z_max:.4f}]")

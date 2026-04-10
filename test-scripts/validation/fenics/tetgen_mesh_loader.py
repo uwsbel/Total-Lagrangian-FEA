@@ -14,11 +14,11 @@ def remap_tetgen_to_fenics_tet10(tetgen_elem):
 
 
 def remap_standard_to_fenics_tet10(std_elem):
-    """Remap 'standard' T10 ordering (as used in C++ FEAT10 teapot/tire meshes) to FEniCS/Basix.
+    """Remap an alternate 'standard' T10 ordering to FEniCS/Basix.
 
     Node ordering conventions:
       TetGen:   [v0,v1,v2,v3, m23,m03,m01,m12,m13,m02]
-      Standard: [v0,v1,v2,v3, m01,m12,m02,m03,m13,m23]  <- teapot/tire files
+      Standard: [v0,v1,v2,v3, m01,m12,m02,m03,m13,m23]
       FEniCS:   [v0,v1,v2,v3, m23,m13,m12,m03,m02,m01]
 
     Permutation: FEniCS[i] = Standard[fenics_to_standard[i]]
@@ -68,7 +68,7 @@ def read_tetgen_ele_file(fname, node_index_offset=0, tetgen_order=True):
         fname: Element file path
         node_index_offset: Offset to apply to node indices (0 for 0-based, 1 for 1-based files)
         tetgen_order: If True (default), assumes TetGen node ordering and remaps accordingly.
-                      If False, assumes 'standard' ordering (as used in teapot/tire C++ meshes).
+                      If False, assumes the alternate 'standard' ordering.
     """
     remap_fn = remap_tetgen_to_fenics_tet10 if tetgen_order else remap_standard_to_fenics_tet10
     with open(fname, 'r') as f:
@@ -94,7 +94,7 @@ def load_tetgen_mesh_from_files(node_file, ele_file, tetgen_order=True):
         node_file: Path to .node file (absolute or relative)
         ele_file: Path to .ele file (absolute or relative)
         tetgen_order: If True (default), assumes TetGen node ordering.
-                      If False, assumes 'standard' ordering (tire mesh).
+                      If False, assumes the alternate 'standard' ordering.
     
     Returns:
         tuple: (mesh, x_nodes) - DOLFINx mesh and node coordinate array
@@ -190,4 +190,3 @@ def write_vtk_frame(domain, V, u, filename):
                 out.write("10 " + " ".join(str(c) for c in conn[i]) + "\n")
             out.write(f"CELL_TYPES {n_cells}\n")
             out.write("24\n" * n_cells)
-
