@@ -1,7 +1,11 @@
 """
 Timing analysis for nonlinear 3D teapot dynamic analysis using Backward Euler.
 Minimal version with only solver execution and timing.
+SNES tolerance relaxed to 1e-3 for RES in {8, 16}.
+
+Usage: mpirun -np N python teapot_dynamic_timing.py --res RES
 """
+import argparse
 import os
 import sys
 import time
@@ -17,8 +21,13 @@ from tetgen_mesh_loader import load_tetgen_mesh_from_files
 
 rank = MPI.COMM_WORLD.rank
 
+parser = argparse.ArgumentParser()
+parser.add_argument("--res", type=int, default=0)
+args = parser.parse_args()
+RES = args.res
+
 if rank == 0:
-    print(f"Running with {MPI.COMM_WORLD.size} MPI ranks")
+    print(f"Running with {MPI.COMM_WORLD.size} MPI ranks, RES={RES}")
 
 # ============================================================================
 # GEOMETRY AND MESH SETUP
@@ -26,8 +35,9 @@ if rank == 0:
 script_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.normpath(os.path.join(script_dir, os.pardir, os.pardir, os.pardir, os.pardir))
 
-node_file = os.path.join(project_root, "data", "meshes", "T10", "teapot.1.node")
-ele_file  = os.path.join(project_root, "data", "meshes", "T10", "teapot.1.ele")
+mesh_dir = os.path.join(project_root, "data", "meshes", "T10", "teapot_scaling")
+node_file = os.path.join(mesh_dir, f"teapot_res{RES}.1.node")
+ele_file  = os.path.join(mesh_dir, f"teapot_res{RES}.1.ele")
 
 domain, _ = load_tetgen_mesh_from_files(node_file, ele_file, tetgen_order=True)
 V = fem.functionspace(domain, ("Lagrange", 2, (domain.geometry.dim,)))
@@ -163,8 +173,8 @@ problem = PointLoadProblem(
     bcs=[bc_fixed],
     petsc_options={
         "snes_type": "newtonls",
-        "snes_atol": 1e-4,
-        "snes_rtol": 1e-4,
+        "snes_atol": 1e-3 if RES in (8, 16) else 1e-4,
+        "snes_rtol": 1e-3 if RES in (8, 16) else 1e-4,
         "snes_stol": 1e-6,
         "ksp_type": "preonly",
         "pc_type": "lu",

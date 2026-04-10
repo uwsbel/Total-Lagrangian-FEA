@@ -1,6 +1,8 @@
 """
-Timing analysis script for nonlinear 3D beam dynamic analysis using Backward Euler.
+Timing analysis for nonlinear 3D beam dynamic analysis using Backward Euler.
 Minimal version with only solver execution and timing.
+
+Usage: mpirun -np N python beam_dynamic_timing.py --res RES [--mr]
 """
 import argparse
 import os

@@ -1,7 +1,10 @@
 """
-Timing analysis for nonlinear 3D bunny dynamic analysis using Backward Euler.
+Timing analysis for nonlinear 3D tire dynamic analysis using Backward Euler.
 Minimal version with only solver execution and timing.
+
+Usage: mpirun -np N python tire_dynamic_timing.py --res RES
 """
+import argparse
 import os
 import sys
 import time
@@ -17,8 +20,13 @@ from tetgen_mesh_loader import load_tetgen_mesh_from_files
 
 rank = MPI.COMM_WORLD.rank
 
+parser = argparse.ArgumentParser()
+parser.add_argument("--res", type=int, default=0)
+args = parser.parse_args()
+RES = args.res
+
 if rank == 0:
-    print(f"Running with {MPI.COMM_WORLD.size} MPI ranks")
+    print(f"Running with {MPI.COMM_WORLD.size} MPI ranks, RES={RES}")
 
 # ============================================================================
 # GEOMETRY AND MESH SETUP
@@ -26,21 +34,30 @@ if rank == 0:
 script_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.normpath(os.path.join(script_dir, os.pardir, os.pardir, os.pardir, os.pardir))
 
-node_file = os.path.join(project_root, "data", "meshes", "T10", "bunny_ascii_26.1.node")
-ele_file  = os.path.join(project_root, "data", "meshes", "T10", "bunny_ascii_26.1.ele")
+mesh_dir = os.path.join(project_root, "data", "meshes", "T10", "tire_scaling")
+node_file = os.path.join(mesh_dir, f"tire_res{RES}.1.node")
+ele_file  = os.path.join(mesh_dir, f"tire_res{RES}.1.ele")
 
 domain, _ = load_tetgen_mesh_from_files(node_file, ele_file, tetgen_order=True)
 V = fem.functionspace(domain, ("Lagrange", 2, (domain.geometry.dim,)))
 
 # ============================================================================
-# BOUNDARY CONDITIONS — Fix nodes with z <= -4.0 (absolute threshold)
+# Z-RANGE COMPUTATION
 # ============================================================================
-z_fix_thresh   = -4.0   # Fixed BC: z <= -4.0 (absolute)
-z_force_thresh =  4.0   # Force region: z >= +4.0 (absolute)
+z_coords = domain.geometry.x[:, 2]
+z_min = domain.comm.allreduce(float(np.min(z_coords)), op=MPI.MIN)
+z_max = domain.comm.allreduce(float(np.max(z_coords)), op=MPI.MAX)
+z_range = z_max - z_min
+
+z_fix_thresh   = z_min + 0.1 * z_range   # Fix bottom 10%
+z_force_thresh = z_min + 0.9 * z_range   # Apply force to top 10%
 
 if rank == 0:
-    print(f"Load applied: z >= {z_force_thresh:.4f}, -35000 N per node (-z)")
+    print(f"Load applied: z >= {z_force_thresh:.4f}, total 3000 N (-z)")
 
+# ============================================================================
+# BOUNDARY CONDITIONS — Fix nodes with z <= z_fix_thresh
+# ============================================================================
 def fixed_boundary(x):
     return x[2] <= z_fix_thresh + 1e-8
 
@@ -48,7 +65,7 @@ boundary_dofs = fem.locate_dofs_geometrical(V, fixed_boundary)
 bc_fixed = fem.dirichletbc(np.zeros(3, dtype=default_scalar_type), boundary_dofs, V)
 
 # ============================================================================
-# EXTERNAL FORCE VECTOR — Per-node, downward (-z) on ear nodes (z >= 4.0)
+# EXTERNAL FORCE VECTOR — Lumped nodal forces in -z on top nodes
 # ============================================================================
 dof_coords = V.tabulate_dof_coordinates()
 dofmap = V.dofmap
@@ -60,30 +77,34 @@ for i, coord in enumerate(dof_coords):
     if i < num_owned_dofs and coord[2] >= z_force_thresh - 1e-8:
         force_dofs.append(i)
 
-force_per_node = -35000.0   # N per node, -z direction (downward on ears)
+local_num_force_nodes = len(force_dofs)
+global_num_force_nodes = domain.comm.allreduce(local_num_force_nodes, op=MPI.SUM)
+
+total_force_z = 3000.0
+force_per_node = total_force_z / global_num_force_nodes if global_num_force_nodes > 0 else 0.0
 
 f_temp = fem.Function(V)
 f_temp.x.array[:] = 0.0
 for node_idx in force_dofs:
-    f_temp.x.array[node_idx * block_size + 2] = force_per_node  # -z direction
+    f_temp.x.array[node_idx * block_size + 2] = -force_per_node  # -z direction
 
 f_ext_vector = f_temp.x.petsc_vec.copy()
 f_ext_vector.ghostUpdate(addv=PETSc.InsertMode.INSERT, mode=PETSc.ScatterMode.FORWARD)
 
 # ============================================================================
-# MATERIAL MODEL — SVK, no damping
+# MATERIAL MODEL — SVK + Kelvin-Voigt damping
 # ============================================================================
-E_val  = 3.0e8
-nu_val = 0.40
-rho    = fem.Constant(domain, 920.0)
+E_val  = 1.0e7
+nu_val = 0.35
+rho    = fem.Constant(domain, 1000.0)
 
 E  = default_scalar_type(E_val)
 nu = default_scalar_type(nu_val)
 
 mu_svk     = fem.Constant(domain, E / (2 * (1 + nu)))
 lmbda_svk  = fem.Constant(domain, E * nu / ((1 + nu) * (1 - 2 * nu)))
-lmbda_damp = fem.Constant(domain, 0.0)
-eta_damp   = fem.Constant(domain, 0.0)
+lmbda_damp = fem.Constant(domain, 5.0e3)
+eta_damp   = fem.Constant(domain, 5.0e3)
 
 # ============================================================================
 # FUNCTION SPACE SETUP
@@ -96,13 +117,13 @@ v_old  = fem.Function(V)
 # ============================================================================
 # TIME INTEGRATION PARAMETERS
 # ============================================================================
-dt_val  = 1e-3
-n_steps = 8000
+dt_val  = 5e-4
+n_steps = 1200
 
 dt = fem.Constant(domain, dt_val)
 
 # ============================================================================
-# VARIATIONAL FORM — SVK stress + Kelvin-Voigt viscous stress (zero damping)
+# VARIATIONAL FORM — SVK stress + Kelvin-Voigt viscous stress
 # ============================================================================
 metadata = {"quadrature_degree": 5}
 dx = ufl.Measure("dx", domain=domain, metadata=metadata)
@@ -152,13 +173,13 @@ problem = PointLoadProblem(
     petsc_options={
         "snes_type": "newtonls",
         "snes_atol": 1e-4,
-        "snes_rtol": 1e-6,
+        "snes_rtol": 1e-4,
         "snes_stol": 1e-6,
         "ksp_type": "preonly",
         "pc_type": "lu",
         "pc_factor_mat_solver_type": "mumps",
     },
-    petsc_options_prefix="bunny_dynamic_be",
+    petsc_options_prefix="tire_dynamic_be",
 )
 
 # ============================================================================
@@ -172,8 +193,8 @@ v_old.x.scatter_forward()
 start_time = time.perf_counter()
 
 for n in range(n_steps):
-    # Release force at step 1000
-    if n == 1000:
+    # Release force at step 400
+    if n == 400:
         f_ext_vector.set(0.0)
         f_ext_vector.ghostUpdate(addv=PETSc.InsertMode.INSERT,
                                   mode=PETSc.ScatterMode.FORWARD)
