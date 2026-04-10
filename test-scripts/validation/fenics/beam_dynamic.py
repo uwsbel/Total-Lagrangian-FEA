@@ -1,6 +1,8 @@
 """
 Nonlinear 3D beam dynamic analysis using Backward Euler time integration.
 Matches C++ implementation: uses nodal forces, Backward Euler, and same tolerances.
+
+Usage: mpirun -np N python beam_dynamic.py --res RES [--mr]
 """
 import argparse
 import os

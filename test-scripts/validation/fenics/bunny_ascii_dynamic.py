@@ -1,7 +1,9 @@
 """
-Nonlinear 3D bunny dynamic analysis using Backward Euler time integration.
+Nonlinear 3D bunny (legacy ascii mesh) dynamic analysis using Backward Euler time integration.
 SVK material, no damping (eta_damp = lambda_damp = 0).
 Matches C++ bunny benchmark: absolute z-based BCs, -z force on ear nodes, release at step 1000.
+
+Usage: mpirun -np N python bunny_ascii_dynamic.py
 """
 import os
 import sys
