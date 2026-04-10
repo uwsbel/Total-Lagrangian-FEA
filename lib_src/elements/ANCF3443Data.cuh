@@ -1174,12 +1174,12 @@ struct GPU_ANCF3443_Data : public ElementBase {
                                           std::vector<int> &columns,
                                           std::vector<double> &values);
 
-  GPU_ANCF3443_Data *d_data;  // Storing GPU copy of SAPGPUData
+  GPU_ANCF3443_Data *d_data = nullptr;  // Storing GPU copy of SAPGPUData
 
   int n_beam;   // number of elements
   int n_nodes;  // number of nodes
   int n_coef;   // number of coefficients (= 4 * n_nodes)
-  int n_constraint;
+  int n_constraint = 0;
 
  private:
   double *d_B_inv;
@@ -1193,10 +1193,10 @@ struct GPU_ANCF3443_Data : public ElementBase {
   double *d_x12_jac, *d_y12_jac, *d_z12_jac;
   double *d_x12, *d_y12, *d_z12;
 
-  int *d_element_connectivity;
-  int *d_csr_offsets, *d_csr_columns;
-  double *d_csr_values;
-  int *d_nnz;
+  int *d_element_connectivity = nullptr;
+  int *d_csr_offsets = nullptr, *d_csr_columns = nullptr;
+  double *d_csr_values = nullptr;
+  int *d_nnz = nullptr;
 
   double *d_F, *d_P;
   double *d_Fdot, *d_P_vis;
@@ -1213,19 +1213,19 @@ struct GPU_ANCF3443_Data : public ElementBase {
   int *d_material_model;
   double *d_mu10, *d_mu01, *d_kappa;
 
-  double *d_constraint;
+  double *d_constraint = nullptr;
   double *d_constraint_rhs = nullptr;
-  int *d_fixed_nodes;
+  int *d_fixed_nodes = nullptr;
 
   // Constraint Jacobian J^T in CSR format
-  int *d_cj_csr_offsets, *d_cj_csr_columns;
-  double *d_cj_csr_values;
-  int *d_cj_nnz;
+  int *d_cj_csr_offsets = nullptr, *d_cj_csr_columns = nullptr;
+  double *d_cj_csr_values = nullptr;
+  int *d_cj_nnz = nullptr;
 
   // Constraint Jacobian J in CSR format
-  int *d_j_csr_offsets, *d_j_csr_columns;
-  double *d_j_csr_values;
-  int *d_j_nnz;
+  int *d_j_csr_offsets = nullptr, *d_j_csr_columns = nullptr;
+  double *d_j_csr_values = nullptr;
+  int *d_j_nnz = nullptr;
 
   // force related parameters
   double *d_f_int, *d_f_ext;

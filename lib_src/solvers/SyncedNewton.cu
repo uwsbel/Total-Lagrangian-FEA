@@ -1391,6 +1391,7 @@ void SyncedNewtonSolver::OneStepNewtonCuDSS() {
 
       if (phi_trial <= phi_bound) {
         accepted_alpha = alpha;
+        stats.final_residual_norm = trial_norm_g;
         break;
       }
 
@@ -1415,6 +1416,7 @@ void SyncedNewtonSolver::OneStepNewtonCuDSS() {
       return false;
     }
 
+    stats.line_search_successes += 1;
     stats.line_search_backtracks_total += backtracks;
     stats.line_search_alpha_sum += accepted_alpha;
     if (stats.line_search_alpha_min == 0.0 ||

@@ -744,7 +744,7 @@ DemeMeshCollisionSystem::DemeMeshCollisionSystem(
           (rb.surf_vert_count > 0) ? (1.0 / static_cast<double>(rb.surf_vert_count)) : 0.0;
       h_body_skip_forces[static_cast<size_t>(bi)] = rb.body.skip_self_contact_forces ? 1u : 0u;
       h_body_pos_f[static_cast<size_t>(bi)] = ToFloat3(rb.prev_pos);
-      h_body_quat_f[static_cast<size_t>(bi)] = IdentityQuat();
+      h_body_quat_f[static_cast<size_t>(bi)] = ToQuatXYZW(rb.prev_quat);
       h_body_lin_vel_f[static_cast<size_t>(bi)] = make_float3(0.f, 0.f, 0.f);
       h_body_omega_f[static_cast<size_t>(bi)] = make_float3(0.f, 0.f, 0.f);
     }
@@ -1064,15 +1064,18 @@ void DemeMeshCollisionSystem::BuildSolver(double mu_s, double mu_k,
 
   auto make_mesh = [&](const ANCFCPUUtils::SurfaceTriMesh& surf,
                        unsigned int family, bool split_into_patches,
-                       float patch_angle_deg, const Eigen::Vector3d& centroid,
+                       float patch_angle_deg, const Eigen::Vector3d& init_pos,
+                       const Eigen::Quaterniond& init_quat,
                        const std::vector<float3>& vertices_local,
-                       float body_mass, const char* label) {
+                       float body_mass, const float3& body_moi,
+                       bool use_custom_moi, const char* label) {
     deme::DEMMesh mesh;
     mesh.SetFamily(family);
 
     // DEME expects mesh vertices in the owner's local frame. Keep the owner
-    // init position meaningful by centering vertices at the initial centroid.
-    mesh.SetInitPos(ToFloat3(centroid));
+    // init position meaningful by centering vertices at the chosen owner
+    // reference point (typically COM if rigid mass properties are provided).
+    mesh.SetInitPos(ToFloat3(init_pos));
 
     mesh.m_vertices = vertices_local;
 
@@ -1131,11 +1134,16 @@ void DemeMeshCollisionSystem::BuildSolver(double mu_s, double mu_k,
     // broadcasting). Set material after patch IDs are finalized.
     mesh.SetMaterial(mat);
 
-    mesh.SetInitQuat(IdentityQuat());
+    mesh.SetInitQuat(ToQuatXYZW(init_quat));
     mesh.SetMass(body_mass);
-    // Approximate MOI as uniform sphere with equivalent mass (placeholder)
-    const float moi = body_mass * 0.4f;
-    mesh.SetMOI(make_float3(moi, moi, moi));
+    if (use_custom_moi) {
+      mesh.SetMOI(body_moi);
+    } else {
+      // Backward-compatible fallback for callers that do not provide rigid
+      // mass properties.
+      const float moi = body_mass * 0.4f;
+      mesh.SetMOI(make_float3(moi, moi, moi));
+    }
 
     return mesh;
   };
@@ -1181,21 +1189,29 @@ void DemeMeshCollisionSystem::BuildSolver(double mu_s, double mu_k,
     const float patch_angle = body.split_into_patches ? angle : 0.0f;
     const std::string label = "mesh[" + std::to_string(bi) + "]";
 
-    const Eigen::Vector3d centroid = ComputeCentroid(body.surface.vertices);
+    const bool use_custom_props = body.has_rigid_mass_properties;
+    const Eigen::Vector3d ref_point =
+        use_custom_props ? body.reference_point
+                         : ComputeCentroid(body.surface.vertices);
+    const Eigen::Quaterniond ref_quat =
+        use_custom_props ? body.reference_orientation.normalized()
+                         : Eigen::Quaterniond::Identity();
+    const Eigen::Quaterniond ref_quat_inv = ref_quat.conjugate();
     rb.ref_vertices_local.clear();
     rb.ref_vertices_local.reserve(body.surface.vertices.size());
     std::vector<float3> vertices_local;
     vertices_local.reserve(body.surface.vertices.size());
     for (const auto& v : body.surface.vertices) {
-      const Eigen::Vector3d local = v - centroid;
+      const Eigen::Vector3d local = ref_quat_inv * (v - ref_point);
       rb.ref_vertices_local.push_back(local);
       vertices_local.push_back(ToFloat3(local));
     }
-    rb.prev_pos  = centroid;
-    rb.prev_quat = Eigen::Quaterniond::Identity();
+    rb.prev_pos  = ref_point;
+    rb.prev_quat = ref_quat;
 
     auto mesh = make_mesh(body.surface, body.family, body.split_into_patches,
-                          patch_angle, centroid, vertices_local, body.mass,
+                          patch_angle, ref_point, ref_quat, vertices_local,
+                          body.mass, body.moi, use_custom_props,
                           label.c_str());
     rb.mesh_handle = solver_->AddMesh(mesh);
   }

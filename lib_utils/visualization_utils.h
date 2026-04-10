@@ -713,12 +713,15 @@ class VisualizationUtils {
    * @param displacement Displacement vector (3 * n_nodes), layout: [dx0, dy0,
    * dz0, dx1, ...]
    * @param filename Output VTU filename
+   * @param vm_stress Optional per-element von Mises stress (size n_elements)
    * @return true if export successful
    */
   static bool ExportMeshWithDisplacement(const Eigen::MatrixXd& nodes,
                                          const Eigen::MatrixXi& elements,
                                          const Eigen::VectorXd& displacement,
-                                         const std::string& filename) {
+                                         const std::string& filename,
+                                         const Eigen::VectorXd* vm_stress =
+                                             nullptr) {
     std::ofstream file(filename);
     if (!file.is_open()) {
       std::cerr << "Error: Cannot open file " << filename << " for writing"
@@ -815,6 +818,18 @@ class VisualizationUtils {
     file << "        </DataArray>\n";
 
     file << "      </Cells>\n";
+
+    if (vm_stress) {
+      file << "      <CellData Scalars=\"von_mises_stress\">\n";
+      file << "        <DataArray type=\"Float64\" Name=\"von_mises_stress\" "
+              "format=\"ascii\">\n";
+      for (int i = 0; i < numElements; ++i) {
+        file << "          " << (*vm_stress)(i) << "\n";
+      }
+      file << "        </DataArray>\n";
+      file << "      </CellData>\n";
+    }
+
     file << "    </Piece>\n";
     file << "  </UnstructuredGrid>\n";
     file << "</VTKFile>\n";

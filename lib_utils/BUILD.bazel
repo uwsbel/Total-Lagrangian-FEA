@@ -47,6 +47,17 @@ cc_library(
 )
 
 cc_library(
+    name = "rigid_mass_properties",
+    hdrs = ["rigid_mass_properties.h"],
+    copts = ["--std=c++17"],
+    deps = [
+        ":mesh_manager",
+        "//lib_src/collision:deme_mesh_collision_system",
+        "@eigen//:eigen",
+    ],
+)
+
+cc_library(
     name = "surface_trimesh",
     srcs = ["surface_trimesh.cc"],
     hdrs = ["surface_trimesh.h"],

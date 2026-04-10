@@ -41,6 +41,7 @@ struct SyncedNewtonSolveStats {
   int outer_iterations             = 0;
   int inner_iterations             = 0;
   int line_search_calls            = 0;
+  int line_search_successes        = 0;
   int line_search_backtracks_total = 0;
   int line_search_failures         = 0;
   double line_search_alpha_min     = 0.0;

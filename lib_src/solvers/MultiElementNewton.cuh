@@ -102,7 +102,9 @@ class MultiElementNewtonSolver : public SolverBase {
 
   // Distribute external forces from unified buffer to block buffers.
   void DistributeExternalForces();
+  void DistributeVelocities();
 
   // Collect positions from block solvers back to unified buffer.
   void CollectPositions();
+  void CollectVelocities();
 };

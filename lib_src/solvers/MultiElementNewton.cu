@@ -117,6 +117,11 @@ void MultiElementNewtonSolver::Setup() {
     solver->AnalyzeHessianSparsity();
   }
 
+  // Keep block-solver velocity states aligned with the unified state buffer so
+  // downstream systems (for example DEME friction/damping) can consume a
+  // coherent global velocity field.
+  DistributeVelocities();
+
   setup_done_ = true;
   std::cout << "MultiElementNewtonSolver: Setup complete for "
             << block_solvers_.size() << " blocks\n";
@@ -134,6 +139,7 @@ void MultiElementNewtonSolver::Solve() {
 
   // 1. Sync positions from unified buffer to element blocks.
   problem_->SyncPositionsToElements();
+  DistributeVelocities();
 
   // 2. Distribute external forces from unified buffer to block buffers.
   DistributeExternalForces();
@@ -145,6 +151,7 @@ void MultiElementNewtonSolver::Solve() {
 
   // 4. Sync updated positions from blocks back to unified buffer.
   CollectPositions();
+  CollectVelocities();
 
   // 5. Update collision node buffer for next step's collision detection.
   problem_->UpdateCollisionNodeBuffer();
@@ -217,7 +224,41 @@ void MultiElementNewtonSolver::DistributeExternalForces() {
   }
 }
 
+void MultiElementNewtonSolver::DistributeVelocities() {
+  const FEStateBuffer& state = problem_->GetStateBuffer();
+  const int n_blocks         = problem_->GetNumBlocks();
+
+  if (state.d_velocity == nullptr) {
+    return;
+  }
+
+  for (int i = 0; i < n_blocks; ++i) {
+    const int dof_offset = state.GetBlockDofOffset(i);
+    block_solvers_[static_cast<size_t>(i)]->SetInitialVelocityFromDevicePtr(
+        state.d_velocity + dof_offset);
+  }
+}
+
 void MultiElementNewtonSolver::CollectPositions() {
   // Sync positions from element blocks to unified buffer.
   problem_->SyncPositionsFromElements();
+}
+
+void MultiElementNewtonSolver::CollectVelocities() {
+  FEStateBuffer& state = problem_->GetStateBuffer();
+  const int n_blocks   = problem_->GetNumBlocks();
+
+  if (state.d_velocity == nullptr) {
+    return;
+  }
+
+  for (int i = 0; i < n_blocks; ++i) {
+    const int dof_offset = state.GetBlockDofOffset(i);
+    const int dof_count  = state.GetBlockDofCount(i);
+    HANDLE_ERROR(cudaMemcpy(
+        state.d_velocity + dof_offset,
+        block_solvers_[static_cast<size_t>(i)]->GetVelocityGuessDevicePtr(),
+        static_cast<size_t>(dof_count) * sizeof(double),
+        cudaMemcpyDeviceToDevice));
+  }
 }

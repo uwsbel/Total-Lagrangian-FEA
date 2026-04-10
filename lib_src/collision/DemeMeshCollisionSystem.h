@@ -50,6 +50,14 @@ struct DemeMeshCollisionBody {
   // Mass of the body in kg. Used by DEME for contact/friction calculations.
   // Default 1.0 for backward compatibility; should be set to actual mass.
   float mass = 1.0f;
+
+  // Optional rigid mass properties for DEME's owner frame. When enabled, the
+  // mesh vertices are expressed in the local principal-inertia frame centered
+  // at `reference_point`, and DEME receives the corresponding diagonal MOI.
+  bool has_rigid_mass_properties = false;
+  Eigen::Vector3d reference_point = Eigen::Vector3d::Zero();
+  Eigen::Quaterniond reference_orientation = Eigen::Quaterniond::Identity();
+  float3 moi = make_float3(0.0f, 0.0f, 0.0f);
 };
 
 // Collision system that couples DEM-Engine (DEME) mesh-mesh contact to this
