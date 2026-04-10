@@ -1,8 +1,8 @@
 /**
  * FEAT10 Beam Resolution Study (Unified)
  *
- * Combines Newton / VBD / (non-coop) AdamW into a single binary with a solver
- * selection flag.
+ * Combines Newton / VBD / (non-coop) AdamW / PCG / AmgX into a single binary
+ * with a solver selection flag.
  *
  * Note: pass `--solver=adamw` to use `SyncedAdamWNocoopSolver`.
  *
@@ -31,6 +31,7 @@
 #include "../../lib_src/solvers/FEAT10ConstraintManager.h"
 #include "../../lib_src/elements/FEAT10Data.cuh"
 #include "../../lib_src/solvers/SyncedAdamWNocoop.cuh"
+#include "../../lib_src/solvers/SyncedAmgX.cuh"
 #include "../../lib_src/solvers/SyncedNewton.cuh"
 #include "../../lib_src/solvers/SyncedPCG.cuh"
 #include "../../lib_src/solvers/SyncedVBD.cuh"
@@ -71,7 +72,7 @@ const SolidMaterialProperties mat_beam_mr =
                                           kBeamLambdaDamp  // lambda_damp
     );
 
-enum class SolverKind { kNewton, kVbd, kAdamW, kPCG };
+enum class SolverKind { kNewton, kVbd, kAdamW, kPCG, kAmgx };
 enum class MaterialKind { kSvk, kMr };
 
 struct Options {
@@ -91,7 +92,8 @@ void PrintUsage(const char* argv0) {
       << " [--solver=SOLVER] [--res=R] [--steps=N] [--dt=DT]\n"
       << "                 [--omega=W] [--svk_mat|--mr_mat] [--csv[=PATH]]"
       << " [--help]\n\n"
-      << "  --solver=SOLVER   newton | vbd | adamw | pcg (default: adamw)\n"
+      << "  --solver=SOLVER   newton | vbd | adamw | pcg | amgx"
+      << " (default: adamw)\n"
       << "                   (adamw uses SyncedAdamWNocoopSolver)\n"
       << "  --res=R            0 | 2 | 4 | 8 | 16 | 32 (default: 8)\n"
       << "  --steps=N          number of Solve() calls (default: 50)\n"
@@ -149,6 +151,10 @@ bool ParseSolver(const std::string& s, SolverKind& out) {
     out = SolverKind::kPCG;
     return true;
   }
+  if (s == "amgx") {
+    out = SolverKind::kAmgx;
+    return true;
+  }
   return false;
 }
 
@@ -162,6 +168,8 @@ std::string SolverName(SolverKind solver) {
       return "adamw";
     case SolverKind::kPCG:
       return "pcg";
+    case SolverKind::kAmgx:
+      return "amgx";
   }
   return "unknown";
 }
@@ -485,6 +493,21 @@ int main(int argc, char** argv) {
       solver.Setup();
       solver.SetParameters(&params);
       solver.AnalyzeHessianSparsity();
+      for (int step = 0; step < opt.steps; ++step) {
+        std::cout << "Step " << step << std::endl;
+        solver.Solve();
+        record_step(step);
+      }
+      break;
+    }
+    case SolverKind::kAmgx: {
+      SyncedAmgXParams params = {1e-4, 1e-4, 1e-4, 1e14, 5, 10, opt.dt};
+      if (opt.res == 32) {
+        params = {1e-3, 1e-3, 1e-3, 1e14, 5, 10, opt.dt};
+      }
+      SyncedAmgXSolver solver(&data, data.get_n_constraint());
+      solver.Setup();
+      solver.SetParameters(&params);
       for (int step = 0; step < opt.steps; ++step) {
         std::cout << "Step " << step << std::endl;
         solver.Solve();

@@ -43,5 +43,11 @@ new_local_repository(
     path = "third_party/DEM-Engine",
 )
 
+new_local_repository(
+    name = "amgx_local",
+    build_file = "//third_party:amgx.BUILD.bazel",
+    path = "/home/ganesh/Packages/amgx",
+)
+
 # Register CUDA toolchains provided by rules_cuda
 register_toolchains("@rules_cuda//cuda:all")

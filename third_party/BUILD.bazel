@@ -6,3 +6,7 @@ alias(
     actual = "@dem_engine//:dem_engine",
 )
 
+alias(
+    name = "amgx",
+    actual = "@amgx_local//:amgx",
+)

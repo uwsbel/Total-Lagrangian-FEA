@@ -1,0 +1,18 @@
+load("@rules_cc//cc:defs.bzl", "cc_import", "cc_library")
+
+package(default_visibility = ["//visibility:public"])
+
+cc_import(
+    name = "amgx_shared",
+    shared_library = "build/libamgxsh.so",
+)
+
+cc_library(
+    name = "amgx",
+    hdrs = [
+        "include/amgx_c.h",
+        "include/amgx_config.h",
+    ],
+    includes = ["include"],
+    deps = [":amgx_shared"],
+)

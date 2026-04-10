@@ -104,6 +104,33 @@ cuda_library(
 )
 
 cuda_library(
+    name = "solvers_syncedamgx",
+    srcs = ["SyncedAmgX.cu"],
+    hdrs = [
+        "SolverBase.h",
+        "SyncedAmgX.cuh",
+    ],
+    copts = [
+        "--std=c++17",
+        "-O3",
+        "--use_fast_math",
+        "--extra-device-vectorization",
+    ],
+    linkopts = [
+        "-lcublas",
+    ],
+    deps = [
+        "//third_party:amgx",
+        "//lib_src/elements:ANCF3243Data",
+        "//lib_src/elements:ANCF3443Data",
+        "//lib_src/elements:FEAT10Data",
+        "//lib_utils:cpu_utils",
+        "//lib_utils:cuda_utils",
+        "@eigen//:eigen",
+    ],
+)
+
+cuda_library(
     name = "solvers_syncedpcg",
     srcs = ["SyncedPCG.cu"],
     hdrs = [
