@@ -584,141 +584,6 @@ double SyncedAmgXSolver::compute_l2_norm_cublas(double *d_vec, int n_dofs) {
   return h_norm;
 }
 
-// Extract the same 3x3 block-diagonal inverse preconditioner used by
-// SyncedPCG. One thread handles one coefficient block.
-__global__ void amgx_extract_block_diag_preconditioner(
-    int n_coef, double precond_eps, const int *d_csr_row_offsets,
-    const int *d_csr_col_indices, const double *d_csr_values,
-    double *d_precond_inv) {
-  int node_i = blockIdx.x * blockDim.x + threadIdx.x;
-  if (node_i >= n_coef)
-    return;
-
-  double H[3][3] = {{0.0}};
-  for (int di = 0; di < 3; ++di) {
-    const int row       = 3 * node_i + di;
-    const int row_begin = d_csr_row_offsets[row];
-    const int row_len   = d_csr_row_offsets[row + 1] - row_begin;
-    for (int dj = 0; dj < 3; ++dj) {
-      const int col = 3 * node_i + dj;
-      const int pos = amgx_binary_search_column(&d_csr_col_indices[row_begin],
-                                                row_len, col);
-      if (pos >= 0) {
-        H[di][dj] = d_csr_values[row_begin + pos];
-      }
-    }
-  }
-
-  const double avg01 = 0.5 * (H[0][1] + H[1][0]);
-  const double avg02 = 0.5 * (H[0][2] + H[2][0]);
-  const double avg12 = 0.5 * (H[1][2] + H[2][1]);
-  H[0][1] = H[1][0] = avg01;
-  H[0][2] = H[2][0] = avg02;
-  H[1][2] = H[2][1] = avg12;
-
-  const double trace_H = H[0][0] + H[1][1] + H[2][2];
-  const double eps_reg = precond_eps * fmax(1.0, fabs(trace_H));
-  H[0][0] += eps_reg;
-  H[1][1] += eps_reg;
-  H[2][2] += eps_reg;
-
-  const double det =
-      H[0][0] * (H[1][1] * H[2][2] - H[1][2] * H[2][1]) -
-      H[0][1] * (H[1][0] * H[2][2] - H[1][2] * H[2][0]) +
-      H[0][2] * (H[1][0] * H[2][1] - H[1][1] * H[2][0]);
-
-  double *out = d_precond_inv + node_i * 9;
-  if (fabs(det) < 1e-30) {
-    out[0] = 1.0;
-    out[1] = 0.0;
-    out[2] = 0.0;
-    out[3] = 0.0;
-    out[4] = 1.0;
-    out[5] = 0.0;
-    out[6] = 0.0;
-    out[7] = 0.0;
-    out[8] = 1.0;
-    return;
-  }
-
-  const double inv_det = 1.0 / det;
-  out[0] = (H[1][1] * H[2][2] - H[1][2] * H[2][1]) * inv_det;
-  out[1] = (H[0][2] * H[2][1] - H[0][1] * H[2][2]) * inv_det;
-  out[2] = (H[0][1] * H[1][2] - H[0][2] * H[1][1]) * inv_det;
-  out[3] = (H[1][2] * H[2][0] - H[1][0] * H[2][2]) * inv_det;
-  out[4] = (H[0][0] * H[2][2] - H[0][2] * H[2][0]) * inv_det;
-  out[5] = (H[0][2] * H[1][0] - H[0][0] * H[1][2]) * inv_det;
-  out[6] = (H[1][0] * H[2][1] - H[1][1] * H[2][0]) * inv_det;
-  out[7] = (H[0][1] * H[2][0] - H[0][0] * H[2][1]) * inv_det;
-  out[8] = (H[0][0] * H[1][1] - H[0][1] * H[1][0]) * inv_det;
-}
-
-// Apply the block-diagonal inverse as a left preconditioner to both the
-// sparse Hessian and the residual in place.
-__global__ void amgx_left_precondition_system_in_place(
-    int n_coef, const int *d_csr_row_offsets, const int *d_csr_col_indices,
-    const double *d_precond_inv, double *d_csr_values, double *d_rhs) {
-  int node_i = blockIdx.x * blockDim.x + threadIdx.x;
-  if (node_i >= n_coef)
-    return;
-
-  const double *M = d_precond_inv + node_i * 9;
-  const int base  = 3 * node_i;
-
-  const double r0 = d_rhs[base + 0];
-  const double r1 = d_rhs[base + 1];
-  const double r2 = d_rhs[base + 2];
-  d_rhs[base + 0] = M[0] * r0 + M[1] * r1 + M[2] * r2;
-  d_rhs[base + 1] = M[3] * r0 + M[4] * r1 + M[5] * r2;
-  d_rhs[base + 2] = M[6] * r0 + M[7] * r1 + M[8] * r2;
-
-  int row_start[3];
-  int row_len[3];
-  for (int di = 0; di < 3; ++di) {
-    const int row = base + di;
-    row_start[di] = d_csr_row_offsets[row];
-    row_len[di]   = d_csr_row_offsets[row + 1] - row_start[di];
-  }
-
-  const int n_block_cols = row_len[0] / 3;
-  for (int block_col = 0; block_col < n_block_cols; ++block_col) {
-    const int guessed_col =
-        d_csr_col_indices[row_start[0] + 3 * block_col];
-    const int col_base = guessed_col - (guessed_col % 3);
-
-    double H[3][3] = {{0.0}};
-    for (int di = 0; di < 3; ++di) {
-      for (int dj = 0; dj < 3; ++dj) {
-        const int col = col_base + dj;
-        const int pos = amgx_binary_search_column(
-            &d_csr_col_indices[row_start[di]], row_len[di], col);
-        if (pos >= 0) {
-          H[di][dj] = d_csr_values[row_start[di] + pos];
-        }
-      }
-    }
-
-    double MH[3][3];
-    for (int i = 0; i < 3; ++i) {
-      for (int j = 0; j < 3; ++j) {
-        MH[i][j] = M[3 * i + 0] * H[0][j] + M[3 * i + 1] * H[1][j] +
-                   M[3 * i + 2] * H[2][j];
-      }
-    }
-
-    for (int di = 0; di < 3; ++di) {
-      for (int dj = 0; dj < 3; ++dj) {
-        const int col = col_base + dj;
-        const int pos = amgx_binary_search_column(
-            &d_csr_col_indices[row_start[di]], row_len[di], col);
-        if (pos >= 0) {
-          d_csr_values[row_start[di] + pos] = MH[di][dj];
-        }
-      }
-    }
-  }
-}
-
 void SyncedAmgXSolver::AnalyzeHessianSparsity() {
   if (sparse_hessian_initialized_)
     return;
@@ -1210,11 +1075,11 @@ void SyncedAmgXSolver::InitAmgX() {
 
   const char *cfg =
       "config_version=2, "
-      "solver(main)=FGMRES, "
-      "main:preconditioner(none)=NOSOLVER, "
-      "main:gmres_n_restart=50, "
+      "solver(main)=PCG, "
+      "main:preconditioner(jac)=BLOCK_JACOBI, "
+      "jac:max_iters=1, "
       "main:max_iters=500, "
-      "main:tolerance=1e-6, "
+      "main:tolerance=1e-4, "
       "main:norm=L2, "
       "main:use_scalar_norm=1, "
       "main:convergence=RELATIVE_INI, "
@@ -1324,7 +1189,6 @@ void SyncedAmgXSolver::OneStepAmgX() {
       (n_constraints_ + threadsPerBlock - 1) / threadsPerBlock;
   int numBlocks_update_prev_v =
       (n_coef_ * 3 + threadsPerBlock - 1) / threadsPerBlock;
-  int numBlocks_precond = (n_coef_ + threadsPerBlock - 1) / threadsPerBlock;
   int n_dofs = 3 * n_coef_;
 
   HANDLE_ERROR(cudaEventRecord(start));
@@ -1415,18 +1279,8 @@ void SyncedAmgXSolver::OneStepAmgX() {
 
         HANDLE_ERROR(cudaDeviceSynchronize());
 
-        amgx_extract_block_diag_preconditioner<<<numBlocks_precond,
-                                                 threadsPerBlock>>>(
-            n_coef_, h_precond_eps_, d_csr_row_offsets_, d_csr_col_indices_,
-            d_csr_values_, d_precond_inv_);
-        amgx_left_precondition_system_in_place<<<numBlocks_precond,
-                                                 threadsPerBlock>>>(
-            n_coef_, d_csr_row_offsets_, d_csr_col_indices_, d_precond_inv_,
-            d_csr_values_, d_r_);
-
-        HANDLE_ERROR(cudaDeviceSynchronize());
-
-        // Solve the left-preconditioned linear system with AmgX.
+        // Solve the assembled linear system with AmgX using its internal
+        // scalar Jacobi preconditioner.
         if (!amgx_initialized_) InitAmgX();
 
         if (!amgx_matrix_uploaded_) {

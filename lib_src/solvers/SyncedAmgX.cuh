@@ -7,8 +7,8 @@
  * Brief:   Declares the SyncedAmgXSolver class for a fully synchronized
  *          Newton method that uses AmgX for the linear solve step.
  *          The nonlinear iteration still assembles the sparse Hessian
- *          directly on the GPU and applies a 3x3 block-diagonal left
- *          preconditioner before the AmgX solve.
+ *          directly on the GPU and solves it with AmgX using its
+ *          internal scalar Jacobi preconditioner.
  *==============================================================
  *==============================================================*/
 
@@ -48,10 +48,8 @@ class SyncedAmgXSolver : public SolverBase {
         d_csr_row_offsets_(nullptr),
         d_csr_col_indices_(nullptr),
         d_csr_values_(nullptr),
-        d_precond_inv_(nullptr),
         amgx_initialized_(false),
-        amgx_matrix_uploaded_(false),
-        h_precond_eps_(1e-12) {
+        amgx_matrix_uploaded_(false) {
     // Type-based casting to get the correct d_data from derived class
     if (data->type == TYPE_3243) {
       type_            = TYPE_3243;
@@ -98,7 +96,6 @@ class SyncedAmgXSolver : public SolverBase {
 
     cudaMalloc(&d_delta_v_, n_coef_ * 3 * sizeof(double));
     cudaMalloc(&d_r_, n_coef_ * 3 * sizeof(double));
-    cudaMalloc(&d_precond_inv_, n_coef_ * 9 * sizeof(double));
 
     // If data is a T10 and constraint is setup, copy over the constraint ptr
     if (type_ == TYPE_T10) {
@@ -158,7 +155,6 @@ class SyncedAmgXSolver : public SolverBase {
 
     cudaFree(d_delta_v_);
     cudaFree(d_r_);
-    cudaFree(d_precond_inv_);
 
     // Free sparse Hessian structures
     if (d_csr_row_offsets_)
@@ -336,7 +332,6 @@ class SyncedAmgXSolver : public SolverBase {
   int *d_csr_row_offsets_;      // Size: n_dofs + 1
   int *d_csr_col_indices_;      // Size: nnz
   double *d_csr_values_;        // Size: nnz
-  double *d_precond_inv_;  // Inverted 3x3 diagonal blocks (n_coef*9)
 
   // Persistent library handles (reused across iterations)
   cublasHandle_t cublas_handle_;
@@ -349,7 +344,6 @@ class SyncedAmgXSolver : public SolverBase {
   bool amgx_initialized_;
   bool amgx_matrix_uploaded_;
   double *d_norm_temp_;  // Reusable temp for cuBLAS norms
-  double h_precond_eps_;
 
   void InitAmgX();
 };
