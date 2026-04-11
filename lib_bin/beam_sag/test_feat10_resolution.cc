@@ -484,10 +484,12 @@ int main(int argc, char** argv) {
     }
     case SolverKind::kPCG: {
       SyncedPCGParams params = {1e-4, 1e-4, 1e-4, 1e14, 5,
-                                10,   opt.dt, 200, 1e-4, 1e-8};
+                                10,   opt.dt, 500, 1e-4, 1e-8,
+                                SyncedPCGPreconditioner::kJacobi};
       if (opt.res == 32) {
         params = {1e-3, 1e-3, 1e-3, 1e14, 5,
-                  10,   opt.dt, 500, 1e-3, 1e-8};
+                  10,   opt.dt, 500, 1e-3, 1e-8,
+                  SyncedPCGPreconditioner::kJacobi};
       }
       SyncedPCGSolver solver(&data, data.get_n_constraint());
       solver.Setup();
