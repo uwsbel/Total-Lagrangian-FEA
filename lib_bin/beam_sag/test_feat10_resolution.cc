@@ -315,9 +315,9 @@ int main(int argc, char** argv) {
   } else if (opt.res == 4) {
     plot_target_node = 353;
   } else if (opt.res == 8) {
-    plot_target_node = 1408;
+    plot_target_node = 1409;
   } else if (opt.res == 16) {
-    plot_target_node = 5630;
+    plot_target_node = 5633;
   } else if (opt.res == 32) {
     plot_target_node = 22529;
   }

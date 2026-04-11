@@ -1,8 +1,12 @@
 """
-Timing analysis script for nonlinear 3D beam dynamic analysis using Backward Euler.
+Timing analysis for nonlinear 3D beam dynamic analysis using Backward Euler.
 Minimal version with only solver execution and timing.
+
+Usage: mpirun -np N python beam_dynamic_timing.py --res RES [--mr]
 """
+import argparse
 import os
+import sys
 import time
 import numpy as np
 import ufl
@@ -11,23 +15,29 @@ from mpi4py import MPI
 from dolfinx import fem, default_scalar_type
 from dolfinx.fem.petsc import NonlinearProblem, assemble_residual
 from petsc4py import PETSc
-from tetgen_mesh_loader import load_tetgen_mesh_from_files
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir))
+from tet10_mesh_utils import load_tetgen_mesh_from_files
 
 rank = MPI.COMM_WORLD.rank
 
+parser = argparse.ArgumentParser()
+parser.add_argument("--res", type=int, default=0,
+                    help="Mesh resolution (0, 2, 4, 8, 16, 32)")
+parser.add_argument("--mr", action="store_true", help="Use Mooney-Rivlin material")
+args = parser.parse_args()
+RES = args.res
+
 if rank == 0:
-    print(f"Running with {MPI.COMM_WORLD.size} MPI ranks")
+    print(f"Running with {MPI.COMM_WORLD.size} MPI ranks, RES={RES}")
 
 # ============================================================================
 # GEOMETRY AND MESH SETUP
 # ============================================================================
-# Resolution selection: 0, 2, 4, 8, 16
-RES = 4
 
 # Construct mesh file paths
 script_dir = os.path.dirname(os.path.abspath(__file__))
-# Project root is three levels up from test-scripts/validation/fenics/, so go up three from here.
-project_root = os.path.normpath(os.path.join(script_dir, os.pardir, os.pardir, os.pardir))
+# Project root is four levels up from test-scripts/validation/fenics/timing/.
+project_root = os.path.normpath(os.path.join(script_dir, os.pardir, os.pardir, os.pardir, os.pardir))
 mesh_dir = os.path.join(project_root, "data", "meshes", "T10", "resolution")
 
 node_file = os.path.join(mesh_dir, f"beam_3x2x1_res{RES}.1.node")
@@ -103,7 +113,7 @@ E = default_scalar_type(E_val)
 nu = default_scalar_type(nu_val)
 
 # Select material model: "SVK" or "MOONEY_RIVLIN"
-MATERIAL_MODEL = "SVK"
+MATERIAL_MODEL = "MOONEY_RIVLIN" if args.mr else "SVK"
 
 v = ufl.TestFunction(V)
 u = fem.Function(V)
@@ -194,6 +204,8 @@ class PointLoadProblem(NonlinearProblem):
         # Set the custom residual function
         self.solver.setFunction(residual_callback, self.b)
 
+snes_tol = 1e-3 if RES == 32 else 1e-4
+
 problem = PointLoadProblem(
     F_form,
     u,
@@ -201,8 +213,8 @@ problem = PointLoadProblem(
     bcs=[bc_fixed],
     petsc_options={
         "snes_type": "newtonls",
-        "snes_atol": 1e-4,
-        "snes_rtol": 1e-4,
+        "snes_atol": snes_tol,
+        "snes_rtol": snes_tol,
         "snes_stol": 1e-6,
         "ksp_type": "preonly",
         "pc_type": "lu",
@@ -245,3 +257,4 @@ elapsed_time = end_time - start_time
 if rank == 0:
     print(f"Solver execution time (s): {elapsed_time:.6f}")
     print(f"Average time per step (ms): {(elapsed_time / n_steps) * 1000:.3f}")
+    print(f"RTF: {elapsed_time / (n_steps * dt):.6f}")
