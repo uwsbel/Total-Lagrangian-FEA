@@ -5,9 +5,10 @@
  * File:    SyncedPCG.cu
  * Brief:   Implements the SyncedPCGSolver class for a fully synchronized
  *          inexact Newton method using Preconditioned Conjugate Gradient
- *          (PCG) with a 3x3 block-diagonal preconditioner. Replaces
- *          cuDSS direct factorization from SyncedNewton with iterative
- *          cuSPARSE SpMV-based PCG.
+ *          (PCG) with selectable diagonal preconditioners, including
+ *          scalar Jacobi and 3x3 block Jacobi. Replaces cuDSS direct
+ *          factorization from SyncedNewton with iterative cuSPARSE
+ *          SpMV-based PCG.
  *==============================================================
  *==============================================================*/
 
@@ -625,6 +626,37 @@ __global__ void pcg_extract_block_diag_preconditioner(
   out[8] = (H[0][0] * H[1][1] - H[0][1] * H[1][0]) * inv_det;
 }
 
+// Extract scalar Jacobi preconditioner from the DOF-level CSR.
+// Stored in the same 3x3-per-node layout as the block preconditioner so the
+// application kernel can stay shared.
+__global__ void pcg_extract_scalar_jacobi_preconditioner(
+    int n_coef, double precond_eps, const int *d_csr_row_offsets,
+    const int *d_csr_col_indices, const double *d_csr_values,
+    double *d_precond_inv) {
+  int node_i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (node_i >= n_coef) return;
+
+  double *out = d_precond_inv + node_i * 9;
+  out[0] = 1.0; out[1] = 0.0; out[2] = 0.0;
+  out[3] = 0.0; out[4] = 1.0; out[5] = 0.0;
+  out[6] = 0.0; out[7] = 0.0; out[8] = 1.0;
+
+  for (int di = 0; di < 3; ++di) {
+    int row = 3 * node_i + di;
+    int row_begin = d_csr_row_offsets[row];
+    int row_len = d_csr_row_offsets[row + 1] - row_begin;
+    int pos = binary_search_column(&d_csr_col_indices[row_begin], row_len, row);
+
+    double diag = (pos >= 0) ? d_csr_values[row_begin + pos] : 0.0;
+    double eps_reg = precond_eps * fmax(1.0, fabs(diag));
+    double denom = diag + eps_reg;
+    if (fabs(denom) < 1e-30) {
+      denom = (diag >= 0.0) ? 1.0 : -1.0;
+    }
+    out[4 * di] = 1.0 / denom;
+  }
+}
+
 // Apply 3x3 block-diagonal preconditioner: z = M_inv @ r.
 // One thread per coefficient node.
 __global__ void pcg_apply_preconditioner(const double *d_precond_inv,
@@ -1103,10 +1135,20 @@ void SyncedPCGSolver::PCGSolve(int n_dofs) {
   const int blocks_coef = (n_coef_ + threads - 1) / threads;
   const int blocks_dof = (n_dofs + threads - 1) / threads;
 
-  // 1. Extract block-diagonal preconditioner
-  pcg_extract_block_diag_preconditioner<<<blocks_coef, threads>>>(
-      n_coef_, h_precond_eps_, d_csr_row_offsets_, d_csr_col_indices_,
-      d_csr_values_, d_precond_inv_);
+  // 1. Extract the requested diagonal preconditioner.
+  switch (h_preconditioner_) {
+    case SyncedPCGPreconditioner::kJacobi:
+      pcg_extract_scalar_jacobi_preconditioner<<<blocks_coef, threads>>>(
+          n_coef_, h_precond_eps_, d_csr_row_offsets_, d_csr_col_indices_,
+          d_csr_values_, d_precond_inv_);
+      break;
+    case SyncedPCGPreconditioner::kBlockJacobi:
+    default:
+      pcg_extract_block_diag_preconditioner<<<blocks_coef, threads>>>(
+          n_coef_, h_precond_eps_, d_csr_row_offsets_, d_csr_col_indices_,
+          d_csr_values_, d_precond_inv_);
+      break;
+  }
 
   // 2. z = M_inv @ r
   pcg_apply_preconditioner<<<blocks_coef, threads>>>(

@@ -6,9 +6,10 @@
  * File:    SyncedPCG.cuh
  * Brief:   Declares the SyncedPCGSolver class for a fully synchronized
  *          inexact Newton method using Preconditioned Conjugate Gradient
- *          (PCG) with a 3x3 block-diagonal preconditioner. Replaces
- *          cuDSS direct factorization from SyncedNewton with iterative
- *          cuSPARSE SpMV-based PCG.
+ *          (PCG) with selectable diagonal preconditioners, including
+ *          scalar Jacobi and 3x3 block Jacobi. Replaces cuDSS direct
+ *          factorization from SyncedNewton with iterative cuSPARSE
+ *          SpMV-based PCG.
  *==============================================================
  *==============================================================*/
 
@@ -27,6 +28,11 @@
 #include "../elements/FEAT10Data.cuh"
 #include "SolverBase.h"
 
+enum class SyncedPCGPreconditioner {
+  kBlockJacobi,
+  kJacobi,
+};
+
 struct SyncedPCGParams {
   double inner_atol, inner_rtol, outer_tol, rho;
   int max_outer, max_inner;
@@ -34,6 +40,7 @@ struct SyncedPCGParams {
   int max_pcg_iter;
   double pcg_rtol;
   double precond_eps;
+  SyncedPCGPreconditioner preconditioner;
 };
 
 class SyncedPCGSolver : public SolverBase {
@@ -203,6 +210,7 @@ class SyncedPCGSolver : public SolverBase {
     h_max_pcg_iter_ = p->max_pcg_iter;
     h_pcg_rtol_     = p->pcg_rtol;
     h_precond_eps_  = p->precond_eps;
+    h_preconditioner_ = p->preconditioner;
 
     cudaMemcpy(d_time_step_, &p->time_step, sizeof(double),
                cudaMemcpyHostToDevice);
@@ -354,4 +362,5 @@ class SyncedPCGSolver : public SolverBase {
   int h_max_pcg_iter_;
   double h_pcg_rtol_;
   double h_precond_eps_;
+  SyncedPCGPreconditioner h_preconditioner_;
 };

@@ -106,7 +106,8 @@ TEST(pcg_test, pcg_feat10) {
       1e-3,   // time_step
       200,    // max_pcg_iter
       1e-4,   // pcg_rtol
-      1e-8    // precond_eps
+      1e-8,   // precond_eps
+      SyncedPCGPreconditioner::kBlockJacobi
   };
   SyncedPCGSolver solver(&gpu_t10_data, gpu_t10_data.get_n_constraint());
   solver.Setup();
