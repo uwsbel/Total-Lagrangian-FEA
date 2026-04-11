@@ -15,7 +15,7 @@ from mpi4py import MPI
 from dolfinx import fem, default_scalar_type
 from dolfinx.fem.petsc import NonlinearProblem, assemble_residual
 from petsc4py import PETSc
-from tetgen_mesh_loader import load_tetgen_mesh_from_files
+from tet10_mesh_utils import load_tetgen_mesh_from_files, locate_raw_node_dof
 from dolfinx.io import VTKFile
 
 rank = MPI.COMM_WORLD.rank
@@ -135,39 +135,49 @@ f_ext_vector = f_temp.x.petsc_vec.copy()
 f_ext_vector.ghostUpdate(addv=PETSc.InsertMode.INSERT, mode=PETSc.ScatterMode.FORWARD)
 
 # ============================================================================
-# TRACKED NODES — coordinate-based matching (verified vertex nodes)
+# TRACKED NODES — exact raw node ids by resolution
 # ============================================================================
 if rank == 0:
     print("\nTRACKED NODE SETUP")
 
-def find_dof_by_coord(dof_coords, num_owned, target, tol=1e-4):
-    """Find owned DOF index closest to target coordinate."""
-    for i, coord in enumerate(dof_coords):
-        if i < num_owned:
-            if (abs(coord[0] - target[0]) < tol and
-                abs(coord[1] - target[1]) < tol and
-                abs(coord[2] - target[2]) < tol):
-                return i, coord.copy()
-    return None, None
 
-# Target coordinates (from TetGen .node file, 1-based indices 1184 and 242)
-target_A = np.array([0.10940, 0.00000, 0.07870])      # Spout tip
-target_B = np.array([-0.000004, 0.000004, 0.10050])    # Lid knob
+spout_raw_node_ids = {
+    0: 125,
+    2: 358,
+    4: 809,
+    8: 809,
+    16: 809,
+}
+lid_raw_node_ids = {
+    0: 732,
+    2: 96,
+    4: 242,
+    8: 242,
+    16: 242,
+}
+if RES not in spout_raw_node_ids or RES not in lid_raw_node_ids:
+    raise RuntimeError(f"Unsupported RES={RES} for teapot tracked-node lookup.")
 
-nodeA_dof, nodeA_coord = find_dof_by_coord(dof_coords, num_owned_dofs, target_A)
-nodeB_dof, nodeB_coord = find_dof_by_coord(dof_coords, num_owned_dofs, target_B)
+raw_node_id_A = spout_raw_node_ids[RES]
+raw_node_id_B = lid_raw_node_ids[RES]
+target_A, nodeA_dof, nodeA_coord, nodeA_rank = locate_raw_node_dof(
+    domain, rank, dof_coords, num_owned_dofs, node_file, raw_node_id_A
+)
+target_B, nodeB_dof, nodeB_coord, nodeB_rank = locate_raw_node_dof(
+    domain, rank, dof_coords, num_owned_dofs, node_file, raw_node_id_B
+)
 
-# Verify each node is found exactly once across all ranks
-for label, dof, coord in [("nodeA (spout)", nodeA_dof, nodeA_coord),
-                           ("nodeB (lid knob)", nodeB_dof, nodeB_coord)]:
-    all_ranks = domain.comm.gather(1 if dof is not None else 0, root=0)
+for label, raw_id, dof, coord, owner in [
+    ("nodeA (spout)", raw_node_id_A, nodeA_dof, nodeA_coord, nodeA_rank),
+    ("nodeB (lid knob)", raw_node_id_B, nodeB_dof, nodeB_coord, nodeB_rank),
+]:
     if rank == 0:
-        owner = next((r for r, v in enumerate(all_ranks) if v), -1)
         print(f"Tracked {label}:")
+        print(f"  Raw node id: {raw_id}")
         print(f"  Owner rank: {owner}")
+        print(f"  Coordinates: ({coord[0]:.6f}, {coord[1]:.6f}, {coord[2]:.6f})")
     if dof is not None:
         print(f"  DOF index: {dof}")
-        print(f"  Coordinates: ({coord[0]:.6f}, {coord[1]:.6f}, {coord[2]:.6f})")
 
 # ============================================================================
 # MATERIAL MODEL — SVK + Kelvin-Voigt damping
@@ -384,8 +394,8 @@ if rank == 0:
 if rank == 0 and len(node_xyz_history) > 0:
     csv_path = os.path.join(root_output_dir, f"node_xyz_history_fenics_teapot_res{RES}_svk.csv")
     with open(csv_path, 'w') as f:
-        f.write("# nodeA: spout (idx 1184)\n")
-        f.write("# nodeB: lid_knob (idx 242)\n")
+        f.write(f"# nodeA: spout (raw id {raw_node_id_A})\n")
+        f.write(f"# nodeB: lid_knob (raw id {raw_node_id_B})\n")
         f.write("step,nodeA_x,nodeA_y,nodeA_z,nodeB_x,nodeB_y,nodeB_z\n")
         for i, row in enumerate(node_xyz_history):
             f.write(f"{i},{row[0]:.17f},{row[1]:.17f},{row[2]:.17f},"

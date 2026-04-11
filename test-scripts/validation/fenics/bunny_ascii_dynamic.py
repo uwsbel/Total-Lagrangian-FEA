@@ -14,7 +14,7 @@ from mpi4py import MPI
 from dolfinx import fem, default_scalar_type
 from dolfinx.fem.petsc import NonlinearProblem, assemble_residual
 from petsc4py import PETSc
-from tetgen_mesh_loader import load_tetgen_mesh_from_files
+from tet10_mesh_utils import load_tetgen_mesh_from_files, locate_raw_node_dof
 from dolfinx.io import VTKFile
 
 rank = MPI.COMM_WORLD.rank
@@ -130,30 +130,24 @@ f_ext_vector.ghostUpdate(addv=PETSc.InsertMode.INSERT, mode=PETSc.ScatterMode.FO
 if rank == 0:
     print("\nTRACKED NODE SETUP")
 
-def find_dof_by_coord(dof_coords, num_owned, target, tol=1e-4):
-    """Find owned DOF index closest to target coordinate."""
-    for i, coord in enumerate(dof_coords):
-        if i < num_owned:
-            if (abs(coord[0] - target[0]) < tol and
-                abs(coord[1] - target[1]) < tol and
-                abs(coord[2] - target[2]) < tol):
-                return i, coord.copy()
-    return None, None
 
-# Target coordinates (from TetGen .node file, 0-based indices 89 and 85)
-target_A = np.array([0.85370, 2.80200, 9.28020])   # Right ear
-target_B = np.array([-4.69860, 6.29300, 8.66110])   # Left ear
-
-nodeA_dof, nodeA_coord = find_dof_by_coord(dof_coords, num_owned_dofs, target_A)
-nodeB_dof, nodeB_coord = find_dof_by_coord(dof_coords, num_owned_dofs, target_B)
+raw_node_id_A = 89
+raw_node_id_B = 85
+target_A, nodeA_dof, nodeA_coord, nodeA_rank = locate_raw_node_dof(
+    domain, rank, dof_coords, num_owned_dofs, node_file, raw_node_id_A
+)
+target_B, nodeB_dof, nodeB_coord, nodeB_rank = locate_raw_node_dof(
+    domain, rank, dof_coords, num_owned_dofs, node_file, raw_node_id_B
+)
 
 # Verify each node is found exactly once across all ranks
-for label, dof, coord in [("nodeA (right ear)", nodeA_dof, nodeA_coord),
-                           ("nodeB (left ear)", nodeB_dof, nodeB_coord)]:
-    all_ranks = domain.comm.gather(1 if dof is not None else 0, root=0)
+for label, raw_id, dof, coord, owner in [
+    ("nodeA (right ear)", raw_node_id_A, nodeA_dof, nodeA_coord, nodeA_rank),
+    ("nodeB (left ear)", raw_node_id_B, nodeB_dof, nodeB_coord, nodeB_rank),
+]:
     if rank == 0:
-        owner = next((r for r, v in enumerate(all_ranks) if v), -1)
         print(f"Tracked {label}:")
+        print(f"  Raw node id: {raw_id}")
         print(f"  Owner rank: {owner}")
     if dof is not None:
         print(f"  DOF index: {dof}")
@@ -374,8 +368,8 @@ if rank == 0:
 if rank == 0 and len(node_xyz_history) > 0:
     csv_path = os.path.join(root_output_dir, "node_xyz_history_fenics_bunny_svk.csv")
     with open(csv_path, 'w') as f:
-        f.write("# nodeA: right_ear (idx 89)\n")
-        f.write("# nodeB: left_ear (idx 85)\n")
+        f.write("# nodeA: right_ear (raw id 89)\n")
+        f.write("# nodeB: left_ear (raw id 85)\n")
         f.write("step,nodeA_x,nodeA_y,nodeA_z,nodeB_x,nodeB_y,nodeB_z\n")
         for i, row in enumerate(node_xyz_history):
             f.write(f"{i},{row[0]:.17f},{row[1]:.17f},{row[2]:.17f},"

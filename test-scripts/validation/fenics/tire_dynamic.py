@@ -15,7 +15,7 @@ from mpi4py import MPI
 from dolfinx import fem, default_scalar_type
 from dolfinx.fem.petsc import NonlinearProblem, assemble_residual
 from petsc4py import PETSc
-from tetgen_mesh_loader import load_tetgen_mesh_from_files
+from tet10_mesh_utils import load_tetgen_mesh_from_files, locate_raw_node_dof
 from dolfinx.io import VTKFile
 
 rank = MPI.COMM_WORLD.rank
@@ -135,37 +135,35 @@ f_ext_vector = f_temp.x.petsc_vec.copy()
 f_ext_vector.ghostUpdate(addv=PETSc.InsertMode.INSERT, mode=PETSc.ScatterMode.FORWARD)
 
 # ============================================================================
-# TRACKED NODE — coordinate-based matching (verified vertex node)
+# TRACKED NODE — exact raw node id by resolution
 # ============================================================================
 if rank == 0:
     print("\nTRACKED NODE SETUP")
 
-def find_dof_by_coord(dof_coords, num_owned, target, tol=1e-4):
-    """Find owned DOF index closest to target coordinate."""
-    for i, coord in enumerate(dof_coords):
-        if i < num_owned:
-            if (abs(coord[0] - target[0]) < tol and
-                abs(coord[1] - target[1]) < tol and
-                abs(coord[2] - target[2]) < tol):
-                return i, coord.copy()
-    return None, None
 
-# Target coordinate (from TetGen .node file, 1-based index 2657)
-target = np.array([-0.02020, 0.00580, 0.83730])  # Crown vertex
+tire_tracked_node_raw_ids = {
+    0: 416,
+    2: 765,
+    4: 1713,
+    8: 3708,
+    16: 28836,
+}
+if RES not in tire_tracked_node_raw_ids:
+    raise RuntimeError(f"Unsupported RES={RES} for tire tracked-node lookup.")
 
-tracked_node_dof, tracked_node_coord = find_dof_by_coord(
-    dof_coords, num_owned_dofs, target)
+tracked_node_raw_id = tire_tracked_node_raw_ids[RES]
+tracked_node_position, tracked_node_dof, tracked_node_coord, tracked_node_rank = locate_raw_node_dof(
+    domain, rank, dof_coords, num_owned_dofs, node_file, tracked_node_raw_id
+)
 
-# Verify node is found exactly once across all ranks
-all_ranks = domain.comm.gather(1 if tracked_node_dof is not None else 0, root=0)
 if rank == 0:
-    owner = next((r for r, v in enumerate(all_ranks) if v), -1)
-    print(f"Tracked node (crown):")
-    print(f"  Owner rank: {owner}")
-if tracked_node_dof is not None:
-    print(f"  DOF index: {tracked_node_dof}")
+    print("Tracked node (crown):")
+    print(f"  Raw node id: {tracked_node_raw_id}")
+    print(f"  Owner rank: {tracked_node_rank}")
     print(f"  Coordinates: ({tracked_node_coord[0]:.6f}, "
           f"{tracked_node_coord[1]:.6f}, {tracked_node_coord[2]:.6f})")
+if tracked_node_dof is not None:
+    print(f"  DOF index: {tracked_node_dof}")
 
 # ============================================================================
 # MATERIAL MODEL — SVK + Kelvin-Voigt damping
@@ -371,7 +369,7 @@ if rank == 0:
 if rank == 0 and len(node_xyz_history) > 0:
     csv_path = os.path.join(root_output_dir, f"node_xyz_history_fenics_tire_res{RES}_svk.csv")
     with open(csv_path, 'w') as f:
-        f.write("# node: crown (idx 2657)\n")
+        f.write(f"# node: crown (raw id {tracked_node_raw_id})\n")
         f.write("step,x_position,y_position,z_position\n")
         for i, (x_val, y_val, z_val) in enumerate(node_xyz_history):
             f.write(f"{i},{x_val:.17f},{y_val:.17f},{z_val:.17f}\n")

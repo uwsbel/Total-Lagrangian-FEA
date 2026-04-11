@@ -14,7 +14,7 @@ from mpi4py import MPI
 from dolfinx import fem, default_scalar_type
 from dolfinx.fem.petsc import NonlinearProblem, assemble_residual
 from petsc4py import PETSc
-from tetgen_mesh_loader import load_tetgen_mesh_from_files
+from tet10_mesh_utils import load_tetgen_mesh_from_files, locate_raw_node_dof
 from dolfinx.io import VTKFile
 
 rank = MPI.COMM_WORLD.rank
@@ -242,39 +242,41 @@ if rank == 0:
 
 
 # ============================================================================
-# TRACKED NODE - Match C++ TetGen node index for RES_0
+# TRACKED NODE - Match C++ tracked node for this resolution
 # ============================================================================
 if rank == 0:
     print("\nTRACKED NODE SETUP")
 
-# Match current C++ run (which tracks the top corner at (3, 2, 1))
-tracked_node_position = np.array([L, W, H])
-tracked_node_dof = None
-tracked_node_coord = None
-tracked_node_rank = -1  # Which rank owns the tracked node
 
-# Only search in owned DOFs, not ghosts
-for i, coord in enumerate(dof_coords):
-    if i < num_owned_dofs and (abs(coord[0] - tracked_node_position[0]) < 1e-6 and 
-        abs(coord[1] - tracked_node_position[1]) < 1e-6 and 
-        abs(coord[2] - tracked_node_position[2]) < 1e-6):
-        tracked_node_dof = i
-        tracked_node_coord = coord
-        tracked_node_rank = rank
-        break
+beam_tracked_node_raw_ids = {
+    0: 24,
+    2: 90,
+    4: 354,
+    8: 1410,
+    16: 5634,
+    32: 22530,
+}
+if RES not in beam_tracked_node_raw_ids:
+    raise RuntimeError(f"Unsupported RES={RES} for tracked beam node lookup.")
 
-# Use MPI to determine which rank has the tracked node
-all_ranks_with_node = domain.comm.gather(tracked_node_rank, root=0)
+tracked_node_raw_id = beam_tracked_node_raw_ids[RES]
+tracked_node_position, tracked_node_dof, tracked_node_coord, tracked_node_rank = locate_raw_node_dof(
+    domain, rank, dof_coords, num_owned_dofs, node_file, tracked_node_raw_id
+)
+
 if rank == 0:
-    owner_rank = next((r for r in all_ranks_with_node if r >= 0), -1)
-    if owner_rank >= 0:
-        print(f"Tracked node found at position ({tracked_node_position[0]}, {tracked_node_position[1]}, {tracked_node_position[2]}):")
-        print(f"  Owned by rank: {owner_rank}")
-        if tracked_node_dof is not None:
-            print(f"  DOF node index: {tracked_node_dof}")
-            print(f"  Actual coordinates: ({tracked_node_coord[0]:.6f}, {tracked_node_coord[1]:.6f}, {tracked_node_coord[2]:.6f})")
-    else:
-        print(f"WARNING: No DOF node found at position ({tracked_node_position[0]}, {tracked_node_position[1]}, {tracked_node_position[2]})")
+    print(
+        f"Tracked node raw id {tracked_node_raw_id}: "
+        f"({tracked_node_position[0]:.6f}, {tracked_node_position[1]:.6f}, "
+        f"{tracked_node_position[2]:.6f})"
+    )
+    print(f"  Owned by rank: {tracked_node_rank}")
+if tracked_node_dof is not None:
+    print(f"  DOF node index: {tracked_node_dof}")
+    print(
+        f"  Actual coordinates: ({tracked_node_coord[0]:.6f}, "
+        f"{tracked_node_coord[1]:.6f}, {tracked_node_coord[2]:.6f})"
+    )
 
 # ============================================================================
 # MATERIAL MODEL AND KINEMATICS
@@ -558,6 +560,7 @@ if rank == 0 and len(node_xyz_history) > 0:
     )
     
     with open(csv_path, 'w') as f:
+        f.write(f"# raw_node_id: {tracked_node_raw_id}\n")
         f.write("step,x_position,y_position,z_position\n")
         for i, (x_val, y_val, z_val) in enumerate(node_xyz_history):
             f.write(f"{i},{x_val:.17f},{y_val:.17f},{z_val:.17f}\n")

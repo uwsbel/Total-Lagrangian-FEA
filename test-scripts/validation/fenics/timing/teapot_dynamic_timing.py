@@ -17,7 +17,7 @@ from dolfinx import fem, default_scalar_type
 from dolfinx.fem.petsc import NonlinearProblem, assemble_residual
 from petsc4py import PETSc
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir))
-from tetgen_mesh_loader import load_tetgen_mesh_from_files
+from tet10_mesh_utils import load_tetgen_mesh_from_files
 
 rank = MPI.COMM_WORLD.rank
 

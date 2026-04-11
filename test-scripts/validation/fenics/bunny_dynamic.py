@@ -16,7 +16,7 @@ from mpi4py import MPI
 from dolfinx import fem, default_scalar_type
 from dolfinx.fem.petsc import NonlinearProblem, assemble_residual
 from petsc4py import PETSc
-from tetgen_mesh_loader import load_tetgen_mesh_from_files
+from tet10_mesh_utils import load_tetgen_mesh_from_files, locate_raw_node_dof
 from dolfinx.io import VTKFile
 
 rank = MPI.COMM_WORLD.rank
@@ -130,6 +130,51 @@ for node_idx in force_dofs:
 
 f_ext_vector = f_temp.x.petsc_vec.copy()
 f_ext_vector.ghostUpdate(addv=PETSc.InsertMode.INSERT, mode=PETSc.ScatterMode.FORWARD)
+
+# ============================================================================
+# TRACKED NODES — exact raw node ids by resolution
+# ============================================================================
+if rank == 0:
+    print("\nTRACKED NODE SETUP")
+
+
+right_ear_raw_node_ids = {
+    0: 1326,
+    2: 2712,
+    4: 541,
+    8: 10980,
+    16: 22820,
+}
+left_ear_raw_node_ids = {
+    0: 736,
+    2: 1573,
+    4: 3284,
+    8: 6603,
+    16: 13870,
+}
+if RES not in right_ear_raw_node_ids or RES not in left_ear_raw_node_ids:
+    raise RuntimeError(f"Unsupported RES={RES} for bunny tracked-node lookup.")
+
+raw_node_id_A = right_ear_raw_node_ids[RES]
+raw_node_id_B = left_ear_raw_node_ids[RES]
+target_A, nodeA_dof, nodeA_coord, nodeA_rank = locate_raw_node_dof(
+    domain, rank, dof_coords, num_owned_dofs, node_file, raw_node_id_A
+)
+target_B, nodeB_dof, nodeB_coord, nodeB_rank = locate_raw_node_dof(
+    domain, rank, dof_coords, num_owned_dofs, node_file, raw_node_id_B
+)
+
+for label, raw_id, dof, coord, owner in [
+    ("nodeA (right ear)", raw_node_id_A, nodeA_dof, nodeA_coord, nodeA_rank),
+    ("nodeB (left ear)", raw_node_id_B, nodeB_dof, nodeB_coord, nodeB_rank),
+]:
+    if rank == 0:
+        print(f"Tracked {label}:")
+        print(f"  Raw node id: {raw_id}")
+        print(f"  Owner rank: {owner}")
+    if dof is not None:
+        print(f"  DOF index: {dof}")
+        print(f"  Coordinates: ({coord[0]:.6f}, {coord[1]:.6f}, {coord[2]:.6f})")
 
 # ============================================================================
 # MATERIAL MODEL — SVK, no damping
@@ -265,6 +310,8 @@ u_old.x.scatter_forward()
 v_old.x.array[:] = 0.0
 v_old.x.scatter_forward()
 
+node_xyz_history = []
+
 for n in range(n_steps):
     t = n * dt_val
 
@@ -290,6 +337,33 @@ for n in range(n_steps):
     # Update velocity (Backward Euler)
     v_new = (u.x.array - u_old.x.array) / dt_val
 
+    # Track node positions (dual nodes)
+    local_posA = None
+    if nodeA_dof is not None:
+        u_x = u.x.array[nodeA_dof * block_size + 0]
+        u_y = u.x.array[nodeA_dof * block_size + 1]
+        u_z = u.x.array[nodeA_dof * block_size + 2]
+        local_posA = [float(nodeA_coord[0] + u_x),
+                      float(nodeA_coord[1] + u_y),
+                      float(nodeA_coord[2] + u_z)]
+
+    local_posB = None
+    if nodeB_dof is not None:
+        u_x = u.x.array[nodeB_dof * block_size + 0]
+        u_y = u.x.array[nodeB_dof * block_size + 1]
+        u_z = u.x.array[nodeB_dof * block_size + 2]
+        local_posB = [float(nodeB_coord[0] + u_x),
+                      float(nodeB_coord[1] + u_y),
+                      float(nodeB_coord[2] + u_z)]
+
+    all_posA = domain.comm.gather(local_posA, root=0)
+    all_posB = domain.comm.gather(local_posB, root=0)
+    if rank == 0:
+        posA = next((p for p in all_posA if p is not None), None)
+        posB = next((p for p in all_posB if p is not None), None)
+        if posA is not None and posB is not None:
+            node_xyz_history.append(posA + posB)
+
     # Update state
     u_old.x.array[:] = u.x.array[:]
     u_old.x.scatter_forward()
@@ -299,10 +373,31 @@ for n in range(n_steps):
     # Progress output every 100 steps
     if rank == 0 and (n % 100 == 0 or n < 5):
         max_disp = np.max(np.linalg.norm(u.x.array.reshape(-1, 3), axis=1))
-        print(f"Step {n:5d}: max_disp={max_disp:.4e}  iters={num_its}")
+        if len(node_xyz_history) > 0:
+            row = node_xyz_history[-1]
+            print(f"Step {n:5d}: nodeA=({row[0]:.6f}, {row[1]:.6f}, {row[2]:.6f})  "
+                  f"nodeB=({row[3]:.6f}, {row[4]:.6f}, {row[5]:.6f})  "
+                  f"max_disp={max_disp:.4e}  iters={num_its}")
+        else:
+            print(f"Step {n:5d}: max_disp={max_disp:.4e}  iters={num_its}")
 
 if vtk_file is not None:
     vtk_file.close()
 
 if rank == 0:
     print("\nDYNAMIC ANALYSIS COMPLETE")
+
+# ============================================================================
+# CSV OUTPUT
+# ============================================================================
+if rank == 0 and len(node_xyz_history) > 0:
+    csv_path = os.path.join(root_output_dir, "node_xyz_history_fenics_bunny_scaling_svk.csv")
+    with open(csv_path, 'w') as f:
+        f.write(f"# nodeA: right_ear (raw id {raw_node_id_A})\n")
+        f.write(f"# nodeB: left_ear (raw id {raw_node_id_B})\n")
+        f.write("step,nodeA_x,nodeA_y,nodeA_z,nodeB_x,nodeB_y,nodeB_z\n")
+        for i, row in enumerate(node_xyz_history):
+            f.write(f"{i},{row[0]:.17f},{row[1]:.17f},{row[2]:.17f},"
+                    f"{row[3]:.17f},{row[4]:.17f},{row[5]:.17f}\n")
+    print(f"Wrote tracked node history to {csv_path}")
+    print(f"  Total steps: {len(node_xyz_history)}")
