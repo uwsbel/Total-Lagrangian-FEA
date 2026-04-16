@@ -1,7 +1,7 @@
 /*==============================================================
  *==============================================================
  * Project: RoboDyna
- * Author:  Json Zhou
+ * Author:  Json Zhou, Ganesh Arivoli
  * File:    MixedConstraintSystem.cu
  * Brief:   Host-side mixed-element constraint builder and device-side
  *          constraint/Jacobian evaluation for holistic ANCF3243 + FEAT10
@@ -421,6 +421,62 @@ MixedConstraintPointBinding MixedConstraintSystem::MakeCoefficientBinding(
   point.count = 1;
   point.coef_indices[0] = global_coef;
   point.weights[0] = 1.0;
+  return point;
+}
+
+MixedConstraintPointBinding MixedConstraintSystem::MakeANCF3243NodeBinding(
+    int block_idx, int node_idx) const {
+  if (block_idx < 0 || block_idx >= static_cast<int>(block_cache_.size())) {
+    throw std::out_of_range(
+        "MixedConstraintSystem::MakeANCF3243NodeBinding: block index out of range");
+  }
+  const BlockCache& cache = block_cache_[static_cast<size_t>(block_idx)];
+  if (cache.type != TYPE_3243) {
+    throw std::invalid_argument(
+        "MixedConstraintSystem::MakeANCF3243NodeBinding: block is not TYPE_3243");
+  }
+  const int n_nodes_in_block = cache.coef_count / 4;
+  if (node_idx < 0 || node_idx >= n_nodes_in_block) {
+    throw std::out_of_range(
+        "MixedConstraintSystem::MakeANCF3243NodeBinding: node index out of range");
+  }
+  MixedConstraintPointBinding point;
+  point.count = 1;
+  point.coef_indices[0] = cache.coef_offset + 4 * node_idx + 0;
+  point.weights[0] = 1.0;
+  return point;
+}
+
+MixedConstraintPointBinding MixedConstraintSystem::MakeANCF3243SlopeBinding(
+    int block_idx, int node_idx, int slope_slot, double eps) const {
+  if (block_idx < 0 || block_idx >= static_cast<int>(block_cache_.size())) {
+    throw std::out_of_range(
+        "MixedConstraintSystem::MakeANCF3243SlopeBinding: block index out of range");
+  }
+  const BlockCache& cache = block_cache_[static_cast<size_t>(block_idx)];
+  if (cache.type != TYPE_3243) {
+    throw std::invalid_argument(
+        "MixedConstraintSystem::MakeANCF3243SlopeBinding: block is not TYPE_3243");
+  }
+  const int n_nodes_in_block = cache.coef_count / 4;
+  if (node_idx < 0 || node_idx >= n_nodes_in_block) {
+    throw std::out_of_range(
+        "MixedConstraintSystem::MakeANCF3243SlopeBinding: node index out of range");
+  }
+  if (slope_slot < 1 || slope_slot > 3) {
+    throw std::invalid_argument(
+        "MixedConstraintSystem::MakeANCF3243SlopeBinding: slope_slot must be 1, 2, or 3");
+  }
+  if (!std::isfinite(eps) || eps == 0.0) {
+    throw std::invalid_argument(
+        "MixedConstraintSystem::MakeANCF3243SlopeBinding: eps must be finite and nonzero");
+  }
+  MixedConstraintPointBinding point;
+  point.count = 2;
+  point.coef_indices[0] = cache.coef_offset + 4 * node_idx + 0;
+  point.weights[0] = 1.0;
+  point.coef_indices[1] = cache.coef_offset + 4 * node_idx + slope_slot;
+  point.weights[1] = eps;
   return point;
 }
 

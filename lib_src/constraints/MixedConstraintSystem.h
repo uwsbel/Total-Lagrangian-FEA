@@ -1,7 +1,7 @@
 /*==============================================================
  *==============================================================
  * Project: RoboDyna
- * Author:  Json Zhou
+ * Author:  Json Zhou, Ganesh Arivoli
  * File:    MixedConstraintSystem.h
  * Brief:   Global mixed-element constraint builder for holistic solves.
  *          Supports point-based scalar constraints spanning ANCF3243 beam
@@ -80,6 +80,17 @@ class MixedConstraintSystem {
   MixedConstraintSystem& operator=(MixedConstraintSystem&&) = delete;
 
   MixedConstraintPointBinding MakeCoefficientBinding(int global_coef) const;
+
+  // 1-coef binding at an ANCF3243 node's position slot (TYPE_3243 only).
+  MixedConstraintPointBinding MakeANCF3243NodeBinding(int block_idx,
+                                                      int node_idx) const;
+
+  // 2-coef binding (position + eps * slope) at an ANCF3243 node;
+  // slope_slot in {1,2,3} picks r_s / r_v / r_w.  TYPE_3243 only.
+  MixedConstraintPointBinding MakeANCF3243SlopeBinding(int block_idx,
+                                                       int node_idx,
+                                                       int slope_slot,
+                                                       double eps) const;
 
   MixedConstraintPointBinding LocateReferencePoint(
       int block_idx, const Eigen::Vector3d& reference_point) const;
