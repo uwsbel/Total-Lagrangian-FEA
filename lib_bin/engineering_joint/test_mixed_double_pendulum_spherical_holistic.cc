@@ -398,7 +398,9 @@ int main(int argc, char** argv) {
                               sizeof(double),
                           cudaMemcpyHostToDevice));
 
-  // Constraints: ANCF node bindings + LocateReferencePoint for T10.
+  // Constraints.  ANCF side uses MakeANCF3243NodeBinding to bypass the
+  // LocateReferencePointANCF3243 defect (see TODO there).  T10 side uses
+  // LocateReferencePoint normally.
   MixedConstraintSystem constraints(&problem);
 
   const MixedConstraintPointBinding p_world =

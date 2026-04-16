@@ -405,7 +405,9 @@ int main(int argc, char** argv) {
                               sizeof(double),
                           cudaMemcpyHostToDevice));
 
-  // Constraints: ANCF slope bindings + LocateReferencePoint for T10.
+  // Constraints.  ANCF side uses MakeANCF3243{Node,Slope}Binding to bypass
+  // the LocateReferencePointANCF3243 defect (see TODO there).  T10 side
+  // uses LocateReferencePoint normally.
   constexpr double kSecondaryEps = 0.02;
 
   MixedConstraintSystem constraints(&problem);

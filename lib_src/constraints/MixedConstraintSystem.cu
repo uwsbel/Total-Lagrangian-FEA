@@ -480,6 +480,12 @@ MixedConstraintPointBinding MixedConstraintSystem::MakeANCF3243SlopeBinding(
   return point;
 }
 
+// TODO: the TYPE_3243 branch below delegates to LocateReferencePointANCF3243,
+// which has a locator defect (see TODO on that function).  Every geometry-
+// based joint overload (AddSphericalJoint / AddRevoluteJoint / AddFixedJoint
+// / AddCylindricalJoint taking two block indices) funnels through here and
+// inherits the failure for ANCF blocks.  Fix the locator to make this path
+// work uniformly.
 MixedConstraintPointBinding MixedConstraintSystem::LocateReferencePoint(
     int block_idx, const Eigen::Vector3d& reference_point) const {
   if (block_idx < 0 || block_idx >= static_cast<int>(block_cache_.size())) {
@@ -1238,6 +1244,9 @@ MixedConstraintPointBinding MixedConstraintSystem::LocateReferencePointT10(
   return best_point;
 }
 
+// TODO: Newton search below starts at the centerline (coord[1]=coord[2]=0),
+// so off-centerline reference points can converge to a wrong element and
+// return a bogus binding.
 MixedConstraintPointBinding MixedConstraintSystem::LocateReferencePointANCF3243(
     const BlockCache& cache, const Eigen::Vector3d& reference_point) const {
   MixedConstraintPointBinding best_point;
