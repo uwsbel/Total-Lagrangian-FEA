@@ -1,17 +1,17 @@
 /**
- * FEAT10 Double Pendulum Revolute-Joint Demo (Holistic Solver)
+ * FEAT10 Double Pendulum Spherical-Joint Demo (Holistic Solver)
  *
  * Builds a two-link T10 double pendulum from two separate FEAT10 blocks.
- * The upper link is attached to the world through a revolute joint, and the
- * lower link is attached to the upper link through a second revolute joint.
+ * The upper link is attached to the world through a spherical joint, and the
+ * lower link is attached to the upper link through a second spherical joint.
  *
  * This demo exists as a temporary exerciser for the new holistic mixed
  * constraint path:
  *   FEMultiElementProblem + MixedConstraintSystem + HolisticNewtonSolver
  *
  * Output:
- *   output/engineering_joint/double_pendulum_revolute_holistic_upper_XXXXXX.vtu
- *   output/engineering_joint/double_pendulum_revolute_holistic_lower_XXXXXX.vtu
+ *   output/engineering_joint/double_pendulum_spherical_holistic_upper_XXXXXX.vtu
+ *   output/engineering_joint/double_pendulum_spherical_holistic_lower_XXXXXX.vtu
  */
 
 #include <cuda_runtime.h>
@@ -24,7 +24,6 @@
 #include <iostream>
 #include <memory>
 #include <sstream>
-#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -49,10 +48,12 @@ constexpr double kBeamLength           = 0.5;
 constexpr double kUpperHingeLocalZ     = 0.0;
 constexpr double kLowerHingeLocalZ     = kBeamLength;
 constexpr double kLowerLinkHingeLocalZ = 0.0;
-constexpr double kJointOffset          = 0.001;
 
-constexpr double kUpperAngleDeg = 35.0;
-constexpr double kLowerAngleDeg = -25.0;
+// 3D-tilted double pendulum pose (matches test_feat10_double_pendulum_spherical).
+constexpr double kUpperAngleDeg      = 35.0;
+constexpr double kLowerAngleDeg      = -25.0;
+constexpr double kUpperOutOfPlaneDeg = 18.0;
+constexpr double kLowerOutOfPlaneDeg = -27.0;
 
 const SolidMaterialProperties kLinkMaterial =
     SolidMaterialProperties::SVK(1.0e7,   // E
@@ -72,10 +73,11 @@ Eigen::Vector3d TransformPoint(const Eigen::Matrix4d& transform,
   return (transform * point_h).head<3>();
 }
 
-Eigen::Matrix4d MakeBeamTransform(double angle_y,
+Eigen::Matrix4d MakeBeamTransform(double angle_x, double angle_y,
                                   const Eigen::Vector3d& hinge_point,
                                   double hinge_local_z) {
-  const Eigen::Matrix4d rotation = ANCFCPUUtils::rotationY(angle_y);
+  const Eigen::Matrix4d rotation =
+      ANCFCPUUtils::rotationX(angle_x) * ANCFCPUUtils::rotationY(angle_y);
   const Eigen::Vector3d rotated_hinge =
       TransformPoint(rotation, Eigen::Vector3d(0.0, 0.0, hinge_local_z));
   return ANCFCPUUtils::translation(hinge_point.x() - rotated_hinge.x(),
@@ -139,57 +141,13 @@ void AppendGravityForBlock(Eigen::VectorXd* h_f_ext,
   }
 }
 
-Eigen::Vector3d BuildPerpendicularAxis1(const Eigen::Vector3d& axis) {
-  const Eigen::Vector3d trial =
-      (std::abs(axis.z()) < 0.9) ? Eigen::Vector3d::UnitZ()
-                                 : Eigen::Vector3d::UnitX();
-  const Eigen::Vector3d p1 = axis.cross(trial);
-  const double norm = p1.norm();
-  if (norm < 1e-12) {
-    throw std::runtime_error("Failed to construct perpendicular axis");
-  }
-  return p1 / norm;
-}
-
-MixedConstraintPointBinding LocateWithAdaptiveOffset(
-    const MixedConstraintSystem& constraints, int block_idx,
-    const Eigen::Vector3d& base_point, const Eigen::Vector3d& direction,
-    double initial_offset) {
-  double offset = initial_offset;
-  for (int attempt = 0; attempt < 8; ++attempt) {
-    try {
-      return constraints.LocateReferencePoint(block_idx,
-                                              base_point + offset * direction);
-    } catch (const std::runtime_error&) {
-      offset *= 0.5;
-    }
-  }
-  throw std::runtime_error("Failed to locate offset reference point");
-}
-
-void AddRevoluteJointToWorld(MixedConstraintSystem* constraints, int block_idx,
-                             const Eigen::Vector3d& hinge_point,
-                             const Eigen::Vector3d& hinge_axis, double offset,
-                             double dp1_weight) {
-  const double axis_norm = hinge_axis.norm();
-  if (axis_norm < 1e-12) {
-    throw std::invalid_argument("World revolute axis must be non-zero");
-  }
-
-  const Eigen::Vector3d axis = hinge_axis / axis_norm;
+void AddSphericalJointToWorld(MixedConstraintSystem* constraints, int block_idx,
+                              const Eigen::Vector3d& hinge_point) {
   const MixedConstraintPointBinding p =
       constraints->LocateReferencePoint(block_idx, hinge_point);
-  const MixedConstraintPointBinding q = LocateWithAdaptiveOffset(
-      *constraints, block_idx, hinge_point, axis, offset);
-
   constraints->AddPointToWorldCDAxis(p, 0, hinge_point.x());
   constraints->AddPointToWorldCDAxis(p, 1, hinge_point.y());
   constraints->AddPointToWorldCDAxis(p, 2, hinge_point.z());
-
-  const Eigen::Vector3d p1 = BuildPerpendicularAxis1(axis);
-  const Eigen::Vector3d p2 = axis.cross(p1).normalized();
-  constraints->AddWorldDP1Constraint(p, q, p1, 0.0, dp1_weight);
-  constraints->AddWorldDP1Constraint(p, q, p2, 0.0, dp1_weight);
 }
 
 Eigen::Vector3d EvaluateCurrentPointPosition(
@@ -225,7 +183,7 @@ void RetrieveUnifiedPositions(const FEStateBuffer& state, Eigen::VectorXd* x,
 
 std::string MakeOutputPath(const std::string& body_name, int frame) {
   std::ostringstream oss;
-  oss << "output/engineering_joint/double_pendulum_revolute_holistic_"
+  oss << "output/engineering_joint/double_pendulum_spherical_holistic_"
       << body_name << "_" << std::setw(6) << std::setfill('0') << frame
       << ".vtu";
   return oss.str();
@@ -250,7 +208,7 @@ int main(int argc, char** argv) {
   }
 
   std::cout << "========================================\n";
-  std::cout << "FEAT10 Double Pendulum Revolute (Holistic)\n";
+  std::cout << "FEAT10 Double Pendulum Spherical (Holistic)\n";
   std::cout << "========================================\n";
   std::cout << "steps=" << max_steps
             << " export_interval=" << export_interval << "\n";
@@ -275,30 +233,32 @@ int main(int argc, char** argv) {
   const auto& inst_lower = mesh_manager.GetMeshInstance(mesh_lower);
 
   const Eigen::Vector3d top_hinge(0.0, 0.0, 0.7);
-  const double upper_angle = kPi - DegToRad(kUpperAngleDeg);
-  const double lower_angle = kPi - DegToRad(kLowerAngleDeg);
+  const double upper_angle        = kPi - DegToRad(kUpperAngleDeg);
+  const double lower_angle        = kPi - DegToRad(kLowerAngleDeg);
+  const double upper_out_of_plane = DegToRad(kUpperOutOfPlaneDeg);
+  const double lower_out_of_plane = DegToRad(kLowerOutOfPlaneDeg);
 
-  const Eigen::Matrix4d upper_transform =
-      MakeBeamTransform(upper_angle, top_hinge, kUpperHingeLocalZ);
+  const Eigen::Matrix4d upper_transform = MakeBeamTransform(
+      upper_out_of_plane, upper_angle, top_hinge, kUpperHingeLocalZ);
   mesh_manager.TransformMesh(mesh_upper, upper_transform);
 
-  const Eigen::Vector3d lower_hinge = TransformPoint(
-      upper_transform, Eigen::Vector3d(0.0, 0.0, kLowerHingeLocalZ));
-  const Eigen::Matrix4d lower_transform =
-      MakeBeamTransform(lower_angle, lower_hinge, kLowerLinkHingeLocalZ);
+  const Eigen::Vector3d lower_hinge =
+      TransformPoint(upper_transform, Eigen::Vector3d(0.0, 0.0, kLowerHingeLocalZ));
+  const Eigen::Matrix4d lower_transform = MakeBeamTransform(
+      lower_out_of_plane, lower_angle, lower_hinge, kLowerLinkHingeLocalZ);
   mesh_manager.TransformMesh(mesh_lower, lower_transform);
 
   const Eigen::MatrixXd& all_nodes = mesh_manager.GetAllNodes();
   const Eigen::MatrixXi& all_elems = mesh_manager.GetAllElements();
-
   const Eigen::MatrixXd upper_nodes = ExtractLocalNodes(all_nodes, inst_upper);
   const Eigen::MatrixXd lower_nodes = ExtractLocalNodes(all_nodes, inst_lower);
-  const Eigen::MatrixXi upper_elems = ExtractLocalElements(all_elems, inst_upper);
-  const Eigen::MatrixXi lower_elems = ExtractLocalElements(all_elems, inst_lower);
+  const Eigen::MatrixXi upper_elems =
+      ExtractLocalElements(all_elems, inst_upper);
+  const Eigen::MatrixXi lower_elems =
+      ExtractLocalElements(all_elems, inst_lower);
 
-  auto upper_data =
-      std::make_unique<GPU_FEAT10_Data>(inst_upper.num_elements,
-                                        inst_upper.num_nodes);
+  auto upper_data = std::make_unique<GPU_FEAT10_Data>(inst_upper.num_elements,
+                                                       inst_upper.num_nodes);
   upper_data->Initialize();
   upper_data->Setup(Quadrature::tet5pt_x, Quadrature::tet5pt_y,
                     Quadrature::tet5pt_z, Quadrature::tet5pt_weights,
@@ -308,9 +268,8 @@ int main(int argc, char** argv) {
   upper_data->CalcDnDuPre();
   upper_data->CalcMassMatrix();
 
-  auto lower_data =
-      std::make_unique<GPU_FEAT10_Data>(inst_lower.num_elements,
-                                        inst_lower.num_nodes);
+  auto lower_data = std::make_unique<GPU_FEAT10_Data>(inst_lower.num_elements,
+                                                       inst_lower.num_nodes);
   lower_data->Initialize();
   lower_data->Setup(Quadrature::tet5pt_x, Quadrature::tet5pt_y,
                     Quadrature::tet5pt_z, Quadrature::tet5pt_weights,
@@ -342,14 +301,12 @@ int main(int argc, char** argv) {
                           cudaMemcpyHostToDevice));
 
   MixedConstraintSystem constraints(&problem);
-  AddRevoluteJointToWorld(&constraints, upper_block, top_hinge,
-                          Eigen::Vector3d::UnitY(), kJointOffset, 1.0);
-  constraints.AddRevoluteJoint(upper_block, lower_block, lower_hinge,
-                               Eigen::Vector3d::UnitY(), kJointOffset, 1.0);
+  AddSphericalJointToWorld(&constraints, upper_block, top_hinge);
+  constraints.AddSphericalJoint(upper_block, lower_block, lower_hinge);
 
-  const MixedConstraintPointBinding lower_hinge_on_upper =
+  const MixedConstraintPointBinding elbow_on_upper =
       constraints.LocateReferencePoint(upper_block, lower_hinge);
-  const MixedConstraintPointBinding lower_hinge_on_lower =
+  const MixedConstraintPointBinding elbow_on_lower =
       constraints.LocateReferencePoint(lower_block, lower_hinge);
   constraints.Finalize();
 
@@ -368,15 +325,15 @@ int main(int argc, char** argv) {
   solver.Setup();
 
   Eigen::VectorXd x_curr, y_curr, z_curr;
-  RetrieveUnifiedPositions(problem.GetStateBuffer(), &x_curr, &y_curr, &z_curr);
-  const Eigen::Vector3d lower_upper_initial =
-      EvaluateCurrentPointPosition(lower_hinge_on_upper, x_curr, y_curr, z_curr);
-  const Eigen::Vector3d lower_lower_initial =
-      EvaluateCurrentPointPosition(lower_hinge_on_lower, x_curr, y_curr, z_curr);
+  RetrieveUnifiedPositions(state, &x_curr, &y_curr, &z_curr);
+  const Eigen::Vector3d elbow_upper_initial =
+      EvaluateCurrentPointPosition(elbow_on_upper, x_curr, y_curr, z_curr);
+  const Eigen::Vector3d elbow_lower_initial =
+      EvaluateCurrentPointPosition(elbow_on_lower, x_curr, y_curr, z_curr);
 
   std::cout << "constraints: " << constraints.num_constraints() << "\n";
-  std::cout << "initial lower hinge mismatch norm: "
-            << (lower_upper_initial - lower_lower_initial).norm() << "\n";
+  std::cout << "initial elbow mismatch norm: "
+            << (elbow_upper_initial - elbow_lower_initial).norm() << "\n";
 
   upper_data->WriteOutputVTU(MakeOutputPath("upper", 0));
   lower_data->WriteOutputVTU(MakeOutputPath("lower", 0));
@@ -385,26 +342,22 @@ int main(int argc, char** argv) {
   for (int step = 1; step <= max_steps; ++step) {
     solver.Solve();
 
-    RetrieveUnifiedPositions(problem.GetStateBuffer(), &x_curr, &y_curr,
-                             &z_curr);
-    const Eigen::Vector3d lower_upper_current =
-        EvaluateCurrentPointPosition(lower_hinge_on_upper, x_curr, y_curr,
-                                     z_curr);
-    const Eigen::Vector3d lower_lower_current =
-        EvaluateCurrentPointPosition(lower_hinge_on_lower, x_curr, y_curr,
-                                     z_curr);
+    RetrieveUnifiedPositions(state, &x_curr, &y_curr, &z_curr);
+    const Eigen::Vector3d elbow_upper_current =
+        EvaluateCurrentPointPosition(elbow_on_upper, x_curr, y_curr, z_curr);
+    const Eigen::Vector3d elbow_lower_current =
+        EvaluateCurrentPointPosition(elbow_on_lower, x_curr, y_curr, z_curr);
 
     Eigen::VectorXd constraint_values(constraints.num_constraints());
-    HANDLE_ERROR(cudaMemcpy(constraint_values.data(),
-                            constraints.GetConstraintDevicePtr(),
-                            static_cast<size_t>(constraints.num_constraints()) *
-                                sizeof(double),
-                            cudaMemcpyDeviceToHost));
+    HANDLE_ERROR(cudaMemcpy(
+        constraint_values.data(), constraints.GetConstraintDevicePtr(),
+        static_cast<size_t>(constraints.num_constraints()) * sizeof(double),
+        cudaMemcpyDeviceToHost));
 
     std::cout << "step " << step
               << " constraint_norm=" << constraint_values.norm()
-              << " lower_hinge_mismatch="
-              << (lower_upper_current - lower_lower_current).norm() << "\n";
+              << " elbow_mismatch="
+              << (elbow_upper_current - elbow_lower_current).norm() << "\n";
 
     if (step % export_interval == 0) {
       upper_data->WriteOutputVTU(MakeOutputPath("upper", output_frame));
