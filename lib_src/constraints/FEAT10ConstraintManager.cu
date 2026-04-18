@@ -253,6 +253,36 @@ FEAT10ConstraintManager::LocateNodeReferencePoint(
 FEAT10ConstraintManager::ReferencePoint
 FEAT10ConstraintManager::LocateReferencePoint(
     const Eigen::Vector3d& reference_point, const ElementRange& range) const {
+  ReferencePoint point;
+  double best_residual = std::numeric_limits<double>::infinity();
+  if (!TryLocateReferencePoint(reference_point, range, false, &point,
+                               &best_residual)) {
+    throw std::runtime_error(
+        "FEAT10ConstraintManager::LocateReferencePoint: failed to locate reference point in FEAT10 mesh");
+  }
+  return point;
+}
+
+FEAT10ConstraintManager::ReferencePoint
+FEAT10ConstraintManager::LocateReferencePointStrict(
+    const Eigen::Vector3d& reference_point) const {
+  return LocateReferencePointStrict(reference_point, FullElementRange());
+}
+
+FEAT10ConstraintManager::ReferencePoint
+FEAT10ConstraintManager::LocateReferencePointStrict(
+    const Eigen::Vector3d& reference_point, const ElementRange& range) const {
+  ReferencePoint point;
+  if (!TryLocateReferencePoint(reference_point, range, true, &point)) {
+    throw std::runtime_error(
+        "FEAT10ConstraintManager::LocateReferencePointStrict: failed to locate reference point inside FEAT10 mesh");
+  }
+  return point;
+}
+
+bool FEAT10ConstraintManager::TryLocateReferencePoint(
+    const Eigen::Vector3d& reference_point, const ElementRange& range,
+    bool require_inside, ReferencePoint* point, double* best_residual_out) const {
   EnsureReferenceCache();
 
   if (range.begin < 0 || range.end > data_->get_n_elem() ||
@@ -308,15 +338,33 @@ FEAT10ConstraintManager::LocateReferencePoint(
     }
 
     if (converged) {
-      return best_point;
+      if (best_residual_out != nullptr) {
+        *best_residual_out = best_residual;
+      }
+      if (point != nullptr) {
+        *point = best_point;
+      }
+      return true;
     }
   }
 
-  if (best_point.element_idx < 0 || best_residual > 1e-7) {
-    throw std::runtime_error(
-        "FEAT10ConstraintManager::LocateReferencePoint: failed to locate reference point in FEAT10 mesh");
+  if (!require_inside && best_point.element_idx >= 0 && best_residual <= 1e-7) {
+    if (best_residual_out != nullptr) {
+      *best_residual_out = best_residual;
+    }
+    if (point != nullptr) {
+      *point = best_point;
+    }
+    return true;
   }
-  return best_point;
+
+  if (best_residual_out != nullptr) {
+    *best_residual_out = best_residual;
+  }
+  if (point != nullptr) {
+    *point = best_point;
+  }
+  return false;
 }
 
 FEAT10ConstraintManager::ReferencePoint
@@ -422,6 +470,23 @@ FEAT10ConstraintManager::LocateWithAdaptiveOffset(
       "FEAT10ConstraintManager::LocateWithAdaptiveOffset: failed to place offset reference point for joint construction");
 }
 
+FEAT10ConstraintManager::ReferencePoint
+FEAT10ConstraintManager::LocateWithAdaptiveOffsetStrict(
+    const Eigen::Vector3d& base_point, const Eigen::Vector3d& direction,
+    const ElementRange& range, double initial_offset) const {
+  double offset = initial_offset;
+  for (int attempt = 0; attempt < 8; ++attempt) {
+    try {
+      return LocateReferencePointStrict(base_point + offset * direction, range);
+    } catch (const std::runtime_error&) {
+      offset *= 0.5;
+    }
+  }
+
+  throw std::runtime_error(
+      "FEAT10ConstraintManager::LocateWithAdaptiveOffsetStrict: failed to place strict offset reference point for joint construction");
+}
+
 void FEAT10ConstraintManager::AddSphericalJoint(
     const ElementRange& body_b, const ElementRange& body_c,
     const Eigen::Vector3d& hinge_point) {
@@ -501,6 +566,88 @@ void FEAT10ConstraintManager::AddRevoluteJointToWorld(
   AddWorldDP1Constraint(p, q, p2, 0.0, dp1_weight);
 }
 
+FEAT10ConstraintManager::CylindricalGuideFrame
+FEAT10ConstraintManager::BuildCylindricalGuideFrame(
+    const ElementRange& body, const Eigen::Vector3d& axis_point,
+    const Eigen::Vector3d& axis_direction, double offset) const {
+  const double axis_norm = axis_direction.norm();
+  if (axis_norm < 1e-12) {
+    throw std::invalid_argument(
+        "FEAT10ConstraintManager::BuildCylindricalGuideFrame: axis direction must be non-zero");
+  }
+
+  CylindricalGuideFrame frame;
+  const Eigen::Vector3d axis = axis_direction / axis_norm;
+  frame.p                    = LocateReferencePointStrict(axis_point, body);
+
+  if (offset <= 0.0) {
+    offset = 1e-2 * ComputeElementCharacteristicLength(frame.p.element_idx);
+  }
+
+  const Eigen::Vector3d p1 = BuildPerpendicularAxis1(axis);
+  const Eigen::Vector3d p2 = axis.cross(p1).normalized();
+  if (std::abs(axis.dot(p1)) > 1e-10 || std::abs(axis.dot(p2)) > 1e-10 ||
+      std::abs(p1.dot(p2)) > 1e-10) {
+    throw std::runtime_error(
+        "FEAT10ConstraintManager::BuildCylindricalGuideFrame: failed to construct an orthogonal guide frame");
+  }
+
+  frame.q = LocateWithAdaptiveOffsetStrict(axis_point, axis, body, offset);
+  frame.v = LocateWithAdaptiveOffsetStrict(axis_point, p1, body, offset);
+  frame.w = LocateWithAdaptiveOffsetStrict(axis_point, p2, body, offset);
+
+  const Eigen::Vector3d p_ref = EvaluateReferencePoint(frame.p);
+  const Eigen::Vector3d q_ref = EvaluateReferencePoint(frame.q);
+  const Eigen::Vector3d v_ref = EvaluateReferencePoint(frame.v);
+  const Eigen::Vector3d w_ref = EvaluateReferencePoint(frame.w);
+  if ((q_ref - p_ref).norm() < 1e-12 || (v_ref - p_ref).norm() < 1e-12 ||
+      (w_ref - p_ref).norm() < 1e-12) {
+    throw std::runtime_error(
+        "FEAT10ConstraintManager::BuildCylindricalGuideFrame: failed to place one or more frame points");
+  }
+
+  return frame;
+}
+
+void FEAT10ConstraintManager::AddCylindricalGuideFrameToWorld(
+    const CylindricalGuideFrame& frame, double dp1_weight) {
+  const Eigen::Vector3d p_ref = EvaluateReferencePoint(frame.p);
+  const Eigen::Vector3d q_ref = EvaluateReferencePoint(frame.q);
+  const Eigen::Vector3d v_ref = EvaluateReferencePoint(frame.v);
+  const Eigen::Vector3d w_ref = EvaluateReferencePoint(frame.w);
+
+  const Eigen::Vector3d axis = (q_ref - p_ref).normalized();
+  const Eigen::Vector3d p1   = (v_ref - p_ref).normalized();
+  const Eigen::Vector3d p2   = (w_ref - p_ref).normalized();
+  if (!axis.allFinite() || !p1.allFinite() || !p2.allFinite() ||
+      (q_ref - p_ref).norm() < 1e-12 || (v_ref - p_ref).norm() < 1e-12 ||
+      (w_ref - p_ref).norm() < 1e-12) {
+    throw std::runtime_error(
+        "FEAT10ConstraintManager::AddCylindricalGuideFrameToWorld: guide frame is degenerate");
+  }
+
+  AddPointToWorldCDAxis(frame.p, 0, p_ref.x());
+  AddPointToWorldCDAxis(frame.p, 1, p_ref.y());
+  AddPointToWorldCDAxis(frame.p, 2, p_ref.z());
+
+  AddWorldDP1Constraint(frame.p, frame.q, p1, 0.0, dp1_weight);
+  AddWorldDP1Constraint(frame.p, frame.q, p2, 0.0, dp1_weight);
+
+  AddWorldDP1Constraint(frame.p, frame.v, axis, 0.0, dp1_weight);
+  AddWorldDP1Constraint(frame.p, frame.v, p2, 0.0, dp1_weight);
+  AddWorldDP1Constraint(frame.p, frame.w, axis, 0.0, dp1_weight);
+  AddWorldDP1Constraint(frame.p, frame.w, p1, 0.0, dp1_weight);
+}
+
+void FEAT10ConstraintManager::AddCylindricalGuideFrameToWorld(
+    const ElementRange& body, const Eigen::Vector3d& axis_point,
+    const Eigen::Vector3d& axis_direction, double offset,
+    double dp1_weight) {
+  const CylindricalGuideFrame frame =
+      BuildCylindricalGuideFrame(body, axis_point, axis_direction, offset);
+  AddCylindricalGuideFrameToWorld(frame, dp1_weight);
+}
+
 void FEAT10ConstraintManager::AddFixedJoint(
     const ElementRange& body_b, const ElementRange& body_c,
     const Eigen::Vector3d& joint_point, double offset, double dp1_weight) {
@@ -547,46 +694,50 @@ void FEAT10ConstraintManager::AddFixedJoint(
 }
 
 void FEAT10ConstraintManager::AddCylindricalJoint(
-    const ElementRange& body_b, const ElementRange& body_c,
-    const Eigen::Vector3d& axis_point_b, const Eigen::Vector3d& axis_point_c,
-    const Eigen::Vector3d& axis_direction, double offset, double dp1_weight,
+    const CylindricalJointGeometry& geometry, double dp1_weight,
     double dp2_weight) {
-  const double axis_norm = axis_direction.norm();
-  if (axis_norm < 1e-12) {
-    throw std::invalid_argument(
-        "FEAT10ConstraintManager::AddCylindricalJoint: axis direction must be non-zero");
-  }
+  AddCylindricalJoint(geometry.p, geometry.q, geometry.r, geometry.s,
+                      geometry.u, geometry.v, geometry.w, geometry.f_par1,
+                      geometry.f_par2, geometry.f_col1, geometry.f_col2,
+                      dp1_weight, dp2_weight);
+}
 
-  const Eigen::Vector3d axis = axis_direction / axis_norm;
-  const ReferencePoint p = LocateReferencePoint(axis_point_b, body_b);
-  const ReferencePoint r = LocateReferencePoint(axis_point_c, body_c);
+FEAT10ConstraintManager::CylindricalJointGeometry
+FEAT10ConstraintManager::BuildCylindricalJointGeometry(
+    const CylindricalGuideFrame& guide_frame, const ElementRange& body_c,
+    const Eigen::Vector3d& axis_point_c, double offset) const {
+  CylindricalJointGeometry geometry;
+  geometry.p = guide_frame.p;
+  geometry.q = guide_frame.q;
+  geometry.v = guide_frame.v;
+  geometry.w = guide_frame.w;
+  geometry.r = LocateReferencePointStrict(axis_point_c, body_c);
 
   if (offset <= 0.0) {
-    offset = DefaultJointOffset(p, r);
+    offset = DefaultJointOffset(geometry.p, geometry.r);
   }
 
-  const ReferencePoint q =
-      LocateWithAdaptiveOffset(axis_point_b, axis, body_b, offset);
+  const Eigen::Vector3d p_ref = EvaluateReferencePoint(geometry.p);
+  const Eigen::Vector3d q_ref = EvaluateReferencePoint(geometry.q);
+  const Eigen::Vector3d v_ref = EvaluateReferencePoint(geometry.v);
+  const Eigen::Vector3d w_ref = EvaluateReferencePoint(geometry.w);
+  const Eigen::Vector3d r_ref = EvaluateReferencePoint(geometry.r);
 
-  const Eigen::Vector3d p1 = BuildPerpendicularAxis1(axis);
-  const Eigen::Vector3d p2 = axis.cross(p1).normalized();
+  const Eigen::Vector3d axis = (q_ref - p_ref).normalized();
+  const Eigen::Vector3d p1   = (v_ref - p_ref).normalized();
+  const Eigen::Vector3d p2   = (w_ref - p_ref).normalized();
+  if (!axis.allFinite() || !p1.allFinite() || !p2.allFinite() ||
+      (q_ref - p_ref).norm() < 1e-12 || (v_ref - p_ref).norm() < 1e-12 ||
+      (w_ref - p_ref).norm() < 1e-12) {
+    throw std::runtime_error(
+        "FEAT10ConstraintManager::BuildCylindricalJointGeometry: guide frame is degenerate");
+  }
 
-  const ReferencePoint s =
-      LocateWithAdaptiveOffset(axis_point_c, p1, body_c, offset);
-  const ReferencePoint u =
-      LocateWithAdaptiveOffset(axis_point_c, p2, body_c, offset);
-  const ReferencePoint v =
-      LocateWithAdaptiveOffset(axis_point_b, p1, body_b, offset);
-  const ReferencePoint w =
-      LocateWithAdaptiveOffset(axis_point_b, p2, body_b, offset);
+  geometry.s = LocateWithAdaptiveOffsetStrict(axis_point_c, p1, body_c, offset);
+  geometry.u = LocateWithAdaptiveOffsetStrict(axis_point_c, p2, body_c, offset);
 
-  const Eigen::Vector3d p_ref = EvaluateReferencePoint(p);
-  const Eigen::Vector3d q_ref = EvaluateReferencePoint(q);
-  const Eigen::Vector3d r_ref = EvaluateReferencePoint(r);
-  const Eigen::Vector3d s_ref = EvaluateReferencePoint(s);
-  const Eigen::Vector3d u_ref = EvaluateReferencePoint(u);
-  const Eigen::Vector3d v_ref = EvaluateReferencePoint(v);
-  const Eigen::Vector3d w_ref = EvaluateReferencePoint(w);
+  const Eigen::Vector3d s_ref = EvaluateReferencePoint(geometry.s);
+  const Eigen::Vector3d u_ref = EvaluateReferencePoint(geometry.u);
 
   const Eigen::Vector3d a_ref  = q_ref - p_ref;
   const Eigen::Vector3d d1_ref = s_ref - r_ref;
@@ -595,13 +746,39 @@ void FEAT10ConstraintManager::AddCylindricalJoint(
   const Eigen::Vector3d p2_ref = w_ref - p_ref;
   const Eigen::Vector3d b_ref  = r_ref - p_ref;
 
-  const double f_par1 = a_ref.dot(d1_ref);
-  const double f_par2 = a_ref.dot(d2_ref);
-  const double f_col1 = p1_ref.dot(b_ref);
-  const double f_col2 = p2_ref.dot(b_ref);
+  geometry.f_par1 = a_ref.dot(d1_ref);
+  geometry.f_par2 = a_ref.dot(d2_ref);
+  geometry.f_col1 = p1_ref.dot(b_ref);
+  geometry.f_col2 = p2_ref.dot(b_ref);
+  return geometry;
+}
 
-  AddCylindricalJoint(p, q, r, s, u, v, w, f_par1, f_par2, f_col1, f_col2,
-                      dp1_weight, dp2_weight);
+FEAT10ConstraintManager::CylindricalJointGeometry
+FEAT10ConstraintManager::BuildCylindricalJointGeometry(
+    const ElementRange& body_b, const ElementRange& body_c,
+    const Eigen::Vector3d& axis_point_b, const Eigen::Vector3d& axis_point_c,
+    const Eigen::Vector3d& axis_direction, double offset) const {
+  const double axis_norm = axis_direction.norm();
+  if (axis_norm < 1e-12) {
+    throw std::invalid_argument(
+        "FEAT10ConstraintManager::BuildCylindricalJointGeometry: axis direction must be non-zero");
+  }
+
+  const CylindricalGuideFrame guide_frame =
+      BuildCylindricalGuideFrame(body_b, axis_point_b, axis_direction, offset);
+  return BuildCylindricalJointGeometry(guide_frame, body_c, axis_point_c,
+                                       offset);
+}
+
+void FEAT10ConstraintManager::AddCylindricalJoint(
+    const ElementRange& body_b, const ElementRange& body_c,
+    const Eigen::Vector3d& axis_point_b, const Eigen::Vector3d& axis_point_c,
+    const Eigen::Vector3d& axis_direction, double offset, double dp1_weight,
+    double dp2_weight) {
+  const CylindricalJointGeometry geometry =
+      BuildCylindricalJointGeometry(body_b, body_c, axis_point_b, axis_point_c,
+                                    axis_direction, offset);
+  AddCylindricalJoint(geometry, dp1_weight, dp2_weight);
 }
 
 // This is the lowering step that bridges the friendly API above to the sparse

@@ -77,6 +77,11 @@ class FEAT10ConstraintManager {
       const Eigen::Vector3d& reference_point) const;
   ReferencePoint LocateReferencePoint(const Eigen::Vector3d& reference_point,
                                       const ElementRange& range) const;
+  ReferencePoint LocateReferencePointStrict(
+      const Eigen::Vector3d& reference_point) const;
+  ReferencePoint LocateReferencePointStrict(
+      const Eigen::Vector3d& reference_point,
+      const ElementRange& range) const;
 
   // Locate a material point that must coincide with an exact FEAT10 node.
   //
@@ -197,6 +202,74 @@ class FEAT10ConstraintManager {
                            double f_col2 = 0.0, double dp1_weight = 1.0,
                            double dp2_weight = 1.0);
 
+  // Shared cup-side frame used by the cylindrical-joint construction.
+  //
+  // P is the guide-axis base point, Q defines the guide-axis direction, and
+  // V/W define two perpendicular guide directions used by the DP2
+  // collinearity rows.
+  struct CylindricalGuideFrame {
+    ReferencePoint p;
+    ReferencePoint q;
+    ReferencePoint v;
+    ReferencePoint w;
+  };
+
+  // Build the cup-side guide frame once so callers can reuse the exact same
+  // material points for world-fixing, cylindrical-joint construction, and
+  // diagnostics.
+  CylindricalGuideFrame BuildCylindricalGuideFrame(
+      const ElementRange& body,
+      const Eigen::Vector3d& axis_point,
+      const Eigen::Vector3d& axis_direction,
+      double offset = -1.0) const;
+
+  // Freeze a previously-built cylindrical guide frame to the world frame.
+  //
+  // This keeps P fixed in world space, keeps Q - P aligned with the frame's
+  // reference axis, and keeps V - P / W - P aligned with the frame's
+  // reference perpendicular directions.
+  void AddCylindricalGuideFrameToWorld(const CylindricalGuideFrame& frame,
+                                       double dp1_weight = 1.0);
+
+  // Convenience overload that builds the guide frame internally before fixing
+  // it to world.
+  void AddCylindricalGuideFrameToWorld(const ElementRange& body,
+                                       const Eigen::Vector3d& axis_point,
+                                       const Eigen::Vector3d& axis_direction,
+                                       double offset = -1.0,
+                                       double dp1_weight = 1.0);
+
+  // Fully-resolved seven-point cylindrical-joint construction, including the
+  // reference-space targets derived from those material points.
+  struct CylindricalJointGeometry {
+    ReferencePoint p;
+    ReferencePoint q;
+    ReferencePoint r;
+    ReferencePoint s;
+    ReferencePoint u;
+    ReferencePoint v;
+    ReferencePoint w;
+    double f_par1 = 0.0;
+    double f_par2 = 0.0;
+    double f_col1 = 0.0;
+    double f_col2 = 0.0;
+  };
+
+  CylindricalJointGeometry BuildCylindricalJointGeometry(
+      const CylindricalGuideFrame& guide_frame,
+      const ElementRange& body_c,
+      const Eigen::Vector3d& axis_point_c,
+      double offset = -1.0) const;
+  CylindricalJointGeometry BuildCylindricalJointGeometry(
+      const ElementRange& body_b, const ElementRange& body_c,
+      const Eigen::Vector3d& axis_point_b,
+      const Eigen::Vector3d& axis_point_c,
+      const Eigen::Vector3d& axis_direction,
+      double offset = -1.0) const;
+  void AddCylindricalJoint(const CylindricalJointGeometry& geometry,
+                           double dp1_weight = 1.0,
+                           double dp2_weight = 1.0);
+
   // Geometry-based cylindrical construction following Appendix A.7 of the
   // engineering-joint document.
   void AddCylindricalJoint(const ElementRange& body_b,
@@ -303,12 +376,20 @@ class FEAT10ConstraintManager {
   // Build a ReferencePoint that selects one exact local node.
   ReferencePoint BuildNodalReferencePoint(int elem_idx, int local_node) const;
 
+  bool TryLocateReferencePoint(const Eigen::Vector3d& reference_point,
+                               const ElementRange& range, bool require_inside,
+                               ReferencePoint* point,
+                               double* best_residual = nullptr) const;
+
   // Retry offset point-location with progressively smaller offsets. This keeps
   // the geometry-based joint builders robust near element boundaries.
   ReferencePoint LocateWithAdaptiveOffset(const Eigen::Vector3d& base_point,
                                           const Eigen::Vector3d& direction,
                                           const ElementRange& range,
                                           double initial_offset) const;
+  ReferencePoint LocateWithAdaptiveOffsetStrict(
+      const Eigen::Vector3d& base_point, const Eigen::Vector3d& direction,
+      const ElementRange& range, double initial_offset) const;
 
   // Lower the accumulated primitive constraints into the sparse scalar layout
   // consumed by GPU_FEAT10_Data::SetGeneralConstraints().

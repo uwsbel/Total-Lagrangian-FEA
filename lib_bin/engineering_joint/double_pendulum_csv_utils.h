@@ -1,12 +1,6 @@
 #pragma once
 
 #include <Eigen/Dense>
-
-#include "../../lib_src/elements/FEAT10Data.cuh"
-#include "../../lib_src/materials/SolidMaterialProperties.h"
-#include "../../lib_src/solvers/FEAT10ConstraintManager.h"
-#include "../../lib_utils/quadrature_utils.h"
-
 #include <algorithm>
 #include <cmath>
 #include <filesystem>
@@ -16,6 +10,11 @@
 #include <sstream>
 #include <string>
 #include <vector>
+
+#include "../../lib_src/elements/FEAT10Data.cuh"
+#include "../../lib_src/materials/SolidMaterialProperties.h"
+#include "../../lib_src/solvers/FEAT10ConstraintManager.h"
+#include "../../lib_utils/quadrature_utils.h"
 
 namespace engineering_joint {
 
@@ -150,18 +149,19 @@ inline double SignedAngleAboutAxis(const Eigen::Vector3d& from,
 
   const Eigen::Vector3d from_unit = from_proj / from_norm;
   const Eigen::Vector3d to_unit   = to_proj / to_norm;
-  const double sin_theta = axis_unit.dot(from_unit.cross(to_unit));
-  const double cos_theta = from_unit.dot(to_unit);
+  const double sin_theta          = axis_unit.dot(from_unit.cross(to_unit));
+  const double cos_theta          = from_unit.dot(to_unit);
   return std::atan2(sin_theta, cos_theta);
 }
 
 inline double ComputePotentialEnergy(const std::vector<double>& lumped_mass,
-                                     const Eigen::VectorXd& z,
-                                     double gravity) {
+                                     const Eigen::VectorXd& z, double gravity) {
   double potential_energy = 0.0;
-  const int count = std::min<int>(static_cast<int>(lumped_mass.size()), z.size());
+  const int count =
+      std::min<int>(static_cast<int>(lumped_mass.size()), z.size());
   for (int node = 0; node < count; ++node) {
-    potential_energy += -lumped_mass[static_cast<size_t>(node)] * gravity * z(node);
+    potential_energy +=
+        -lumped_mass[static_cast<size_t>(node)] * gravity * z(node);
   }
   return potential_energy;
 }
@@ -169,8 +169,8 @@ inline double ComputePotentialEnergy(const std::vector<double>& lumped_mass,
 inline double ComputeKineticEnergy(const std::vector<double>& lumped_mass,
                                    const Eigen::VectorXd& velocity_xyz) {
   double kinetic_energy = 0.0;
-  const int n_nodes =
-      std::min<int>(static_cast<int>(lumped_mass.size()), velocity_xyz.size() / 3);
+  const int n_nodes     = std::min<int>(static_cast<int>(lumped_mass.size()),
+                                        velocity_xyz.size() / 3);
   for (int node = 0; node < n_nodes; ++node) {
     const double vx = velocity_xyz(3 * node + 0);
     const double vy = velocity_xyz(3 * node + 1);
@@ -197,24 +197,21 @@ inline double ComputeMooneyRivlinElasticStrainEnergyDensity(
     const SolidMaterialProperties& material) {
   const Eigen::Matrix3d cauchy_green =
       deformation_gradient.transpose() * deformation_gradient;
-  const double first_invariant = cauchy_green.trace();
-  const double second_invariant =
-      0.5 * (first_invariant * first_invariant -
-             (cauchy_green * cauchy_green).trace());
+  const double first_invariant  = cauchy_green.trace();
+  const double second_invariant = 0.5 * (first_invariant * first_invariant -
+                                         (cauchy_green * cauchy_green).trace());
 
   double jacobian = deformation_gradient.determinant();
   if (std::abs(jacobian) < 1e-12) {
     jacobian = jacobian >= 0.0 ? 1e-12 : -1e-12;
   }
-  const double j_to_one_third = std::cbrt(jacobian);
+  const double j_to_one_third        = std::cbrt(jacobian);
   const double j_to_minus_two_thirds = 1.0 / (j_to_one_third * j_to_one_third);
   const double j_to_minus_four_thirds =
       j_to_minus_two_thirds * j_to_minus_two_thirds;
 
-  const double first_isochoric =
-      j_to_minus_two_thirds * first_invariant;
-  const double second_isochoric =
-      j_to_minus_four_thirds * second_invariant;
+  const double first_isochoric  = j_to_minus_two_thirds * first_invariant;
+  const double second_isochoric = j_to_minus_four_thirds * second_invariant;
   return material.mu10 * (first_isochoric - 3.0) +
          material.mu01 * (second_isochoric - 3.0) +
          0.5 * material.kappa * (jacobian - 1.0) * (jacobian - 1.0);
@@ -235,14 +232,18 @@ inline double ComputeElasticStrainEnergy(
     const std::vector<std::vector<double>>& det_j_ref,
     const SolidMaterialProperties& material) {
   double elastic_strain_energy = 0.0;
-  const int n_elem = std::min<int>(deformation_gradient.size(), det_j_ref.size());
+  const int n_elem =
+      std::min<int>(deformation_gradient.size(), det_j_ref.size());
   for (int elem_idx = 0; elem_idx < n_elem; ++elem_idx) {
-    const int n_qp = std::min<int>(deformation_gradient[static_cast<size_t>(elem_idx)].size(),
-                                   det_j_ref[static_cast<size_t>(elem_idx)].size());
+    const int n_qp = std::min<int>(
+        deformation_gradient[static_cast<size_t>(elem_idx)].size(),
+        det_j_ref[static_cast<size_t>(elem_idx)].size());
     for (int qp_idx = 0; qp_idx < n_qp; ++qp_idx) {
       const Eigen::Matrix3d f =
-          deformation_gradient[static_cast<size_t>(elem_idx)][static_cast<size_t>(qp_idx)];
-      const double dV = det_j_ref[static_cast<size_t>(elem_idx)][static_cast<size_t>(qp_idx)] *
+          deformation_gradient[static_cast<size_t>(elem_idx)]
+                              [static_cast<size_t>(qp_idx)];
+      const double dV = det_j_ref[static_cast<size_t>(elem_idx)]
+                                 [static_cast<size_t>(qp_idx)] *
                         Quadrature::tet5pt_weights(qp_idx);
       elastic_strain_energy +=
           ComputeElasticStrainEnergyDensity(f, material) * dV;
@@ -251,8 +252,8 @@ inline double ComputeElasticStrainEnergy(
   return elastic_strain_energy;
 }
 
-inline double ComputeElasticStrainEnergy(GPU_FEAT10_Data& data,
-                                         const SolidMaterialProperties& material) {
+inline double ComputeElasticStrainEnergy(
+    GPU_FEAT10_Data& data, const SolidMaterialProperties& material) {
   std::vector<std::vector<Eigen::MatrixXd>> deformation_gradient;
   std::vector<std::vector<double>> det_j_ref;
   data.CalcP();
@@ -262,9 +263,9 @@ inline double ComputeElasticStrainEnergy(GPU_FEAT10_Data& data,
 }
 
 inline Eigen::VectorXd ComputeGeneralizedReactionFromCSR(
-    int n_dofs, const std::vector<int>& offsets, const std::vector<int>& columns,
-    const std::vector<double>& values, const Eigen::VectorXd& lambda,
-    int row_begin, int row_end) {
+    int n_dofs, const std::vector<int>& offsets,
+    const std::vector<int>& columns, const std::vector<double>& values,
+    const Eigen::VectorXd& lambda, int row_begin, int row_end) {
   Eigen::VectorXd generalized_reaction = Eigen::VectorXd::Zero(n_dofs);
   if (row_begin < 0 || row_end < row_begin ||
       static_cast<size_t>(row_end + 1) > offsets.size()) {
@@ -290,12 +291,10 @@ inline Eigen::VectorXd ComputeGeneralizedReactionFromCSR(
   return generalized_reaction;
 }
 
-inline HingeWrench EstimateHingeWrench(const Eigen::VectorXd& generalized_reaction,
-                                       int node_offset, int num_nodes,
-                                       const Eigen::VectorXd& x,
-                                       const Eigen::VectorXd& y,
-                                       const Eigen::VectorXd& z,
-                                       const Eigen::Vector3d& hinge_point) {
+inline HingeWrench EstimateHingeWrench(
+    const Eigen::VectorXd& generalized_reaction, int node_offset, int num_nodes,
+    const Eigen::VectorXd& x, const Eigen::VectorXd& y,
+    const Eigen::VectorXd& z, const Eigen::Vector3d& hinge_point) {
   HingeWrench wrench;
   const int node_end = node_offset + num_nodes;
   for (int node = node_offset; node < node_end; ++node) {
@@ -315,30 +314,29 @@ inline HingeWrench EstimateHingeWrench(const Eigen::VectorXd& generalized_reacti
 }
 
 inline HingeWrench RecoverSeparatedRevoluteJointWrenchFromCSR(
-    int n_dofs, const std::vector<int>& offsets, const std::vector<int>& columns,
-    const std::vector<double>& values, const Eigen::VectorXd& augmented_dual,
-    int row_begin, int position_row_count, int orientation_row_count,
-    int node_offset, int num_nodes, const Eigen::VectorXd& x,
-    const Eigen::VectorXd& y, const Eigen::VectorXd& z,
-    const Eigen::Vector3d& hinge_point) {
+    int n_dofs, const std::vector<int>& offsets,
+    const std::vector<int>& columns, const std::vector<double>& values,
+    const Eigen::VectorXd& augmented_dual, int row_begin,
+    int position_row_count, int orientation_row_count, int node_offset,
+    int num_nodes, const Eigen::VectorXd& x, const Eigen::VectorXd& y,
+    const Eigen::VectorXd& z, const Eigen::Vector3d& hinge_point) {
   HingeWrench wrench;
 
   const Eigen::VectorXd position_reaction = ComputeGeneralizedReactionFromCSR(
       n_dofs, offsets, columns, values, augmented_dual, row_begin,
       row_begin + position_row_count);
-  const Eigen::VectorXd orientation_reaction = ComputeGeneralizedReactionFromCSR(
-      n_dofs, offsets, columns, values, augmented_dual,
-      row_begin + position_row_count,
-      row_begin + position_row_count + orientation_row_count);
+  const Eigen::VectorXd orientation_reaction =
+      ComputeGeneralizedReactionFromCSR(
+          n_dofs, offsets, columns, values, augmented_dual,
+          row_begin + position_row_count,
+          row_begin + position_row_count + orientation_row_count);
 
-  const HingeWrench position_wrench =
-      EstimateHingeWrench(position_reaction, node_offset, num_nodes, x, y, z,
-                          hinge_point);
-  const HingeWrench orientation_wrench =
-      EstimateHingeWrench(orientation_reaction, node_offset, num_nodes, x, y, z,
-                          hinge_point);
+  const HingeWrench position_wrench = EstimateHingeWrench(
+      position_reaction, node_offset, num_nodes, x, y, z, hinge_point);
+  const HingeWrench orientation_wrench = EstimateHingeWrench(
+      orientation_reaction, node_offset, num_nodes, x, y, z, hinge_point);
 
-  wrench.force = position_wrench.force;
+  wrench.force  = position_wrench.force;
   wrench.moment = orientation_wrench.moment;
   return wrench;
 }
@@ -399,31 +397,27 @@ class DoublePendulumCsvWriter {
     return stream_.is_open();
   }
 
-  void WriteRow(int step, double time, double upper_joint_angle_rad,
-                double lower_joint_absolute_angle_rad,
-                double lower_joint_relative_angle_rad,
-                double constraint_violation_l2,
-                double constraint_violation_linf,
-                double position_constraint_violation_l2,
-                double position_constraint_violation_linf,
-                double orientation_constraint_violation_l2,
-                double orientation_constraint_violation_linf,
-                double total_energy, double kinetic_energy,
-                double potential_energy,
-                double elastic_strain_energy,
-                const HingeWrench& upper_joint_reaction,
-                const HingeWrench& lower_joint_reaction,
-                double lower_hinge_mismatch_norm,
-                const Eigen::Vector3d& tip_position) {
+  void WriteRow(
+      int step, double time, double upper_joint_angle_rad,
+      double lower_joint_absolute_angle_rad,
+      double lower_joint_relative_angle_rad, double constraint_violation_l2,
+      double constraint_violation_linf, double position_constraint_violation_l2,
+      double position_constraint_violation_linf,
+      double orientation_constraint_violation_l2,
+      double orientation_constraint_violation_linf, double total_energy,
+      double kinetic_energy, double potential_energy,
+      double elastic_strain_energy, const HingeWrench& upper_joint_reaction,
+      const HingeWrench& lower_joint_reaction, double lower_hinge_mismatch_norm,
+      const Eigen::Vector3d& tip_position) {
     const double upper_force_l2  = upper_joint_reaction.force.norm();
     const double upper_torque_l2 = upper_joint_reaction.moment.norm();
     const double lower_force_l2  = lower_joint_reaction.force.norm();
     const double lower_torque_l2 = lower_joint_reaction.moment.norm();
     std::ostringstream row;
     row << std::setprecision(16) << step << ',' << time << ','
-        << upper_joint_angle_rad << ',' << lower_joint_absolute_angle_rad
-        << ',' << lower_joint_relative_angle_rad << ','
-        << constraint_violation_l2 << ',' << constraint_violation_linf << ','
+        << upper_joint_angle_rad << ',' << lower_joint_absolute_angle_rad << ','
+        << lower_joint_relative_angle_rad << ',' << constraint_violation_l2
+        << ',' << constraint_violation_linf << ','
         << position_constraint_violation_l2 << ','
         << position_constraint_violation_linf << ','
         << orientation_constraint_violation_l2 << ','
@@ -441,9 +435,9 @@ class DoublePendulumCsvWriter {
         << lower_joint_reaction.force.z() << ','
         << lower_joint_reaction.moment.x() << ','
         << lower_joint_reaction.moment.y() << ','
-        << lower_joint_reaction.moment.z() << ','
-        << lower_hinge_mismatch_norm << ',' << tip_position.x() << ','
-        << tip_position.y() << ',' << tip_position.z() << '\n';
+        << lower_joint_reaction.moment.z() << ',' << lower_hinge_mismatch_norm
+        << ',' << tip_position.x() << ',' << tip_position.y() << ','
+        << tip_position.z() << '\n';
     stream_ << row.str();
     stream_.flush();
   }
@@ -524,19 +518,19 @@ class DoublePendulumSphericalCsvWriter {
                 double upper_joint_position_residual_l2,
                 double upper_joint_position_residual_linf,
                 double lower_joint_position_residual_l2,
-                double lower_joint_position_residual_linf,
-                double total_energy, double kinetic_energy,
-                double potential_energy, double elastic_strain_energy,
+                double lower_joint_position_residual_linf, double total_energy,
+                double kinetic_energy, double potential_energy,
+                double elastic_strain_energy,
                 const HingeWrench& upper_joint_reaction,
                 const HingeWrench& lower_joint_reaction,
                 double lower_hinge_mismatch_norm,
                 const Eigen::Vector3d& upper_direction,
                 const Eigen::Vector3d& lower_direction,
                 const Eigen::Vector3d& tip_position) {
-    const double upper_force_l2  = upper_joint_reaction.force.norm();
-    const double upper_torque_l2 = upper_joint_reaction.moment.norm();
-    const double lower_force_l2  = lower_joint_reaction.force.norm();
-    const double lower_torque_l2 = lower_joint_reaction.moment.norm();
+    const double upper_force_l2          = upper_joint_reaction.force.norm();
+    const double upper_torque_l2         = upper_joint_reaction.moment.norm();
+    const double lower_force_l2          = lower_joint_reaction.force.norm();
+    const double lower_torque_l2         = lower_joint_reaction.moment.norm();
     const Eigen::Vector3d upper_dir_unit = SafeNormalized(upper_direction);
     const Eigen::Vector3d lower_dir_unit = SafeNormalized(lower_direction);
 
@@ -545,9 +539,8 @@ class DoublePendulumSphericalCsvWriter {
         << upper_swing_angle_rad << ',' << upper_azimuth_rad << ','
         << lower_swing_angle_rad << ',' << lower_azimuth_rad << ','
         << inter_link_angle_rad << ',' << constraint_violation_l2 << ','
-        << constraint_violation_linf << ','
-        << upper_joint_position_residual_l2 << ','
-        << upper_joint_position_residual_linf << ','
+        << constraint_violation_linf << ',' << upper_joint_position_residual_l2
+        << ',' << upper_joint_position_residual_linf << ','
         << lower_joint_position_residual_l2 << ','
         << lower_joint_position_residual_linf << ',' << total_energy << ','
         << kinetic_energy << ',' << potential_energy << ','
@@ -563,12 +556,12 @@ class DoublePendulumSphericalCsvWriter {
         << lower_joint_reaction.force.z() << ','
         << lower_joint_reaction.moment.x() << ','
         << lower_joint_reaction.moment.y() << ','
-        << lower_joint_reaction.moment.z() << ','
-        << lower_hinge_mismatch_norm << ',' << upper_dir_unit.x() << ','
-        << upper_dir_unit.y() << ',' << upper_dir_unit.z() << ','
-        << lower_dir_unit.x() << ',' << lower_dir_unit.y() << ','
-        << lower_dir_unit.z() << ',' << tip_position.x() << ','
-        << tip_position.y() << ',' << tip_position.z() << '\n';
+        << lower_joint_reaction.moment.z() << ',' << lower_hinge_mismatch_norm
+        << ',' << upper_dir_unit.x() << ',' << upper_dir_unit.y() << ','
+        << upper_dir_unit.z() << ',' << lower_dir_unit.x() << ','
+        << lower_dir_unit.y() << ',' << lower_dir_unit.z() << ','
+        << tip_position.x() << ',' << tip_position.y() << ','
+        << tip_position.z() << '\n';
     stream_ << row.str();
     stream_.flush();
   }
@@ -604,11 +597,28 @@ class PistonPumpCsvWriter {
             << ",joint_reaction_force_x"
             << ",joint_reaction_force_y"
             << ",joint_reaction_force_z"
+            << ",joint_reaction_moment_x"
+            << ",joint_reaction_moment_y"
+            << ",joint_reaction_moment_z"
             << ",piston_axis_x"
             << ",piston_axis_y"
             << ",piston_axis_z"
             << ",piston_axial_disp"
             << ",piston_axis_relative_radial_drift"
+            << ",lower_axis_radial_drift"
+            << ",upper_axis_radial_drift"
+            << ",world_axis_radial_drift"
+            << ",applied_bend_force_y"
+            << ",cylindrical_row_reconstruction_l2"
+            << ",cylindrical_row_reconstruction_linf"
+            << ",lower_parallel_residual_0"
+            << ",lower_parallel_residual_1"
+            << ",lower_collocation_residual_0"
+            << ",lower_collocation_residual_1"
+            << ",upper_parallel_residual_0"
+            << ",upper_parallel_residual_1"
+            << ",upper_collocation_residual_0"
+            << ",upper_collocation_residual_1"
             << ",handle_tip_x"
             << ",handle_tip_y"
             << ",handle_tip_z\n";
@@ -618,18 +628,24 @@ class PistonPumpCsvWriter {
     return stream_.is_open();
   }
 
-  void WriteRow(int step, double time,
-                double cylindrical_constraint_violation_l2,
-                double cylindrical_constraint_violation_linf,
-                double parallel_constraint_violation_l2,
-                double parallel_constraint_violation_linf,
-                double collocation_constraint_violation_l2,
-                double collocation_constraint_violation_linf,
-                const HingeWrench& joint_reaction,
-                const Eigen::Vector3d& piston_axis_position,
-                double piston_axial_disp,
-                double piston_axis_radial_drift,
-                const Eigen::Vector3d& handle_tip_position) {
+  void WriteRow(
+      int step, double time, double cylindrical_constraint_violation_l2,
+      double cylindrical_constraint_violation_linf,
+      double parallel_constraint_violation_l2,
+      double parallel_constraint_violation_linf,
+      double collocation_constraint_violation_l2,
+      double collocation_constraint_violation_linf,
+      const HingeWrench& joint_reaction,
+      const Eigen::Vector3d& piston_axis_position, double piston_axial_disp,
+      double piston_axis_radial_drift, double lower_axis_radial_drift,
+      double upper_axis_radial_drift, double world_axis_radial_drift,
+      double applied_bend_force_y, double cylindrical_row_reconstruction_l2,
+      double cylindrical_row_reconstruction_linf,
+      double lower_parallel_residual_0, double lower_parallel_residual_1,
+      double lower_collocation_residual_0, double lower_collocation_residual_1,
+      double upper_parallel_residual_0, double upper_parallel_residual_1,
+      double upper_collocation_residual_0, double upper_collocation_residual_1,
+      const Eigen::Vector3d& handle_tip_position) {
     std::ostringstream row;
     row << std::setprecision(16) << step << ',' << time << ','
         << cylindrical_constraint_violation_l2 << ','
@@ -638,18 +654,22 @@ class PistonPumpCsvWriter {
         << parallel_constraint_violation_linf << ','
         << collocation_constraint_violation_l2 << ','
         << collocation_constraint_violation_linf << ','
-        << joint_reaction.force.norm() << ','
-        << joint_reaction.force.x() << ','
-        << joint_reaction.force.y() << ','
-        << joint_reaction.force.z() << ','
-        << piston_axis_position.x() << ','
-        << piston_axis_position.y() << ','
-        << piston_axis_position.z() << ','
-        << piston_axial_disp << ','
-        << piston_axis_radial_drift << ','
-        << handle_tip_position.x() << ','
-        << handle_tip_position.y() << ','
-        << handle_tip_position.z() << '\n';
+        << joint_reaction.force.norm() << ',' << joint_reaction.force.x() << ','
+        << joint_reaction.force.y() << ',' << joint_reaction.force.z() << ','
+        << joint_reaction.moment.x() << ',' << joint_reaction.moment.y() << ','
+        << joint_reaction.moment.z() << ',' << piston_axis_position.x() << ','
+        << piston_axis_position.y() << ',' << piston_axis_position.z() << ','
+        << piston_axial_disp << ',' << piston_axis_radial_drift << ','
+        << lower_axis_radial_drift << ',' << upper_axis_radial_drift << ','
+        << world_axis_radial_drift << ',' << applied_bend_force_y << ','
+        << cylindrical_row_reconstruction_l2 << ','
+        << cylindrical_row_reconstruction_linf << ','
+        << lower_parallel_residual_0 << ',' << lower_parallel_residual_1 << ','
+        << lower_collocation_residual_0 << ',' << lower_collocation_residual_1
+        << ',' << upper_parallel_residual_0 << ',' << upper_parallel_residual_1
+        << ',' << upper_collocation_residual_0 << ','
+        << upper_collocation_residual_1 << ',' << handle_tip_position.x() << ','
+        << handle_tip_position.y() << ',' << handle_tip_position.z() << '\n';
     stream_ << row.str();
     stream_.flush();
   }
