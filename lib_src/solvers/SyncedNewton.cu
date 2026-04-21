@@ -1474,13 +1474,15 @@ void SyncedNewtonSolver::OneStepNewtonCuDSS() {
 
         HANDLE_ERROR(cudaDeviceSynchronize());
 
-        cudssPhase_t factor_phase =
-            (fixed_sparsity_pattern_ && factorization_done_)
-                ? CUDSS_PHASE_REFACTORIZATION
-                : CUDSS_PHASE_FACTORIZATION;
-        CUDSS_OK(cudssExecute(cudss_handle_, factor_phase, cudss_config_,
-                              cudss_data_, dssA, dssX, dssB));
-        factorization_done_ = true;
+        if (!h_modified_newton_ || newton_iter == 0) {
+          cudssPhase_t factor_phase =
+              (fixed_sparsity_pattern_ && factorization_done_)
+                  ? CUDSS_PHASE_REFACTORIZATION
+                  : CUDSS_PHASE_FACTORIZATION;
+          CUDSS_OK(cudssExecute(cudss_handle_, factor_phase, cudss_config_,
+                                cudss_data_, dssA, dssX, dssB));
+          factorization_done_ = true;
+        }
 
         HANDLE_ERROR(cudaMemset(d_delta_v_, 0, n_dofs * sizeof(double)));
         CUDSS_OK(cudssExecute(cudss_handle_, CUDSS_PHASE_SOLVE, cudss_config_,

@@ -35,6 +35,7 @@ struct SyncedNewtonParams {
   int max_outer, max_inner;
   double time_step;
   bool enable_line_search = false;
+  bool modified_newton = false;
 };
 
 class SyncedNewtonSolver : public SolverBase {
@@ -45,6 +46,7 @@ class SyncedNewtonSolver : public SolverBase {
         n_beam_(data->get_n_beam()),
         n_constraints_(n_constraints),
         h_enable_line_search_(false),
+        h_modified_newton_(false),
         sparse_hessian_initialized_(false),
         h_nnz_(0),
         d_csr_row_offsets_(nullptr),
@@ -222,6 +224,7 @@ class SyncedNewtonSolver : public SolverBase {
     h_max_outer_ = p->max_outer;
     h_max_inner_ = p->max_inner;
     h_enable_line_search_ = p->enable_line_search;
+    h_modified_newton_ = p->modified_newton;
 
     cudaMemcpy(d_inner_atol_, &p->inner_atol, sizeof(double),
                cudaMemcpyHostToDevice);
@@ -411,6 +414,7 @@ class SyncedNewtonSolver : public SolverBase {
   double h_inner_atol_, h_outer_tol_, h_inner_rtol_;
   int h_max_outer_, h_max_inner_;
   bool h_enable_line_search_;
+  bool h_modified_newton_;
   int *d_max_inner_, *d_max_outer_;
   double *d_delta_v_, *d_r_;
   double *d_r_dot_r_;                // Scalar for dot product storage
