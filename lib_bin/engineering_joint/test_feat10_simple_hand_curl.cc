@@ -281,7 +281,8 @@ int main(int argc, char** argv) {
   std::filesystem::create_directories("output/engineering_joint");
 
   const std::string mesh_dir = "data/meshes/T10/hand_simple";
-  const std::string block_prefix = mesh_dir + "/finger_block.1";
+  const std::string block_dir = "data/meshes/T10/finger";
+  const std::string block_prefix = block_dir + "/finger_block.1";
   const std::string tendon_prefix = mesh_dir + "/tendon.1";
   const std::string palm_prefix = mesh_dir + "/palm.1";
 
