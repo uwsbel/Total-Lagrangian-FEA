@@ -158,8 +158,8 @@ cc_binary(
 )
 
 cc_binary(
-    name = "test_feat10_finger_tendon_curl",
-    srcs = ["test_feat10_finger_tendon_curl.cc"],
+    name = "test_mixed_finger_tendon_curl",
+    srcs = ["test_mixed_finger_tendon_curl.cc"],
     copts = ["--std=c++17"],
     linkopts = [
         "-L/usr/local/cuda/lib64",
