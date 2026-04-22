@@ -1,0 +1,444 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<robot name="sbel_hand_right">
+  <link name="base"/>
+  <joint name="base_joint" type="fixed">
+    <parent link="base"/>
+    <child link="hand_base_link"/>
+    <origin xyz="0 0 0" rpy="-1.57079 0 3.14159"/>
+  </joint>
+
+  <!-- Palm -->
+  <link name="hand_base_link">
+    <inertial>
+      <origin xyz="0 -0.040 0" rpy="0 0 0"/>
+      <mass value="0.100"/>
+      <inertia ixx="8.533e-05" ixy="0" ixz="0" iyy="3.913e-05" iyz="0" izz="5.620e-05"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="meshes/visual/hand_base_link.obj"/></geometry>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="meshes/collision/hand_base_link.obj"/></geometry>
+    </collision>
+  </link>
+
+  <!-- ==================== THUMB (45-deg inclination) ==================== -->
+  <link name="thumb_proximal">
+    <inertial>
+      <origin xyz="0 0.014 0" rpy="0 0 0"/>
+      <mass value="0.005"/>
+      <inertia ixx="3.583e-07" ixy="0" ixz="0" iyy="1.233e-07" iyz="0" izz="3.983e-07"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="meshes/visual/capsule_28.0x14.obj"/></geometry>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="meshes/collision/capsule_28.0x14.obj"/></geometry>
+    </collision>
+  </link>
+  <joint name="thumb_proximal_joint" type="revolute">
+    <origin xyz="0 -0.035 -0.038" rpy="-2.3562 0 0"/>
+    <parent link="hand_base_link"/>
+    <child link="thumb_proximal"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="0" upper="1.47" effort="1" velocity="0.5"/>
+  </joint>
+
+  <link name="thumb_intermediate">
+    <inertial>
+      <origin xyz="0 0.0105 0" rpy="0 0 0"/>
+      <mass value="0.004"/>
+      <inertia ixx="1.810e-07" ixy="0" ixz="0" iyy="8.967e-08" iyz="0" izz="2.040e-07"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="meshes/visual/capsule_21.0x14.obj"/></geometry>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="meshes/collision/capsule_21.0x14.obj"/></geometry>
+    </collision>
+  </link>
+  <joint name="thumb_intermediate_joint" type="revolute">
+    <origin xyz="0 0.028 0" rpy="0 0 0"/>
+    <parent link="thumb_proximal"/>
+    <child link="thumb_intermediate"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="0" upper="1.57" effort="1" velocity="0.5"/>
+  </joint>
+
+  <link name="thumb_distal">
+    <inertial>
+      <origin xyz="0 0.0085 0" rpy="0 0 0"/>
+      <mass value="0.003"/>
+      <inertia ixx="1.072e-07" ixy="0" ixz="0" iyy="6.100e-08" iyz="0" izz="1.182e-07"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="meshes/visual/capsule_17.0x14.obj"/></geometry>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="meshes/collision/capsule_17.0x14.obj"/></geometry>
+    </collision>
+  </link>
+  <joint name="thumb_distal_joint" type="revolute">
+    <origin xyz="0 0.021 0" rpy="0 0 0"/>
+    <parent link="thumb_intermediate"/>
+    <child link="thumb_distal"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="0" upper="1.0" effort="1" velocity="0.5"/>
+  </joint>
+
+  <!-- ==================== INDEX ==================== -->
+  <link name="index_proximal">
+    <inertial>
+      <origin xyz="0 0.01725 0" rpy="0 0 0"/>
+      <mass value="0.004"/>
+      <inertia ixx="4.301e-07" ixy="0" ixz="0" iyy="8.133e-08" iyz="0" izz="4.447e-07"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="meshes/visual/capsule_34.5x14.obj"/></geometry>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="meshes/collision/capsule_34.5x14.obj"/></geometry>
+    </collision>
+  </link>
+  <joint name="index_proximal_joint" type="revolute">
+    <origin xyz="0 -0.080 -0.029" rpy="-3.14159 0 0"/>
+    <parent link="hand_base_link"/>
+    <child link="index_proximal"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="0" upper="1.47" effort="1" velocity="0.5"/>
+  </joint>
+
+  <link name="index_intermediate">
+    <inertial>
+      <origin xyz="0 0.01175 0" rpy="0 0 0"/>
+      <mass value="0.003"/>
+      <inertia ixx="1.609e-07" ixy="0" ixz="0" iyy="5.525e-08" iyz="0" izz="1.662e-07"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="meshes/visual/capsule_23.5x14.obj"/></geometry>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="meshes/collision/capsule_23.5x14.obj"/></geometry>
+    </collision>
+  </link>
+  <joint name="index_intermediate_joint" type="revolute">
+    <origin xyz="0 0.0345 0" rpy="0 0 0"/>
+    <parent link="index_proximal"/>
+    <child link="index_intermediate"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="0" upper="1.57" effort="1" velocity="0.5"/>
+  </joint>
+
+  <link name="index_distal">
+    <inertial>
+      <origin xyz="0 0.00975 0" rpy="0 0 0"/>
+      <mass value="0.002"/>
+      <inertia ixx="8.168e-08" ixy="0" ixz="0" iyy="3.333e-08" iyz="0" izz="8.168e-08"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="meshes/visual/capsule_19.5x14.obj"/></geometry>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="meshes/collision/capsule_19.5x14.obj"/></geometry>
+    </collision>
+  </link>
+  <joint name="index_distal_joint" type="revolute">
+    <origin xyz="0 0.0235 0" rpy="0 0 0"/>
+    <parent link="index_intermediate"/>
+    <child link="index_distal"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="0" upper="1.0" effort="1" velocity="0.5"/>
+  </joint>
+
+  <!-- ==================== MIDDLE ==================== -->
+  <link name="middle_proximal">
+    <inertial>
+      <origin xyz="0 0.0175 0" rpy="0 0 0"/>
+      <mass value="0.004"/>
+      <inertia ixx="4.437e-07" ixy="0" ixz="0" iyy="8.133e-08" iyz="0" izz="4.583e-07"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="meshes/visual/capsule_35.0x14.obj"/></geometry>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="meshes/collision/capsule_35.0x14.obj"/></geometry>
+    </collision>
+  </link>
+  <joint name="middle_proximal_joint" type="revolute">
+    <origin xyz="0 -0.080 -0.010" rpy="-3.14159 0 0"/>
+    <parent link="hand_base_link"/>
+    <child link="middle_proximal"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="0" upper="1.47" effort="1" velocity="0.5"/>
+  </joint>
+
+  <link name="middle_intermediate">
+    <inertial>
+      <origin xyz="0 0.0125 0" rpy="0 0 0"/>
+      <mass value="0.003"/>
+      <inertia ixx="1.813e-07" ixy="0" ixz="0" iyy="5.525e-08" iyz="0" izz="1.866e-07"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="meshes/visual/capsule_25.0x14.obj"/></geometry>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="meshes/collision/capsule_25.0x14.obj"/></geometry>
+    </collision>
+  </link>
+  <joint name="middle_intermediate_joint" type="revolute">
+    <origin xyz="0 0.035 0" rpy="0 0 0"/>
+    <parent link="middle_proximal"/>
+    <child link="middle_intermediate"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="0" upper="1.57" effort="1" velocity="0.5"/>
+  </joint>
+
+  <link name="middle_distal">
+    <inertial>
+      <origin xyz="0 0.01025 0" rpy="0 0 0"/>
+      <mass value="0.002"/>
+      <inertia ixx="8.752e-08" ixy="0" ixz="0" iyy="3.333e-08" iyz="0" izz="8.752e-08"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="meshes/visual/capsule_20.5x14.obj"/></geometry>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="meshes/collision/capsule_20.5x14.obj"/></geometry>
+    </collision>
+  </link>
+  <joint name="middle_distal_joint" type="revolute">
+    <origin xyz="0 0.025 0" rpy="0 0 0"/>
+    <parent link="middle_intermediate"/>
+    <child link="middle_distal"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="0" upper="1.0" effort="1" velocity="0.5"/>
+  </joint>
+
+  <!-- ==================== RING ==================== -->
+  <link name="ring_proximal">
+    <inertial>
+      <origin xyz="0 0.01725 0" rpy="0 0 0"/>
+      <mass value="0.004"/>
+      <inertia ixx="4.301e-07" ixy="0" ixz="0" iyy="8.133e-08" iyz="0" izz="4.447e-07"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="meshes/visual/capsule_34.5x14.obj"/></geometry>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="meshes/collision/capsule_34.5x14.obj"/></geometry>
+    </collision>
+  </link>
+  <joint name="ring_proximal_joint" type="revolute">
+    <origin xyz="0 -0.080 0.010" rpy="-3.14159 0 0"/>
+    <parent link="hand_base_link"/>
+    <child link="ring_proximal"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="0" upper="1.47" effort="1" velocity="0.5"/>
+  </joint>
+
+  <link name="ring_intermediate">
+    <inertial>
+      <origin xyz="0 0.01175 0" rpy="0 0 0"/>
+      <mass value="0.003"/>
+      <inertia ixx="1.609e-07" ixy="0" ixz="0" iyy="5.525e-08" iyz="0" izz="1.662e-07"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="meshes/visual/capsule_23.5x14.obj"/></geometry>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="meshes/collision/capsule_23.5x14.obj"/></geometry>
+    </collision>
+  </link>
+  <joint name="ring_intermediate_joint" type="revolute">
+    <origin xyz="0 0.0345 0" rpy="0 0 0"/>
+    <parent link="ring_proximal"/>
+    <child link="ring_intermediate"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="0" upper="1.57" effort="1" velocity="0.5"/>
+  </joint>
+
+  <link name="ring_distal">
+    <inertial>
+      <origin xyz="0 0.00975 0" rpy="0 0 0"/>
+      <mass value="0.002"/>
+      <inertia ixx="8.168e-08" ixy="0" ixz="0" iyy="3.333e-08" iyz="0" izz="8.168e-08"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="meshes/visual/capsule_19.5x14.obj"/></geometry>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="meshes/collision/capsule_19.5x14.obj"/></geometry>
+    </collision>
+  </link>
+  <joint name="ring_distal_joint" type="revolute">
+    <origin xyz="0 0.0235 0" rpy="0 0 0"/>
+    <parent link="ring_intermediate"/>
+    <child link="ring_distal"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="0" upper="1.0" effort="1" velocity="0.5"/>
+  </joint>
+
+  <!-- ==================== PINKY ==================== -->
+  <link name="pinky_proximal">
+    <inertial>
+      <origin xyz="0 0.01525 0" rpy="0 0 0"/>
+      <mass value="0.003"/>
+      <inertia ixx="2.691e-07" ixy="0" ixz="0" iyy="5.000e-08" iyz="0" izz="2.691e-07"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="meshes/visual/capsule_30.5x14.obj"/></geometry>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="meshes/collision/capsule_30.5x14.obj"/></geometry>
+    </collision>
+  </link>
+  <joint name="pinky_proximal_joint" type="revolute">
+    <origin xyz="0 -0.080 0.029" rpy="-3.14159 0 0"/>
+    <parent link="hand_base_link"/>
+    <child link="pinky_proximal"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="0" upper="1.47" effort="1" velocity="0.5"/>
+  </joint>
+
+  <link name="pinky_intermediate">
+    <inertial>
+      <origin xyz="0 0.0105 0" rpy="0 0 0"/>
+      <mass value="0.002"/>
+      <inertia ixx="9.408e-08" ixy="0" ixz="0" iyy="3.017e-08" iyz="0" izz="9.092e-08"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="meshes/visual/capsule_21.0x14.obj"/></geometry>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="meshes/collision/capsule_21.0x14.obj"/></geometry>
+    </collision>
+  </link>
+  <joint name="pinky_intermediate_joint" type="revolute">
+    <origin xyz="0 0.0305 0" rpy="0 0 0"/>
+    <parent link="pinky_proximal"/>
+    <child link="pinky_intermediate"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="0" upper="1.57" effort="1" velocity="0.5"/>
+  </joint>
+
+  <link name="pinky_distal">
+    <inertial>
+      <origin xyz="0 0.009 0" rpy="0 0 0"/>
+      <mass value="0.002"/>
+      <inertia ixx="7.467e-08" ixy="0" ixz="0" iyy="2.733e-08" iyz="0" izz="7.067e-08"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="meshes/visual/capsule_18.0x14.obj"/></geometry>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="meshes/collision/capsule_18.0x14.obj"/></geometry>
+    </collision>
+  </link>
+  <joint name="pinky_distal_joint" type="revolute">
+    <origin xyz="0 0.021 0" rpy="0 0 0"/>
+    <parent link="pinky_intermediate"/>
+    <child link="pinky_distal"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="0" upper="1.0" effort="1" velocity="0.5"/>
+  </joint>
+
+  <!-- ==================== TIP LINKS ==================== -->
+  <link name="thumb_tip"/>
+  <joint name="thumb_tip_joint" type="fixed">
+    <origin xyz="0 0.017 0" rpy="0 0 0"/>
+    <parent link="thumb_distal"/>
+    <child link="thumb_tip"/>
+  </joint>
+
+  <link name="index_tip"/>
+  <joint name="index_tip_joint" type="fixed">
+    <origin xyz="0 0.0195 0" rpy="0 0 0"/>
+    <parent link="index_distal"/>
+    <child link="index_tip"/>
+  </joint>
+
+  <link name="middle_tip"/>
+  <joint name="middle_tip_joint" type="fixed">
+    <origin xyz="0 0.0205 0" rpy="0 0 0"/>
+    <parent link="middle_distal"/>
+    <child link="middle_tip"/>
+  </joint>
+
+  <link name="ring_tip"/>
+  <joint name="ring_tip_joint" type="fixed">
+    <origin xyz="0 0.0195 0" rpy="0 0 0"/>
+    <parent link="ring_distal"/>
+    <child link="ring_tip"/>
+  </joint>
+
+  <link name="pinky_tip"/>
+  <joint name="pinky_tip_joint" type="fixed">
+    <origin xyz="0 0.018 0" rpy="0 0 0"/>
+    <parent link="pinky_distal"/>
+    <child link="pinky_tip"/>
+  </joint>
+</robot>
