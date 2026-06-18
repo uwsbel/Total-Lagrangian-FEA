@@ -51,7 +51,6 @@ All solvers operate within an augmented Lagrangian outer loop for constraint han
 | cuDSS | Required for Newton solver; must be available in the system CUDA library path |
 | cuBLAS | Ships with CUDA Toolkit |
 | DEM-Engine | Git submodule — initialize before building |
-
 ### Setup
 
 ```bash
