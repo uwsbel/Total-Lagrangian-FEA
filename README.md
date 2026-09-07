@@ -4,8 +4,8 @@
 
 This code accompanies the following publications:
 
-- **Part I — Formulation:** Zhenhao Zhou, Ganesh Arivoli, Dan Negrut. *A Total Lagrangian Finite Element Framework for Multibody Dynamics: Part I — Formulation.* [arXiv:2602.17002](https://arxiv.org/abs/2602.17002)
-- **Part II — GPU Implementation:** Zhenhao Zhou, Ruochun Zhang, Ganesh Arivoli, Dan Negrut. *A Total Lagrangian Finite Element Framework for Multibody Dynamics: Part II — GPU Implementation and Numerical Experiments.* [arXiv:2604.10357](https://arxiv.org/abs/2604.10357)
+- **Part I — Formulation:** Zhenhao Zhou, Ganesh Arivoli, Dan Negrut. *A Total Lagrangian Finite Element Framework for Multibody Dynamics: Part I — Formulation.* Engineering with Computers (2026). [doi:10.1007/s00366-026-02386-2](https://doi.org/10.1007/s00366-026-02386-2) · [arXiv:2602.17002](https://arxiv.org/abs/2602.17002)
+- **Part II — GPU Implementation:** Zhenhao Zhou, Ruochun Zhang, Ganesh Arivoli, Dan Negrut. *A Total Lagrangian Finite Element Framework for Multibody Dynamics: Part II — GPU Implementation and Numerical Experiments.* Under review (2026). [arXiv:2604.10357](https://arxiv.org/abs/2604.10357)
 
 ---
 
@@ -80,6 +80,14 @@ bazel test //lib_utest/...
 
 ---
 
+## License
+
+BSD 3-Clause. Copyright (c) 2026, Simulation Based Engineering Laboratory, University of Wisconsin–Madison. See [`LICENSE`](LICENSE).
+
+Bundled and fetched third-party components (DEM-Engine, Eigen, GoogleTest, rules_cuda, rules_foreign_cc) retain their own licenses.
+
+---
+
 ## Publications
 
 If you use TL-FEA in your work, please cite:
@@ -88,9 +96,10 @@ If you use TL-FEA in your work, please cite:
 @article{zhou2026tlfea1,
   title   = {A Total Lagrangian Finite Element Framework for Multibody Dynamics: Part {I} -- Formulation},
   author  = {Zhou, Zhenhao and Arivoli, Ganesh and Negrut, Dan},
-  journal = {arXiv preprint arXiv:2602.17002},
+  journal = {Engineering with Computers},
   year    = {2026},
-  url     = {https://arxiv.org/abs/2602.17002}
+  doi     = {10.1007/s00366-026-02386-2},
+  url     = {https://doi.org/10.1007/s00366-026-02386-2}
 }
 
 @article{zhou2026tlfea2,
