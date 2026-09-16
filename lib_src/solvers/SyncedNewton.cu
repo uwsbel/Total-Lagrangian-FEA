@@ -998,7 +998,7 @@ void SyncedNewtonSolver::OneStepNewtonCuDSS() {
     CUDSS_OK(cudssDataCreate(cudss_handle_, &cudss_data_));
 
     // CuDSS Solver Setup
-    cudssAlgType_t reorder = CUDSS_ALG_DEFAULT;
+    cudssReorderingAlg_t reorder = CUDSS_REORDERING_ALG_DEFAULT;
     CUDSS_OK(cudssConfigSet(cudss_config_, CUDSS_CONFIG_REORDERING_ALG,
                             &reorder, sizeof(reorder)));
     // Disable iterative refinement for faster solves
@@ -1010,11 +1010,11 @@ void SyncedNewtonSolver::OneStepNewtonCuDSS() {
   cudssMatrix_t dssA, dssB, dssX;
   CUDSS_OK(cudssMatrixCreateCsr(
       &dssA, n_dofs, n_dofs, h_nnz_, d_csr_row_offsets_, nullptr,
-      d_csr_col_indices_, d_csr_values_, CUDA_R_32I, CUDA_R_64F,
+      d_csr_col_indices_, d_csr_values_, CUDSS_R_32I, CUDSS_R_32I, CUDSS_R_64F,
       CUDSS_MTYPE_SPD, CUDSS_MVIEW_UPPER, CUDSS_BASE_ZERO));
-  CUDSS_OK(cudssMatrixCreateDn(&dssB, n_dofs, 1, n_dofs, d_r_, CUDA_R_64F,
+  CUDSS_OK(cudssMatrixCreateDn(&dssB, n_dofs, 1, n_dofs, d_r_, CUDSS_R_64F,
                                CUDSS_LAYOUT_COL_MAJOR));
-  CUDSS_OK(cudssMatrixCreateDn(&dssX, n_dofs, 1, n_dofs, d_delta_v_, CUDA_R_64F,
+  CUDSS_OK(cudssMatrixCreateDn(&dssX, n_dofs, 1, n_dofs, d_delta_v_, CUDSS_R_64F,
                                CUDSS_LAYOUT_COL_MAJOR));
 
   HANDLE_ERROR(cudaEventRecord(start));
