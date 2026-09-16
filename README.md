@@ -48,7 +48,7 @@ All solvers operate within an augmented Lagrangian outer loop for constraint han
 | CUDA Toolkit | Tested on CUDA 12.x |
 | Bazel 9 | Build system |
 | Eigen 3.4 | Fetched automatically via Bzlmod |
-| cuDSS | Required for Newton solver; must be available in the system CUDA library path |
+| cuDSS | 0.8 or newer. Required for Newton solver; must be available in the system CUDA library path |
 | cuBLAS | Ships with CUDA Toolkit |
 | DEM-Engine | Git submodule — initialize before building |
 ### Setup
