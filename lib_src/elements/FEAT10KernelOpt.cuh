@@ -33,8 +33,8 @@ constexpr float kMinJthreshold = 1e-6f;
 constexpr float kEtaDamp = 0.0f;
 constexpr float kLambdaDamp = 0.0f;
 #else
-constexpr float kEtaDamp = 1.0e4f;    // Kelvin-Voigt shear damping (Pa·s)
-constexpr float kLambdaDamp = 1.0e4f;  // Kelvin-Voigt volumetric damping (Pa·s)
+constexpr float kEtaDamp = 1.0e2f;    // Kelvin-Voigt shear damping (Pa·s)
+constexpr float kLambdaDamp = 1.0e2f;  // Kelvin-Voigt volumetric damping (Pa·s)
 #endif
 constexpr bool kUseKelvinVoigtDamping =
     (kEtaDamp != 0.0f) || (kLambdaDamp != 0.0f);

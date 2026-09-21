@@ -45,8 +45,8 @@ constexpr double kMR_kappa = 1.5 * kBulk;
 
 // Kelvin-Voigt damping applied with --damp. Must match the FEAT10Opt kernel
 // constants (see FEAT10KernelOpt.cuh).
-constexpr double kEtaDamp    = 1.0e4;  // Pa·s
-constexpr double kLambdaDamp = 1.0e4;  // Pa·s
+constexpr double kEtaDamp    = 1.0e2;  // Pa·s
+constexpr double kLambdaDamp = 1.0e2;  // Pa·s
 
 // Boundary conditions
 constexpr double kFixedZThreshold = -4.0;   // fix nodes with z < this
@@ -123,7 +123,7 @@ void PrintUsage(const char* argv0) {
       << " [--opt] [--damp] [--mat=MAT] [--dt=DT] [--steps=N] [--csv[=PATH]]"
          " [--csv-interval=N] [--csv-force] [--vtk=N] [--vtk-dir=PATH] [--help]\n"
       << "  --opt            Use FEAT10Opt + SyncedExplicitOpt (default: standard)\n"
-            << "  --damp           Kelvin-Voigt damping (eta = lambda = 1e4); with --opt\n"
+            << "  --damp           Kelvin-Voigt damping (eta = lambda = 1e2); with --opt\n"
             << "                   the kernel must be built without --config=opt_nodamp\n"
       << "  --mat=MAT        svk | mr (default: svk; ignored with --opt)\n"
       << "  --dt=DT          Time step (default: 1e-6)\n"

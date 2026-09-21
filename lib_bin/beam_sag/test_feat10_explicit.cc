@@ -43,8 +43,8 @@ constexpr double kMR_rho   = 920.0;               // kg/m³
 
 // Kelvin-Voigt damping applied with --damp. Must match the FEAT10Opt kernel
 // constants (see FEAT10KernelOpt.cuh).
-constexpr double kEtaDamp    = 1.0e4;  // Pa·s
-constexpr double kLambdaDamp = 1.0e4;  // Pa·s
+constexpr double kEtaDamp    = 1.0e2;  // Pa·s
+constexpr double kLambdaDamp = 1.0e2;  // Pa·s
 
 enum class MaterialKind { kSVK, kMR };
 
@@ -66,7 +66,7 @@ void PrintUsage(const char* argv0) {
             << " [--opt] [--damp] [--mat=MAT] [--res=R] [--dt=DT] [--steps=N] [--csv[=PATH]]"
                " [--csv-interval=N] [--csv-force] [--help]\n"
             << "  --opt            Use FEAT10Opt + SyncedExplicitOpt (default: standard)\n"
-            << "  --damp           Kelvin-Voigt damping (eta = lambda = 1e4); with --opt\n"
+            << "  --damp           Kelvin-Voigt damping (eta = lambda = 1e2); with --opt\n"
             << "                   the kernel must be built without --config=opt_nodamp\n"
             << "  --mat=MAT        svk | mr (default: svk; ignored with --opt, forces MR)\n"
             << "  --res=R          0 | 2 | 4 | 8 | 16 | 32 (default: 0)\n"
