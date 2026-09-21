@@ -218,13 +218,13 @@ MATERIAL_MODEL = "SVK" if _args.mat.lower() == "svk" else "MOONEY_RIVLIN"
 # Material properties - choose based on material model
 if MATERIAL_MODEL == "MOONEY_RIVLIN":
     # Mooney-Rivlin coefficients
-    mu10_val = 80000.0    # First MR coefficient
-    mu01_val = 20000.0    # Second MR coefficient
-    kappa_val = 1.0e6     # Bulk modulus (volumetric penalty)
-    rho_val = 1100.0      # Rubber density kg/m³
+    mu10_val = 32142857.142857143  # Pa (0.30 * mu, E = 3e8, nu = 0.40)
+    mu01_val = 21428571.428571429  # Pa (0.20 * mu)
+    kappa_val = 7.5e8  # Pa (1.5 * bulk modulus)
+    rho_val = 920.0  # kg/m^3
     # Approximate E and nu for reference (not used in MR formulation)
-    E_val = 6.0 * (mu10_val + mu01_val)  # ~600000 Pa
-    nu_val = 0.45
+    E_val = 3.0e8
+    nu_val = 0.40
 else:
     # SVK material properties (matching GPU test_feat10_explicit.cc)
     E_val = 7.0e8         # Young's modulus: 7×10⁸ Pa

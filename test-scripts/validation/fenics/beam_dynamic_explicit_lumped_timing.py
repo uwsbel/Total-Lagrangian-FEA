@@ -120,10 +120,10 @@ C = F.T * F
 
 if MAT == "mr":
     # Mooney-Rivlin parameters (match C++ FEAT10Opt test)
-    mu10_val = 80000.0   # Pa
-    mu01_val = 20000.0   # Pa
-    kappa_val = 1e6      # Pa
-    rho_val = 1100.0     # kg/m^3
+    mu10_val = 32142857.142857143  # Pa (0.30 * mu, E = 3e8, nu = 0.40)
+    mu01_val = 21428571.428571429  # Pa (0.20 * mu)
+    kappa_val = 7.5e8  # Pa (1.5 * bulk modulus)
+    rho_val = 920.0  # kg/m^3
 
     rho = fem.Constant(domain, rho_val)
     mu10 = fem.Constant(domain, default_scalar_type(mu10_val))

@@ -132,12 +132,12 @@ else:
 MATERIAL_MODEL = "SVK" if MAT.lower() == "svk" else "MOONEY_RIVLIN"
 
 if MATERIAL_MODEL == "MOONEY_RIVLIN":
-    mu10_val = 80000.0
-    mu01_val = 20000.0
-    kappa_val = 1.0e6
-    rho_val = 1100.0
-    E_val = 6.0 * (mu10_val + mu01_val)
-    nu_val = 0.45
+    mu10_val = 32142857.142857143  # Pa (0.30 * mu, E = 3e8, nu = 0.40)
+    mu01_val = 21428571.428571429  # Pa (0.20 * mu)
+    kappa_val = 7.5e8  # Pa (1.5 * bulk modulus)
+    rho_val = 920.0  # kg/m^3
+    E_val = 3.0e8
+    nu_val = 0.40
 else:
     E_val = 7.0e8
     nu_val = 0.33
