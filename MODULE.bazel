@@ -3,12 +3,35 @@ module(
     version = "0.1",
 )
 
-bazel_dep(name = "platforms", version = "0.0.11")
-bazel_dep(name = "rules_cc", version = "0.2.1")
+bazel_dep(name = "platforms", version = "1.0.0")
+bazel_dep(name = "rules_cc", version = "0.2.14")
 bazel_dep(name = "rules_cuda", version = "0.2.5")
 bazel_dep(name = "rules_foreign_cc", version = "0.9.0")
 bazel_dep(name = "eigen", version = "3.4.0.bcr.3")
-bazel_dep(name = "googletest", version = "1.14.0.bcr.1")
+bazel_dep(name = "googletest", version = "1.17.0")
+
+# Bazel 9 no longer exposes `CcInfo` as a global; `rules_cuda` v0.2.5 still
+# assumes it is. Patch the module to explicitly load it from `@rules_cc`.
+single_version_override(
+    module_name = "rules_cuda",
+    patch_strip = 1,
+    patches = ["//:rules_cuda_0.2.5_bazel9.patch"],
+    version = "0.2.5",
+)
+
+single_version_override(
+    module_name = "rules_foreign_cc",
+    patch_strip = 1,
+    patches = ["//:rules_foreign_cc_0.9.0_bazel9_v3.patch"],
+    version = "0.9.0",
+)
+
+single_version_override(
+    module_name = "googletest",
+    patch_strip = 1,
+    patches = ["//:googletest_1.17.0_bazel9.patch"],
+    version = "1.17.0",
+)
 
 # Bring the CMake-based DEM-Engine submodule into Bazel without adding BUILD files
 # inside the submodule itself.
