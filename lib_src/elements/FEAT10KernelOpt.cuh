@@ -24,6 +24,9 @@ constexpr float kMu10 = 32142857.142857143f;
 constexpr float kMu01 = 21428571.428571429f;
 constexpr float kBulkK = 7.5e8f;
 constexpr float kMinJthreshold = 1e-6f;
+// Kelvin-Voigt damping is fixed at compile time for now to keep the fused
+// kernel's register usage down; setting both to 0 compiles the damping path
+// out. To be made settable later, like GPU_FEAT10_Data::SetDamping.
 constexpr float kEtaDamp = 50.0f;    // Kelvin-Voigt shear damping (Pa·s)
 constexpr float kLambdaDamp = 25.0f;  // Kelvin-Voigt volumetric damping (Pa·s)
 constexpr bool kUseKelvinVoigtDamping =
