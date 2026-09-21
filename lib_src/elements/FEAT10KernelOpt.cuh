@@ -17,10 +17,12 @@
 
 #include "FEAT10DataOpt.cuh"
 
-// Material parameters for Mooney-Rivlin
-constexpr float kMu10 = 80000.0f;
-constexpr float kMu01 = 20000.0f;
-constexpr float kBulkK = 1.0e6f;
+// Material parameters for Mooney-Rivlin, fixed at compile time. They match the
+// explicit demos (E = 3e8, nu = 0.4: mu10 = 0.3 mu, mu01 = 0.2 mu,
+// kappa = 1.5 K). GPU_FEAT10Opt_Data::SetMooneyRivlin rejects other values.
+constexpr float kMu10 = 32142857.142857143f;
+constexpr float kMu01 = 21428571.428571429f;
+constexpr float kBulkK = 7.5e8f;
 constexpr float kMinJthreshold = 1e-6f;
 constexpr float kEtaDamp = 50.0f;    // Kelvin-Voigt shear damping (Pa·s)
 constexpr float kLambdaDamp = 25.0f;  // Kelvin-Voigt volumetric damping (Pa·s)
