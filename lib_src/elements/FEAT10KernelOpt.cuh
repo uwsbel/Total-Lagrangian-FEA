@@ -27,8 +27,15 @@ constexpr float kMinJthreshold = 1e-6f;
 // Kelvin-Voigt damping is fixed at compile time for now to keep the fused
 // kernel's register usage down; setting both to 0 compiles the damping path
 // out. To be made settable later, like GPU_FEAT10_Data::SetDamping.
-constexpr float kEtaDamp = 50.0f;    // Kelvin-Voigt shear damping (Pa·s)
-constexpr float kLambdaDamp = 25.0f;  // Kelvin-Voigt volumetric damping (Pa·s)
+// Build with --config=opt_nodamp (defines FEAT10OPT_NO_DAMPING) for the
+// undamped kernel.
+#ifdef FEAT10OPT_NO_DAMPING
+constexpr float kEtaDamp = 0.0f;
+constexpr float kLambdaDamp = 0.0f;
+#else
+constexpr float kEtaDamp = 1.0e4f;    // Kelvin-Voigt shear damping (Pa·s)
+constexpr float kLambdaDamp = 1.0e4f;  // Kelvin-Voigt volumetric damping (Pa·s)
+#endif
 constexpr bool kUseKelvinVoigtDamping =
     (kEtaDamp != 0.0f) || (kLambdaDamp != 0.0f);
 

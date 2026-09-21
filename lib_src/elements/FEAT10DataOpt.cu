@@ -433,6 +433,19 @@ void GPU_FEAT10Opt_Data::SetDensity(float density) {
   }
 }
 
+void GPU_FEAT10Opt_Data::SetDamping(float eta_damp, float lambda_damp) {
+  if (eta_damp != kEtaDamp || lambda_damp != kLambdaDamp) {
+    std::cerr << "FEAT10Opt: SetDamping(" << eta_damp << ", " << lambda_damp
+              << ") does not match the compiled constants (" << kEtaDamp
+              << ", " << kLambdaDamp << "). Build with"
+              << (eta_damp == 0.0f && lambda_damp == 0.0f
+                      ? " --config=opt_nodamp"
+                      : "out --config=opt_nodamp")
+              << " for this setting." << std::endl;
+    exit(1);
+  }
+}
+
 void GPU_FEAT10Opt_Data::ComputePrecomputation() {
   if (!is_setup) {
     std::cerr << "GPU_FEAT10Opt_Data: Must call Setup() first." << std::endl;

@@ -127,6 +127,10 @@ struct GPU_FEAT10Opt_Data {
   // Set material density.
   void SetDensity(float density);
 
+  // Check Kelvin-Voigt damping against the compiled kernel constants and exit
+  // on a mismatch. The values cannot be changed at runtime yet.
+  void SetDamping(float eta_damp, float lambda_damp);
+
   // Host methods – computation
   // Precompute inverse Jacobians per quadrature point.
   void ComputePrecomputation();

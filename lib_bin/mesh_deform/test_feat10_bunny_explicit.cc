@@ -43,6 +43,11 @@ constexpr double kMR_mu10  = 0.30 * kMu;
 constexpr double kMR_mu01  = 0.20 * kMu;
 constexpr double kMR_kappa = 1.5 * kBulk;
 
+// Kelvin-Voigt damping applied with --damp. Must match the FEAT10Opt kernel
+// constants (see FEAT10KernelOpt.cuh).
+constexpr double kEtaDamp    = 1.0e4;  // Pa·s
+constexpr double kLambdaDamp = 1.0e4;  // Pa·s
+
 // Boundary conditions
 constexpr double kFixedZThreshold = -4.0;   // fix nodes with z < this
 constexpr double kForceZThreshold = 4.0;    // apply force to nodes with z > this
@@ -54,6 +59,7 @@ enum class MaterialKind { kSVK, kMR };
 
 struct Options {
   bool use_opt          = false;
+  bool damp             = false;
   MaterialKind material = MaterialKind::kSVK;
   double dt             = 1e-5;
   int steps             = 800000;  // 800000 * 1e-5 = 8 s total (match Newton 8000*1e-3)
@@ -114,9 +120,11 @@ std::string MaterialName(MaterialKind m) {
 void PrintUsage(const char* argv0) {
   std::cout
       << "Usage: " << argv0
-      << " [--opt] [--mat=MAT] [--dt=DT] [--steps=N] [--csv[=PATH]]"
+      << " [--opt] [--damp] [--mat=MAT] [--dt=DT] [--steps=N] [--csv[=PATH]]"
          " [--csv-interval=N] [--csv-force] [--vtk=N] [--vtk-dir=PATH] [--help]\n"
       << "  --opt            Use FEAT10Opt + SyncedExplicitOpt (default: standard)\n"
+            << "  --damp           Kelvin-Voigt damping (eta = lambda = 1e4); with --opt\n"
+            << "                   the kernel must be built without --config=opt_nodamp\n"
       << "  --mat=MAT        svk | mr (default: svk; ignored with --opt)\n"
       << "  --dt=DT          Time step (default: 1e-6)\n"
       << "  --steps=N        Number of steps (default: 5000)\n"
@@ -136,6 +144,10 @@ bool ParseArgs(int argc, char** argv, Options& opt) {
     }
     if (arg == "--opt") {
       opt.use_opt = true;
+      continue;
+    }
+    if (arg == "--damp") {
+      opt.damp = true;
       continue;
     }
     if (StartsWith(arg, "--mat=")) {
@@ -358,6 +370,12 @@ int main(int argc, char** argv) {
 
     gpu_feat10opt.SetMooneyRivlin(kMR_mu10, kMR_mu01, kMR_kappa);
     gpu_feat10opt.SetDensity(kRho0);
+    const double eta_damp    = opt.damp ? kEtaDamp : 0.0;
+    const double lambda_damp = opt.damp ? kLambdaDamp : 0.0;
+    gpu_feat10opt.SetDamping(static_cast<float>(eta_damp),
+                             static_cast<float>(lambda_damp));
+    std::cout << "Damping: eta=" << eta_damp << ", lambda=" << lambda_damp
+              << std::endl;
 
     std::cout << "Material (MR): mu10=" << kMR_mu10 << ", mu01=" << kMR_mu01
               << ", kappa=" << kMR_kappa << std::endl;
@@ -451,7 +469,11 @@ int main(int argc, char** argv) {
     gpu_t10_data.Setup(tet5pt_x, tet5pt_y, tet5pt_z, tet5pt_w, h_x12, h_y12,
                        h_z12, elements);
     gpu_t10_data.SetDensity(kRho0);
-    gpu_t10_data.SetDamping(0.0, 0.0);
+    const double eta_damp    = opt.damp ? kEtaDamp : 0.0;
+    const double lambda_damp = opt.damp ? kLambdaDamp : 0.0;
+    gpu_t10_data.SetDamping(eta_damp, lambda_damp);
+    std::cout << "Damping: eta=" << eta_damp << ", lambda=" << lambda_damp
+              << std::endl;
 
     if (opt.material == MaterialKind::kSVK) {
       gpu_t10_data.SetSVK(kE, kNu);
