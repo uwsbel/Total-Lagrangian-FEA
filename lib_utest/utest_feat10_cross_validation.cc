@@ -26,6 +26,7 @@
 
 #include <Eigen/Dense>
 #include <cmath>
+#include <iomanip>
 #include <iostream>
 #include <vector>
 
