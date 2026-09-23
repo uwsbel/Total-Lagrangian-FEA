@@ -148,10 +148,14 @@ __global__ void computeHRZLumpedMass_kernel(GPU_FEAT10Opt_Data* d_data,
   constexpr int elements_per_block = 16;
   const float rho = d_data->rho;
 
-  // QP coordinates and weight
-  constexpr float a = 0.1381966011250105f;
-  constexpr float b = 0.5854101966249685f;
-  constexpr float weightQP = 1.0f / 24.0f;  // Same for all 4 QPs
+  // Quadrature weight, same for all 4 QPs. Only the element volume is
+  // integrated here: the scaled consistent-mass diagonal int N_i^2 dV is
+  // degree 4, which this rule does not integrate exactly. For a straight-sided
+  // T10 the mapping is affine, so the exact HRZ shares are constant: 1/36 of
+  // the element mass per corner node and 4/27 per edge node.
+  constexpr float weightQP = 1.0f / 24.0f;
+  constexpr float kCornerFraction = 1.0f / 36.0f;
+  constexpr float kEdgeFraction = 4.0f / 27.0f;
 
   // Get node indices for this element
   const int block_idx = elem_idx / elements_per_block;
@@ -159,40 +163,11 @@ __global__ void computeHRZLumpedMass_kernel(GPU_FEAT10Opt_Data* d_data,
   const int* elem_nodes = d_data->d_elem_nodes_soa +
                           block_idx * 10 * elements_per_block + elem_in_block;
 
-  // Accumulators
+  // Accumulator
   float vol_elem = 0.0f;
-  float diag_consistent[10] = {0.0f};
 
   // Loop over 4 quadrature points
   for (int qp = 0; qp < 4; qp++) {
-    // Canonical 4-point tet rule: permutations of (b, a, a, a)
-    const float xi = (qp == 1) ? b : a;
-    const float eta = (qp == 2) ? b : a;
-    const float zeta = (qp == 3) ? b : a;
-
-    // Barycentric coordinates
-    const float L1 = 1.0f - xi - eta - zeta;
-    const float L2 = xi;
-    const float L3 = eta;
-    const float L4 = zeta;
-    const float L[4] = {L1, L2, L3, L4};
-
-    // Shape functions
-    float N[10];
-
-    // Corner nodes
-    for (int k = 0; k < 4; k++) {
-      N[k] = L[k] * (2.0f * L[k] - 1.0f);
-    }
-
-    // Edge nodes
-    const int edges[6][2] = {{0, 1}, {1, 2}, {0, 2}, {0, 3}, {1, 3}, {2, 3}};
-    for (int k = 0; k < 6; k++) {
-      int ii = edges[k][0];
-      int jj = edges[k][1];
-      N[k + 4] = 4.0f * L[ii] * L[jj];
-    }
-
     // Get detJ from the inverse Jacobian
     // We need to compute det(J) = 1/det(J^{-1})
     const int qp_block = (elem_idx * 4) / 64;
@@ -214,30 +189,19 @@ __global__ void computeHRZLumpedMass_kernel(GPU_FEAT10Opt_Data* d_data,
                     Jinv02 * (Jinv10 * Jinv21 - Jinv11 * Jinv20);
     float detJ = 1.0f / detJinv;
 
-    float dV = detJ * weightQP;
-    vol_elem += dV;
-
-    // Accumulate diagonal of consistent mass: ∫ N_i² dV
-    for (int i = 0; i < 10; i++) {
-      diag_consistent[i] += N[i] * N[i] * dV;
-    }
+    vol_elem += detJ * weightQP;
   }
 
-  // HRZ scaling: preserve total element mass
+  if (vol_elem < 1e-30f) return;
+
+  // HRZ lumping: preserve total element mass
   float total_mass = rho * vol_elem;
-  float sum_diag = 0.0f;
-  for (int i = 0; i < 10; i++) {
-    sum_diag += diag_consistent[i];
-  }
-
-  if (sum_diag < 1e-30f) return;
-
-  float scale = total_mass / sum_diag;
 
   // Assemble to global mass vector using atomicAdd
   for (int i_local = 0; i_local < 10; i_local++) {
     int i_global = elem_nodes[i_local * elements_per_block];
-    float m_lumped = diag_consistent[i_local] * scale;
+    float m_lumped =
+        total_mass * (i_local < 4 ? kCornerFraction : kEdgeFraction);
     atomicAdd(&d_mass_lumped[i_global], m_lumped);
   }
 }

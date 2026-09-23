@@ -291,67 +291,34 @@ __global__ void compute_hrz_lumped_mass_kernel(GPU_FEAT10_Data *d_data,
 
   double rho = d_data->rho0();
 
-  // Accumulators for HRZ algorithm
+  // HRZ lumped mass. The scaled diagonal of the consistent mass matrix is
+  // int N_i^2 dV, which is degree 4 for a T10 element. Integrating it with the
+  // 5-point Keast rule (degree 3, negative centroid weight) leaves corner nodes
+  // 2.55x too light, so use the exact fractions instead: for a straight-sided
+  // T10 the mapping is affine and det(J) constant, giving 1/36 of the element
+  // mass per corner node and 4/27 per edge node (4/36 + 24/27 = 1).
+  constexpr double kCornerFraction = 1.0 / 36.0;
+  constexpr double kEdgeFraction   = 4.0 / 27.0;
+
+  // Element volume still comes from quadrature (exact: det(J) is constant).
   double vol_elem = 0.0;
-  double diag_consistent[10] = {0.0};
 
   // Loop over quadrature points
   for (int qp = 0; qp < Quadrature::N_QP_T10_5; qp++) {
-    double xi   = d_data->tet5pt_x(qp);
-    double eta  = d_data->tet5pt_y(qp);
-    double zeta = d_data->tet5pt_z(qp);
     double wq   = d_data->tet5pt_weights(qp);
     double detJ = d_data->detJ_ref(elem_idx, qp);
-
-    // Compute barycentric coordinates
-    double L1 = 1.0 - xi - eta - zeta;
-    double L2 = xi;
-    double L3 = eta;
-    double L4 = zeta;
-    double L[4] = {L1, L2, L3, L4};
-
-    // Compute shape functions for T10 element
-    double N[10];
-
-    // Corner nodes (0-3): N_i = L_i * (2*L_i - 1)
-    for (int k = 0; k < 4; k++) {
-      N[k] = L[k] * (2.0 * L[k] - 1.0);
-    }
-
-    // Edge nodes (4-9): N_k = 4 * L_i * L_j
-    // Edge connectivity: [(0,1), (1,2), (0,2), (0,3), (1,3), (2,3)]
-    int edges[6][2] = {{0, 1}, {1, 2}, {0, 2}, {0, 3}, {1, 3}, {2, 3}};
-    for (int k = 0; k < 6; k++) {
-      int ii = edges[k][0];
-      int jj = edges[k][1];
-      N[k + 4] = 4.0 * L[ii] * L[jj];
-    }
-
-    double dV = detJ * wq;
-    vol_elem += dV;
-
-    // Accumulate diagonal of consistent mass: ∫ N_i² dV
-    for (int i = 0; i < 10; i++) {
-      diag_consistent[i] += N[i] * N[i] * dV;
-    }
+    vol_elem += detJ * wq;
   }
 
-  // HRZ scaling: preserve total element mass
+  if (vol_elem < 1e-30) return;
+
   double total_mass = rho * vol_elem;
-  double sum_diag = 0.0;
-  for (int i = 0; i < 10; i++) {
-    sum_diag += diag_consistent[i];
-  }
-
-  // Avoid division by zero
-  if (sum_diag < 1e-30) return;
-
-  double scale = total_mass / sum_diag;
 
   // Assemble to global mass vector
   for (int i_local = 0; i_local < 10; i_local++) {
     int i_global = d_data->element_connectivity()(elem_idx, i_local);
-    double m_lumped = diag_consistent[i_local] * scale;
+    double m_lumped =
+        total_mass * (i_local < 4 ? kCornerFraction : kEdgeFraction);
     atomicAdd(&d_mass_lumped[i_global], m_lumped);
   }
 }
