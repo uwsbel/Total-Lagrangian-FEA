@@ -144,3 +144,22 @@ cc_test(
         "@googletest//:gtest_main",
     ],
 )
+
+cc_test(
+    name = "utest_feat10opt_internal_force",
+    srcs = ["utest_feat10opt_internal_force.cc"],
+    copts = ["--std=c++17"],
+    linkopts = [
+        "-L/usr/local/cuda/lib64",
+        "-lcusparse",
+        "-lcudart",
+    ],
+    data = ["//:data_meshes"],
+    deps = [
+        "//lib_src/elements:FEAT10Data",
+        "//lib_src/elements:FEAT10DataOpt",
+        "//lib_utils:cpu_utils",
+        "@eigen//:eigen",
+        "@googletest//:gtest_main",
+    ],
+)
