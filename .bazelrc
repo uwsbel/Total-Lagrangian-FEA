@@ -16,3 +16,6 @@ build:sm120 --@rules_cuda//cuda:archs='compute_120:sm_120,compute_120'
 
 # Multi-arch build (bigger + slower compile, fewer runtime surprises).
 build:multiarch --@rules_cuda//cuda:archs='compute_75:sm_75;compute_86:sm_86,compute_86;compute_120:sm_120,compute_120'
+
+# FEAT10Opt kernel without Kelvin-Voigt damping (compiles the damping path out).
+build:opt_nodamp --@rules_cuda//cuda:copts=-DFEAT10OPT_NO_DAMPING
