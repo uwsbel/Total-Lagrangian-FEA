@@ -601,6 +601,8 @@ struct GPU_FEAT10_Data : public ElementBase {
 
   void CalcMassMatrix() override;
 
+  void CalcLumpedMassHRZ();
+
   void BuildMassCSRPattern();
 
   void ConvertToCSR_ConstraintJacT();
@@ -632,6 +634,8 @@ struct GPU_FEAT10_Data : public ElementBase {
   void RetrieveInternalForceToCPU(Eigen::VectorXd &internal_force) override;
 
   void RetrieveExternalForceToCPU(Eigen::VectorXd &external_force);
+
+  void RetrieveLumpedMassToCPU(Eigen::VectorXd &lumped_mass);
 
   void RetrieveConstraintDataToCPU(Eigen::VectorXd &constraint) override {}
 
@@ -709,6 +713,7 @@ struct GPU_FEAT10_Data : public ElementBase {
     HANDLE_ERROR(cudaMalloc(&d_vm_stress, n_elem * sizeof(double)));
     HANDLE_ERROR(cudaMalloc(&d_f_int, n_coef * 3 * sizeof(double)));
     HANDLE_ERROR(cudaMalloc(&d_f_ext, n_coef * 3 * sizeof(double)));
+    HANDLE_ERROR(cudaMalloc(&d_mass_lumped, n_coef * sizeof(double)));
 
     HANDLE_ERROR(cudaMalloc(&d_rho0, sizeof(double)));
     HANDLE_ERROR(cudaMalloc(&d_nu, sizeof(double)));
@@ -775,6 +780,7 @@ struct GPU_FEAT10_Data : public ElementBase {
                             n_elem * Quadrature::N_QP_T10_5 * sizeof(double)));
 
     cudaMemset(d_f_int, 0, n_coef * 3 * sizeof(double));
+    cudaMemset(d_mass_lumped, 0, n_coef * sizeof(double));
 
     cudaMemset(d_F, 0,
                n_elem * Quadrature::N_QP_T10_5 * 3 * 3 * sizeof(double));
@@ -1189,6 +1195,9 @@ struct GPU_FEAT10_Data : public ElementBase {
   const double* GetZ12JacDevicePtr() const { return d_h_z12_jac; }
   double* GetExternalForceDevicePtr() { return d_f_ext; }
   const double* GetExternalForceDevicePtr() const { return d_f_ext; }
+  double* GetLumpedMassDevicePtr() { return d_mass_lumped; }
+  const double* GetLumpedMassDevicePtr() const { return d_mass_lumped; }
+  bool IsLumpedMassComputed() const { return is_lumped_mass_computed; }
 
   /**
    * Update node positions on GPU (for prescribed motion of fixed nodes).
@@ -1285,6 +1294,7 @@ struct GPU_FEAT10_Data : public ElementBase {
     HANDLE_ERROR(cudaFree(d_vm_stress));
     HANDLE_ERROR(cudaFree(d_f_int));
     HANDLE_ERROR(cudaFree(d_f_ext));
+    HANDLE_ERROR(cudaFree(d_mass_lumped));
 
     HANDLE_ERROR(cudaFree(d_rho0));
     if (d_rho0_elem != nullptr) {
@@ -1436,10 +1446,15 @@ struct GPU_FEAT10_Data : public ElementBase {
   // Force vectors
   double *d_f_int, *d_f_ext;  // (n_nodes*3)
 
-  bool is_setup             = false;
-  bool is_constraints_setup = false;
-  bool is_csr_setup         = false;
-  bool is_cj_csr_setup      = false;
-  bool is_j_csr_setup       = false;
+  // Lumped (HRZ) mass per node; only the explicit solvers use it.
+  // TODO: move to the explicit solver so implicit runs don't allocate it.
+  double *d_mass_lumped;  // (n_nodes)
+
+  bool is_setup                = false;
+  bool is_constraints_setup    = false;
+  bool is_csr_setup            = false;
+  bool is_cj_csr_setup         = false;
+  bool is_j_csr_setup          = false;
+  bool is_lumped_mass_computed = false;
   int constraint_mode_      = kFEAT10ConstraintFixedNodes;
 };

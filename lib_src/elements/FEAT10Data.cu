@@ -278,6 +278,37 @@ __global__ void mass_matrix_qp_kernel(GPU_FEAT10_Data *d_data) {
   }
 }
 
+// HRZ (Hinton-Rock-Zienkiewicz) lumped mass, one thread per element. The
+// scaled diagonal of the consistent mass matrix is int N_i^2 dV, which is
+// degree 4 for a T10 element; the 5-point rule (degree 3) leaves corner nodes
+// 2.55x too light. For a straight-sided T10 the exact shares are 1/36 of the
+// element mass per corner node and 4/27 per edge node (4/36 + 24/27 = 1).
+__global__ void compute_hrz_lumped_mass_kernel(GPU_FEAT10_Data *d_data,
+                                               double *d_mass_lumped) {
+  int elem_idx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (elem_idx >= d_data->gpu_n_elem())
+    return;
+
+  constexpr double kCornerFraction = 1.0 / 36.0;
+  constexpr double kEdgeFraction   = 4.0 / 27.0;
+
+  // Element volume from quadrature (exact: det(J) is constant).
+  double vol_elem = 0.0;
+  for (int qp = 0; qp < Quadrature::N_QP_T10_5; qp++) {
+    vol_elem += d_data->detJ_ref(elem_idx, qp) * d_data->tet5pt_weights(qp);
+  }
+  if (vol_elem < 1e-30)
+    return;
+
+  double total_mass = d_data->rho0(elem_idx) * vol_elem;
+  for (int i_local = 0; i_local < 10; i_local++) {
+    int i_global = d_data->element_connectivity()(elem_idx, i_local);
+    double m_lumped =
+        total_mass * (i_local < 4 ? kCornerFraction : kEdgeFraction);
+    atomicAdd(&d_mass_lumped[i_global], m_lumped);
+  }
+}
+
 __global__ void calc_constraint_kernel(GPU_FEAT10_Data *d_data) {
   compute_constraint_data(d_data);
 }
@@ -381,6 +412,23 @@ void GPU_FEAT10_Data::CalcMassMatrix() {
 
   mass_matrix_qp_kernel<<<blocks, threads_per_block>>>(d_data);
   HANDLE_ERROR(cudaDeviceSynchronize());
+}
+
+void GPU_FEAT10_Data::CalcLumpedMassHRZ() {
+  if (is_lumped_mass_computed)
+    return;
+
+  HANDLE_ERROR(cudaMemset(d_mass_lumped, 0, n_coef * sizeof(double)));
+
+  int threads_per_block = 128;
+  int blocks            = (n_elem + threads_per_block - 1) / threads_per_block;
+  compute_hrz_lumped_mass_kernel<<<blocks, threads_per_block>>>(d_data,
+                                                                d_mass_lumped);
+  HANDLE_ERROR(cudaDeviceSynchronize());
+
+  is_lumped_mass_computed = true;
+  HANDLE_ERROR(cudaMemcpy(d_data, this, sizeof(GPU_FEAT10_Data),
+                          cudaMemcpyHostToDevice));
 }
 
 void GPU_FEAT10_Data::BuildMassCSRPattern() {
@@ -882,6 +930,12 @@ void GPU_FEAT10_Data::RetrieveExternalForceToCPU(
   // Copy from device to host
   HANDLE_ERROR(cudaMemcpy(external_force.data(), d_f_ext,
                           total_dofs * sizeof(double), cudaMemcpyDeviceToHost));
+}
+
+void GPU_FEAT10_Data::RetrieveLumpedMassToCPU(Eigen::VectorXd &lumped_mass) {
+  lumped_mass.resize(n_coef);
+  HANDLE_ERROR(cudaMemcpy(lumped_mass.data(), d_mass_lumped,
+                          n_coef * sizeof(double), cudaMemcpyDeviceToHost));
 }
 
 void GPU_FEAT10_Data::RetrievePositionToCPU(Eigen::VectorXd &x12,
