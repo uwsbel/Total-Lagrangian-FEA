@@ -1,238 +1,135 @@
 /*
- * Unit test for HRZ lumped mass computation.
- * Validates GPU implementation against Python reference.
+ * HRZ lumped mass for T10 elements, standard (FEAT10Data) and FEAT10Opt.
+ *
+ * For a straight-sided T10 element the HRZ shares are exact: each corner node
+ * gets 1/36 of the element mass and each edge node gets 4/27.
  */
 
 #include <gtest/gtest.h>
 
 #include <Eigen/Dense>
-#include <cmath>
-#include <cstdlib>
 #include <fstream>
-#include <iostream>
-#include <string>
-#include <vector>
 
 #include "lib_src/elements/FEAT10Data.cuh"
+#include "lib_src/elements/FEAT10DataOpt.cuh"
 #include "lib_utils/cpu_utils.h"
+#include "lib_utils/quadrature_utils.h"
 
-// Helper function to read CSV file with reference mass values
-std::vector<double> read_csv_values(const std::string& filename) {
-  std::vector<double> values;
-  std::ifstream file(filename);
-  if (!file.is_open()) {
-    std::cerr << "Could not open file: " << filename << std::endl;
-    return values;
-  }
+namespace {
 
-  std::string line;
-  while (std::getline(file, line)) {
-    if (!line.empty()) {
-      values.push_back(std::stod(line));
-    }
-  }
-  return values;
+// Unit tetrahedron with edge nodes at the edge midpoints, in T10 order
+// (edges 01, 12, 02, 03, 13, 23). Volume 1/6.
+Eigen::MatrixXd UnitT10Nodes() {
+  Eigen::MatrixXd X(10, 3);
+  // clang-format off
+  X << 0.0, 0.0, 0.0,
+       1.0, 0.0, 0.0,
+       0.0, 1.0, 0.0,
+       0.0, 0.0, 1.0,
+       0.5, 0.0, 0.0,
+       0.5, 0.5, 0.0,
+       0.0, 0.5, 0.0,
+       0.0, 0.0, 0.5,
+       0.5, 0.0, 0.5,
+       0.0, 0.5, 0.5;
+  // clang-format on
+  return X;
 }
 
-class HRZMassTest : public ::testing::Test {
- protected:
-  void SetUp() override {
-    // Bazel runfiles paths (relative to workspace root)
-    std::string runfiles_dir = "";
-
-    // Check if running under bazel
-    const char* test_srcdir = std::getenv("TEST_SRCDIR");
-    const char* test_workspace = std::getenv("TEST_WORKSPACE");
-    if (test_srcdir && test_workspace) {
-      runfiles_dir = std::string(test_srcdir) + "/" + std::string(test_workspace) + "/";
-    }
-
-    // Paths to mesh files
-    node_file_ = runfiles_dir + "data/meshes/T10/beam_3x2x1.1.node";
-    ele_file_ = runfiles_dir + "data/meshes/T10/beam_3x2x1.1.ele";
-    reference_file_ = runfiles_dir + "data/utest/hrz_mass_reference.csv";
-
-    // Material parameters (must match Python reference)
-    rho_ = 2700.0;
-  }
-
-  std::string node_file_;
-  std::string ele_file_;
-  std::string reference_file_;
-  double rho_;
-};
-
-TEST_F(HRZMassTest, CompareWithPythonReference) {
-  // Read mesh using shared CPU utilities
-  Eigen::MatrixXd nodes;
-  Eigen::MatrixXi elements;
-  ASSERT_GT(ANCFCPUUtils::FEAT10_read_nodes(node_file_, nodes), 0)
-      << "Failed to read nodes from " << node_file_;
-  ASSERT_GT(ANCFCPUUtils::FEAT10_read_elements(ele_file_, elements), 0)
-      << "Failed to read elements from " << ele_file_;
-
-  int n_nodes = nodes.rows();
-  int n_elem = elements.rows();
-
-  std::cout << "Mesh: " << n_nodes << " nodes, " << n_elem << " elements"
-            << std::endl;
-
-  // Read reference values from CSV (must exist)
-  std::vector<double> reference_mass = read_csv_values(reference_file_);
-  ASSERT_FALSE(reference_mass.empty())
-      << "Reference mass CSV missing or empty: " << reference_file_;
-  ASSERT_EQ(static_cast<size_t>(n_nodes), reference_mass.size())
-      << "Reference mass entries (" << reference_mass.size()
-      << ") do not match node count (" << n_nodes << ")";
-
-  int n_compare = std::min(static_cast<int>(reference_mass.size()), n_nodes);
-
-  // Setup quadrature points (5-point Keast rule)
-  Eigen::VectorXd tet5pt_x(5), tet5pt_y(5), tet5pt_z(5), tet5pt_weights(5);
-
-  // Quadrature points in (xi, eta, zeta) coordinates
-  // Point 0: centroid
-  tet5pt_x(0) = 0.25;
-  tet5pt_y(0) = 0.25;
-  tet5pt_z(0) = 0.25;
-  // Points 1-4: near vertices
-  double a = 0.5, b = 1.0 / 6.0;
-  tet5pt_x(1) = a;  tet5pt_y(1) = b;  tet5pt_z(1) = b;
-  tet5pt_x(2) = b;  tet5pt_y(2) = a;  tet5pt_z(2) = b;
-  tet5pt_x(3) = b;  tet5pt_y(3) = b;  tet5pt_z(3) = a;
-  tet5pt_x(4) = b;  tet5pt_y(4) = b;  tet5pt_z(4) = b;
-
-  // Weights
-  tet5pt_weights(0) = -4.0 / 5.0 * (1.0 / 6.0);
-  tet5pt_weights(1) = 9.0 / 20.0 * (1.0 / 6.0);
-  tet5pt_weights(2) = 9.0 / 20.0 * (1.0 / 6.0);
-  tet5pt_weights(3) = 9.0 / 20.0 * (1.0 / 6.0);
-  tet5pt_weights(4) = 9.0 / 20.0 * (1.0 / 6.0);
-
-  // Extract position vectors
-  Eigen::VectorXd h_x12 = nodes.col(0);
-  Eigen::VectorXd h_y12 = nodes.col(1);
-  Eigen::VectorXd h_z12 = nodes.col(2);
-
-  // Create and setup GPU element data
-  GPU_FEAT10_Data element(n_elem, n_nodes);
-  element.Initialize();
-  element.Setup(tet5pt_x, tet5pt_y, tet5pt_z, tet5pt_weights, h_x12, h_y12,
-                h_z12, elements);
-
-  // Set density
-  element.SetDensity(rho_);
-
-  // Compute reference gradients (needed for detJ)
-  element.CalcDnDuPre();
-
-  // Compute HRZ lumped mass on GPU
-  element.CalcLumpedMassHRZ();
-
-  // Retrieve GPU results
-  Eigen::VectorXd gpu_mass;
-  element.RetrieveLumpedMassToCPU(gpu_mass);
-
-  // Compare results
-  double total_mass_gpu = gpu_mass.sum();
-
-  // Expected total mass: rho * volume = 2700 * 6 = 16200 kg
-  double expected_total_mass = 16200.0;
-
-  std::cout << "Total mass (GPU): " << total_mass_gpu << " kg" << std::endl;
-  std::cout << "Total mass (Expected): " << expected_total_mass << " kg" << std::endl;
-
-  // Check total mass
-  double rel_error_total = std::abs(total_mass_gpu - expected_total_mass) / expected_total_mass;
-  std::cout << "Relative error in total mass: " << rel_error_total << std::endl;
-  EXPECT_LT(rel_error_total, 1e-10) << "Total mass mismatch";
-
-  // Check individual nodal masses against reference (first n_compare nodes)
-  double max_rel_error = 0.0;
-  int max_error_node = -1;
-  for (int i = 0; i < n_compare; i++) {
-    double rel_error = std::abs(gpu_mass(i) - reference_mass[i]) / reference_mass[i];
-    if (rel_error > max_rel_error) {
-      max_rel_error = rel_error;
-      max_error_node = i;
-    }
-    EXPECT_LT(rel_error, 1e-10)
-        << "Mass mismatch at node " << i << ": GPU=" << gpu_mass(i)
-        << ", Ref=" << reference_mass[i];
-  }
-
-  std::cout << "Max relative error (first " << n_compare << " nodes): "
-            << max_rel_error << " at node " << max_error_node << std::endl;
-
-  // Check all masses are positive
-  for (int i = 0; i < n_nodes; i++) {
-    EXPECT_GT(gpu_mass(i), 0.0) << "Non-positive mass at node " << i;
-  }
-
-  // Print first few values for visual comparison
-  std::cout << "\nFirst 10 nodal masses (GPU vs Reference):" << std::endl;
-  for (int i = 0; i < std::min(10, n_compare); i++) {
-    std::cout << "  Node " << i << ": GPU=" << gpu_mass(i)
-              << ", Ref=" << reference_mass[i]
-              << ", Diff=" << (gpu_mass(i) - reference_mass[i]) << std::endl;
-  }
-
-  // Cleanup
-  element.Destroy();
+Eigen::MatrixXi OneElement() {
+  Eigen::MatrixXi elements(1, 10);
+  elements << 0, 1, 2, 3, 4, 5, 6, 7, 8, 9;
+  return elements;
 }
 
-TEST_F(HRZMassTest, TotalMassConservation) {
-  // Read mesh
-  Eigen::MatrixXd nodes;
-  Eigen::MatrixXi elements;
-  ASSERT_GT(ANCFCPUUtils::FEAT10_read_nodes(node_file_, nodes), 0)
-      << "Failed to read nodes from " << node_file_;
-  ASSERT_GT(ANCFCPUUtils::FEAT10_read_elements(ele_file_, elements), 0)
-      << "Failed to read elements from " << ele_file_;
-
-  int n_nodes = nodes.rows();
-  int n_elem = elements.rows();
-
-  // Setup quadrature
-  Eigen::VectorXd tet5pt_x(5), tet5pt_y(5), tet5pt_z(5), tet5pt_weights(5);
-  tet5pt_x(0) = 0.25;  tet5pt_y(0) = 0.25;  tet5pt_z(0) = 0.25;
-  double a = 0.5, b = 1.0 / 6.0;
-  tet5pt_x(1) = a;  tet5pt_y(1) = b;  tet5pt_z(1) = b;
-  tet5pt_x(2) = b;  tet5pt_y(2) = a;  tet5pt_z(2) = b;
-  tet5pt_x(3) = b;  tet5pt_y(3) = b;  tet5pt_z(3) = a;
-  tet5pt_x(4) = b;  tet5pt_y(4) = b;  tet5pt_z(4) = b;
-  tet5pt_weights(0) = -4.0 / 5.0 * (1.0 / 6.0);
-  for (int i = 1; i < 5; i++) {
-    tet5pt_weights(i) = 9.0 / 20.0 * (1.0 / 6.0);
-  }
-
-  Eigen::VectorXd h_x12 = nodes.col(0);
-  Eigen::VectorXd h_y12 = nodes.col(1);
-  Eigen::VectorXd h_z12 = nodes.col(2);
-
-  GPU_FEAT10_Data element(n_elem, n_nodes);
+Eigen::VectorXd StandardLumpedMass(const Eigen::MatrixXd& nodes,
+                                   const Eigen::MatrixXi& elements,
+                                   double rho) {
+  GPU_FEAT10_Data element(elements.rows(), nodes.rows());
   element.Initialize();
-  element.Setup(tet5pt_x, tet5pt_y, tet5pt_z, tet5pt_weights, h_x12, h_y12,
-                h_z12, elements);
-  element.SetDensity(rho_);
+  element.Setup(Quadrature::tet5pt_x, Quadrature::tet5pt_y,
+                Quadrature::tet5pt_z, Quadrature::tet5pt_weights, nodes.col(0),
+                nodes.col(1), nodes.col(2), elements);
+  element.SetDensity(rho);
   element.CalcDnDuPre();
   element.CalcLumpedMassHRZ();
 
-  Eigen::VectorXd gpu_mass;
-  element.RetrieveLumpedMassToCPU(gpu_mass);
-
-  // Expected total mass: rho * volume
-  // For a 3x2x1 beam: volume = 6 m³, mass = 2700 * 6 = 16200 kg
-  double expected_total_mass = rho_ * 6.0;
-  double actual_total_mass = gpu_mass.sum();
-
-  std::cout << "Expected total mass: " << expected_total_mass << " kg" << std::endl;
-  std::cout << "Actual total mass: " << actual_total_mass << " kg" << std::endl;
-
-  double rel_error = std::abs(actual_total_mass - expected_total_mass) / expected_total_mass;
-  std::cout << "Relative error: " << rel_error << std::endl;
-
-  EXPECT_LT(rel_error, 1e-10) << "Total mass not conserved";
-
+  Eigen::VectorXd mass;
+  element.RetrieveLumpedMassToCPU(mass);
   element.Destroy();
+  return mass;
+}
+
+// FEAT10Opt stores the inverse lumped mass in float.
+Eigen::VectorXd OptLumpedMass(const Eigen::MatrixXd& nodes,
+                              const Eigen::MatrixXi& elements, double rho) {
+  GPU_FEAT10Opt_Data element;
+  element.Initialize(elements.rows(), nodes.rows());
+  element.Setup(nodes, elements);
+  element.SetDensity(rho);
+  element.ComputePrecomputation();
+  element.ComputeLumpedMassHRZ();
+
+  Eigen::VectorXf inv_mass;
+  element.RetrieveInvLumpedMassToCPU(inv_mass);
+  element.Destroy();
+  return inv_mass.cast<double>().cwiseInverse();
+}
+
+void ExpectExactShares(const Eigen::VectorXd& mass, double m, double tol) {
+  ASSERT_EQ(mass.size(), 10);
+  for (int i = 0; i < 4; i++) {
+    EXPECT_NEAR(mass(i), m / 36.0, tol * m) << "corner node " << i;
+  }
+  for (int i = 4; i < 10; i++) {
+    EXPECT_NEAR(mass(i), m * 4.0 / 27.0, tol * m) << "edge node " << i;
+  }
+}
+
+}  // namespace
+
+TEST(HRZMass, SingleTet_ExactShares) {
+  const double rho = 1200.0;
+  const double m   = rho / 6.0;
+  ExpectExactShares(StandardLumpedMass(UnitT10Nodes(), OneElement(), rho), m,
+                    1e-12);
+}
+
+TEST(HRZMass, SingleTet_ExactShares_Opt) {
+  const double rho = 1200.0;
+  const double m   = rho / 6.0;
+  ExpectExactShares(OptLumpedMass(UnitT10Nodes(), OneElement(), rho), m, 1e-6);
+}
+
+TEST(HRZMass, BeamMesh) {
+  // 3 x 2 x 1 beam: volume 6.
+  Eigen::MatrixXd nodes;
+  Eigen::MatrixXi elements;
+  ASSERT_GT(ANCFCPUUtils::FEAT10_read_nodes("data/meshes/T10/beam_3x2x1.1.node",
+                                            nodes),
+            0);
+  ASSERT_GT(ANCFCPUUtils::FEAT10_read_elements(
+                "data/meshes/T10/beam_3x2x1.1.ele", elements),
+            0);
+
+  const double rho         = 2700.0;
+  const double total       = rho * 6.0;
+  Eigen::VectorXd mass     = StandardLumpedMass(nodes, elements, rho);
+  Eigen::VectorXd mass_opt = OptLumpedMass(nodes, elements, rho);
+
+  EXPECT_NEAR(mass.sum(), total, 1e-12 * total);
+  EXPECT_GT(mass.minCoeff(), 0.0);
+
+  // Saved reference: data/utest/hrz_mass_reference.csv, one mass per node.
+  std::ifstream file("data/utest/hrz_mass_reference.csv");
+  ASSERT_TRUE(file.is_open());
+  for (int i = 0; i < mass.size(); i++) {
+    double ref;
+    ASSERT_TRUE(file >> ref) << "reference has fewer rows than nodes";
+    EXPECT_NEAR(mass(i), ref, 1e-12 * ref) << "node " << i;
+  }
+
+  for (int i = 0; i < mass.size(); i++) {
+    EXPECT_NEAR(mass_opt(i), mass(i), 1e-6 * mass(i)) << "node " << i;
+  }
 }

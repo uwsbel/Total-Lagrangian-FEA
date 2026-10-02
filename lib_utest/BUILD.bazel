@@ -142,6 +142,7 @@ cc_test(
     ],
     deps = [
         "//lib_src/elements:FEAT10Data",
+        "//lib_src/elements:FEAT10DataOpt",
         "//lib_utils:cpu_utils",
         "@eigen//:eigen",
         "@googletest//:gtest_main",
