@@ -17,12 +17,12 @@
 
 #include "FEAT10DataOpt.cuh"
 
-// Material parameters for Mooney-Rivlin, fixed at compile time. They match the
-// explicit demos (E = 3e8, nu = 0.4: mu10 = 0.3 mu, mu01 = 0.2 mu,
-// kappa = 1.5 K). GPU_FEAT10Opt_Data::SetMooneyRivlin rejects other values.
-constexpr float kMu10 = 32142857.142857143f;
-constexpr float kMu01 = 21428571.428571429f;
-constexpr float kBulkK = 7.5e8f;
+// Material parameters for Mooney-Rivlin, fixed at compile time and declared in
+// FEAT10DataOpt.cuh so callers and tests can read what the kernel will use.
+// GPU_FEAT10Opt_Data::SetMooneyRivlin rejects any other values.
+constexpr float kMu10 = GPU_FEAT10Opt_Data::kMu10;
+constexpr float kMu01 = GPU_FEAT10Opt_Data::kMu01;
+constexpr float kBulkK = GPU_FEAT10Opt_Data::kBulkK;
 constexpr float kMinJthreshold = 1e-6f;
 // Kelvin-Voigt damping is fixed at compile time for now to keep the fused
 // kernel's register usage down; setting both to 0 compiles the damping path

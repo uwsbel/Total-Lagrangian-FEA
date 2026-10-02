@@ -30,6 +30,14 @@ struct GPU_FEAT10Opt_Data {
   static constexpr int NODES_PER_ELEM = 10;   // T10 nodes per element
   static constexpr int QPS_PER_ELEM = 4;      // Quadrature points per element
 
+  // Mooney-Rivlin parameters, fixed at compile time: the fused internal force
+  // kernel folds them in as constants, so SetMooneyRivlin() only accepts these
+  // values. They match the explicit demos (E = 3e8, nu = 0.4: mu10 = 0.3 mu,
+  // mu01 = 0.2 mu, kappa = 1.5 K). Callers and tests read them from here.
+  static constexpr float kMu10  = 32142857.142857143f;
+  static constexpr float kMu01  = 21428571.428571429f;
+  static constexpr float kBulkK = 7.5e8f;
+
   // Sizes
   int n_elem;         // Elements
   int n_nodes;        // Nodes

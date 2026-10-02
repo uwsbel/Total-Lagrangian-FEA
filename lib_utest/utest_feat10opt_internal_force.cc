@@ -19,6 +19,7 @@
 #include <cmath>
 #include <iomanip>
 #include <iostream>
+#include <stdexcept>
 #include <vector>
 
 #include "feat10_test_utils.h"
@@ -36,10 +37,11 @@ class FEAT10OptInternalForceTest : public ::testing::Test {
     // Setup unit tetrahedron
     SetupUnitTetrahedron(X_ref_);
 
-    // Material parameters: Mooney-Rivlin
-    mu10_  = 80769.23;
-    mu01_  = 20192.31;
-    kappa_ = 400000.0;
+    // Material parameters: the Mooney-Rivlin constants the FEAT10Opt kernel
+    // is compiled with, so GPU and CPU reference use the same material.
+    mu10_  = GPU_FEAT10Opt_Data::kMu10;
+    mu01_  = GPU_FEAT10Opt_Data::kMu01;
+    kappa_ = GPU_FEAT10Opt_Data::kBulkK;
 
     // Setup 4-point quadrature rule (used by FEAT10Opt)
     Setup4PointQuadrature(qp_x_, qp_y_, qp_z_, qp_weights_);
@@ -150,6 +152,32 @@ class FEAT10OptInternalForceTest : public ::testing::Test {
 // ===========================================================================
 // Test Cases - Basic Validation
 // ===========================================================================
+
+// ===========================================================================
+// Test Cases - Compiled material contract
+// ===========================================================================
+
+TEST_F(FEAT10OptInternalForceTest, SetMooneyRivlin_AcceptsCompiledMaterial) {
+  // The fused kernel folds the material in at compile time, so the values the
+  // fixture uses must be the ones the kernel was built with. If this fails,
+  // every GPU-vs-CPU comparison below is comparing two different materials.
+  GPU_FEAT10Opt_Data* element = SetupGPUElement(X_ref_);
+  EXPECT_NO_THROW(element->SetMooneyRivlin(GPU_FEAT10Opt_Data::kMu10,
+                                           GPU_FEAT10Opt_Data::kMu01,
+                                           GPU_FEAT10Opt_Data::kBulkK));
+  element->Destroy();
+  delete element;
+}
+
+TEST_F(FEAT10OptInternalForceTest, SetMooneyRivlin_RejectsOtherMaterial) {
+  GPU_FEAT10Opt_Data* element = SetupGPUElement(X_ref_);
+  EXPECT_THROW(element->SetMooneyRivlin(0.5f * GPU_FEAT10Opt_Data::kMu10,
+                                        GPU_FEAT10Opt_Data::kMu01,
+                                        GPU_FEAT10Opt_Data::kBulkK),
+               std::invalid_argument);
+  element->Destroy();
+  delete element;
+}
 
 TEST_F(FEAT10OptInternalForceTest, PaddedElements_InverseJacobianValid) {
   // Regression test: Ensure padded elements have valid (non-NaN/Inf) inverse
@@ -554,9 +582,9 @@ class FEAT10OptMultiElementTest : public ::testing::Test {
     connectivity_(1, 8) = 13;
     connectivity_(1, 9) = 9;
 
-    mu10_  = 80769.23f;
-    mu01_  = 20192.31f;
-    kappa_ = 400000.0f;
+    mu10_  = GPU_FEAT10Opt_Data::kMu10;
+    mu01_  = GPU_FEAT10Opt_Data::kMu01;
+    kappa_ = GPU_FEAT10Opt_Data::kBulkK;
   }
 
   int n_nodes_, n_elem_;

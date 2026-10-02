@@ -45,10 +45,11 @@ class FEAT10BeamIntegrationTest : public ::testing::Test {
     ASSERT_EQ(n_nodes_, 105) << "Expected 105 nodes in beam mesh";
     ASSERT_EQ(n_elems_, 36) << "Expected 36 elements in beam mesh";
 
-    // Material parameters: Mooney-Rivlin
-    mu10_  = 80769.23;
-    mu01_  = 20192.31;
-    kappa_ = 400000.0;
+    // Material parameters: the Mooney-Rivlin constants the FEAT10Opt kernel
+    // is compiled with, so GPU and CPU reference use the same material.
+    mu10_  = GPU_FEAT10Opt_Data::kMu10;
+    mu01_  = GPU_FEAT10Opt_Data::kMu01;
+    kappa_ = GPU_FEAT10Opt_Data::kBulkK;
 
     // Setup 5-point Keast quadrature rule for FEAT10
     Setup5PointKeastQuadrature(qp_x_5pt_, qp_y_5pt_, qp_z_5pt_,

@@ -80,10 +80,11 @@ class FEAT10CrossValidationTest : public ::testing::Test {
     X_ref_[9][1] = 0.5;
     X_ref_[9][2] = 0.5;  // Edge 2-3
 
-    // Material parameters: Mooney-Rivlin
-    mu10_  = 80769.23;
-    mu01_  = 20192.31;
-    kappa_ = 400000.0;
+    // Material parameters: the Mooney-Rivlin constants the FEAT10Opt kernel
+    // is compiled with, so GPU and CPU reference use the same material.
+    mu10_  = GPU_FEAT10Opt_Data::kMu10;
+    mu01_  = GPU_FEAT10Opt_Data::kMu01;
+    kappa_ = GPU_FEAT10Opt_Data::kBulkK;
 
     // Applied deformation gradient (affine)
     F_applied_[0][0] = 1.10;

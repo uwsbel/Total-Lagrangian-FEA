@@ -16,6 +16,8 @@
 #include <cassert>
 #include <cmath>
 #include <iostream>
+#include <sstream>
+#include <stdexcept>
 #include <vector>
 
 // Precompute inverse Jacobian at each QP (one thread per QP).
@@ -364,17 +366,21 @@ void GPU_FEAT10Opt_Data::Destroy() {
 
 void GPU_FEAT10Opt_Data::SetMooneyRivlin(float mu10_val, float mu01_val,
                                         float kappa) {
-  // The internal force kernel uses the compile-time constants in
-  // FEAT10KernelOpt.cuh, so any other material would be silently ignored.
+  // The internal force kernel uses the compile-time constants declared in
+  // FEAT10DataOpt.cuh, so any other material would be silently ignored.
+  // TODO: pass mu10, mu01, bulkK to the kernel as arguments and drop this
+  // guard and the constants. Measured 2026-10-02: same registers (72/80)
+  // and kernel time (res16), the values ride in the parameter constant bank.
   auto differs = [](float a, float b) {
     return std::abs(a - b) > 1e-6f * std::abs(b);
   };
   if (differs(mu10_val, kMu10) || differs(mu01_val, kMu01) ||
       differs(kappa, kBulkK)) {
-    std::cerr << "FEAT10Opt: SetMooneyRivlin(" << mu10_val << ", " << mu01_val
-              << ", " << kappa << ") does not match the compiled constants ("
-              << kMu10 << ", " << kMu01 << ", " << kBulkK << ")" << std::endl;
-    exit(1);
+    std::ostringstream msg;
+    msg << "FEAT10Opt: SetMooneyRivlin(" << mu10_val << ", " << mu01_val << ", "
+        << kappa << ") does not match the compiled constants (" << kMu10 << ", "
+        << kMu01 << ", " << kBulkK << ")";
+    throw std::invalid_argument(msg.str());
   }
   mu10 = mu10_val;
   mu01 = mu01_val;
