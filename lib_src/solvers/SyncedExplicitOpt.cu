@@ -112,6 +112,10 @@ void SyncedExplicitOptSolver::SetParameters(const SyncedExplicitOptParams& param
   params_ = params;
 }
 
+void SyncedExplicitOptSolver::SetParameters(void* params) {
+  SetParameters(*static_cast<SyncedExplicitOptParams*>(params));
+}
+
 void SyncedExplicitOptSolver::SetFixedNodes(const std::vector<int>& fixed_nodes) {
   // Free existing fixed nodes array
   if (d_fixed_nodes_) {

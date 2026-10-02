@@ -18,6 +18,7 @@
 
 #include "../../lib_utils/cuda_utils.h"
 #include "../elements/FEAT10DataOpt.cuh"
+#include "SolverBase.h"
 
 // Solver parameters.
 struct SyncedExplicitOptParams {
@@ -26,7 +27,7 @@ struct SyncedExplicitOptParams {
 
 // Explicit dynamics solver for FEAT10Opt elements using symplectic Euler.
 // Positions/velocities are double, forces are float.
-class SyncedExplicitOptSolver {
+class SyncedExplicitOptSolver : public SolverBase {
  public:
   // Element data must be initialized/setup.
   explicit SyncedExplicitOptSolver(GPU_FEAT10Opt_Data* element);
@@ -40,10 +41,13 @@ class SyncedExplicitOptSolver {
 
   // Main interface
   // Advance simulation by one time step.
-  void Solve();
+  void Solve() override;
 
   // Set solver parameters.
   void SetParameters(const SyncedExplicitOptParams& params);
+
+  // SolverBase interface; params points to a SyncedExplicitOptParams.
+  void SetParameters(void* params) override;
 
   // Set time step.
   void SetTimeStep(double dt) { params_.dt = dt; }
