@@ -87,15 +87,20 @@ __global__ void computeInverseJacobian_kernel(GPU_FEAT10Opt_Data* d_data) {
   const int* elem_nodes = d_data->d_elem_nodes_soa +
                           block_idx * 10 * elements_per_block + elem_in_block;
 
-  // Load reference positions and compute Jacobian J = sum_a (X_a * dN_a/dxi)
+  // Load reference positions relative to node 0 (same origin as the force
+  // kernel) and compute Jacobian J = sum_a (X_a * dN_a/dxi)
   float J[3][3] = {{0.0f}};
+  const int origin_idx = elem_nodes[0];
 
   for (int a = 0; a < 10; a++) {
     int node_idx = elem_nodes[a * elements_per_block];
     float X[3];
-    X[0] = (float)d_data->d_pos_nodes_ref[3 * node_idx + 0];
-    X[1] = (float)d_data->d_pos_nodes_ref[3 * node_idx + 1];
-    X[2] = (float)d_data->d_pos_nodes_ref[3 * node_idx + 2];
+    X[0] = (float)(d_data->d_pos_nodes_ref[3 * node_idx + 0] -
+                     d_data->d_pos_nodes_ref[3 * origin_idx + 0]);
+    X[1] = (float)(d_data->d_pos_nodes_ref[3 * node_idx + 1] -
+                     d_data->d_pos_nodes_ref[3 * origin_idx + 1]);
+    X[2] = (float)(d_data->d_pos_nodes_ref[3 * node_idx + 2] -
+                     d_data->d_pos_nodes_ref[3 * origin_idx + 2]);
 
     for (int i = 0; i < 3; i++) {
       for (int j = 0; j < 3; j++) {
@@ -666,11 +671,12 @@ void launchInternalForceKernel_FEAT10Opt(const GPU_FEAT10Opt_Data* host_data,
   constexpr int BLOCK_SIZE = 64;
   int num_blocks = n_elem_padded / 16;
 
-  // Shared memory: 3 matrices (F, invJacobian, PK1) * 9 components * 64 threads
+  // Shared memory: 2 matrices (H, invJacobian) * 9 components * 64 threads
   size_t shared_mem_size = getInternalForceKernelSharedMemSize(BLOCK_SIZE);
 
   internalF_MooneyRivlin_4QP<<<num_blocks, BLOCK_SIZE, shared_mem_size>>>(
-      host_data->n_elem, host_data->d_pos_nodes, d_vel_nodes,
+      host_data->n_elem, host_data->d_pos_nodes, host_data->d_pos_nodes_ref,
+      d_vel_nodes,
       host_data->d_elem_nodes_soa, host_data->d_iso_map_inv,
       host_data->d_internal_force, host_data->d_deformation_grad_F,
       host_data->d_piola_stress_P, writeOutF, writeOutP);

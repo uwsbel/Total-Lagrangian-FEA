@@ -69,10 +69,18 @@ __device__ __forceinline__ void reduce_scale_and_atomicAdd(
  * Internal force kernel for T10 elements with Mooney-Rivlin (+ optional
  * Kelvin-Voigt damping), 4-point quadrature.
  * 4 threads per element (one per QP), 64 threads per block. Uses warp shuffle reduction.
+ *
+ * Works with the displacement gradient H = F - I instead of F. H is built
+ * from displacements relative to node 0 of the element, formed in double and
+ * cast to float once, and the stress is written so that every term that
+ * vanishes at rest is a product of H terms. In float this removes the
+ * cancellation that F = I + O(1e-7) suffers at small strain, where the bulk
+ * modulus turned the rounding of F into hundreds of Pa of spurious pressure.
  */
 __global__ void internalF_MooneyRivlin_4QP(
     int n_elem,
     const double* __restrict__ pPosNodes,
+    const double* __restrict__ pPosNodesRef,  // reference X, for u = x - X
     const double* __restrict__ pVelNodes,
     const int* __restrict__ pElement_NodeIndexes,
     const float* __restrict__ pIsoMapInverse,
@@ -92,11 +100,13 @@ __global__ void internalF_MooneyRivlin_4QP(
   const int element_idx =
       blockIdx.x * elements_per_block + tile.meta_group_rank();
 
-  // Shared memory for F, invJacobian, and PK1 (each 9 components * blockDim.x)
+  // Shared memory for H and invJacobian (each 9 components * blockDim.x);
+  // P stays in registers.
   extern __shared__ float shMem[];
-  float* s_F = shMem;
-  float* s_invJacobian = s_F + 9 * blockDim.x;
-  float* s_PK1 = s_invJacobian + 9 * blockDim.x;
+  float* s_H = shMem;
+  float* s_invJacobian = s_H + 9 * blockDim.x;
+  float PKone_00, PKone_01, PKone_02, PKone_10, PKone_11, PKone_12, PKone_20,
+      PKone_21, PKone_22;
 
   // Early exit for padded elements (they have degenerate geometry)
   if (element_idx >= n_elem) {
@@ -124,13 +134,24 @@ __global__ void internalF_MooneyRivlin_4QP(
   const int baseIdxNodes =
       blockIdx.x * nodes_per_element * elements_per_block + tile.meta_group_rank();
   const int* __restrict__ pElementNodes = pElement_NodeIndexes + baseIdxNodes;
+  // Node 0 of the element is the origin for the relative displacements
+  // u_a - u_0 = (x_a - x_0) - (X_a - X_0); one component per lane.
+  // TODO: have the explicit solver integrate u = x - X directly and pass u
+  // instead of x and X. That removes the 10 reference loads and 20 FP64
+  // subtractions per thread (measured: kernel 64 us vs 73 us at res16).
+  const int originNode = pElementNodes[0];
+  double x0 = 0.0, X0 = 0.0;
+  if (lane_in_tile < 3) {
+    x0 = pPosNodes[3 * originNode + lane_in_tile];
+    X0 = pPosNodesRef[3 * originNode + lane_in_tile];
+  }
 
   // Thread-local Edot components (symmetric tensor storage).
   float Edot_00 = 0.0f, Edot_01 = 0.0f, Edot_02 = 0.0f;
   float Edot_11 = 0.0f, Edot_12 = 0.0f, Edot_22 = 0.0f;
 
   // ============================================================
-  // Compute deformation gradient F
+  // Compute displacement gradient H = F - I = sum_a (u_a - u_0) (dN_a/dX)
   // ============================================================
   {
     // Load inverse Jacobian for this QP into shared memory (coalesced reads)
@@ -154,15 +175,15 @@ __global__ void internalF_MooneyRivlin_4QP(
         __ldg(&pIsoMapInverse[baseIdx + 8 * blockDim.x]);
 
 // Macros for convenient access to shared memory arrays
-#define F00 s_F[threadIdx.x + 0 * blockDim.x]
-#define F01 s_F[threadIdx.x + 1 * blockDim.x]
-#define F02 s_F[threadIdx.x + 2 * blockDim.x]
-#define F10 s_F[threadIdx.x + 3 * blockDim.x]
-#define F11 s_F[threadIdx.x + 4 * blockDim.x]
-#define F12 s_F[threadIdx.x + 5 * blockDim.x]
-#define F20 s_F[threadIdx.x + 6 * blockDim.x]
-#define F21 s_F[threadIdx.x + 7 * blockDim.x]
-#define F22 s_F[threadIdx.x + 8 * blockDim.x]
+#define H00 s_H[threadIdx.x + 0 * blockDim.x]
+#define H01 s_H[threadIdx.x + 1 * blockDim.x]
+#define H02 s_H[threadIdx.x + 2 * blockDim.x]
+#define H10 s_H[threadIdx.x + 3 * blockDim.x]
+#define H11 s_H[threadIdx.x + 4 * blockDim.x]
+#define H12 s_H[threadIdx.x + 5 * blockDim.x]
+#define H20 s_H[threadIdx.x + 6 * blockDim.x]
+#define H21 s_H[threadIdx.x + 7 * blockDim.x]
+#define H22 s_H[threadIdx.x + 8 * blockDim.x]
 
 #define isoJacInv00 s_invJacobian[threadIdx.x + 0 * blockDim.x]
 #define isoJacInv01 s_invJacobian[threadIdx.x + 1 * blockDim.x]
@@ -174,22 +195,14 @@ __global__ void internalF_MooneyRivlin_4QP(
 #define isoJacInv21 s_invJacobian[threadIdx.x + 7 * blockDim.x]
 #define isoJacInv22 s_invJacobian[threadIdx.x + 8 * blockDim.x]
 
-#define PKone_00 s_PK1[threadIdx.x + 0 * blockDim.x]
-#define PKone_01 s_PK1[threadIdx.x + 1 * blockDim.x]
-#define PKone_02 s_PK1[threadIdx.x + 2 * blockDim.x]
-#define PKone_10 s_PK1[threadIdx.x + 3 * blockDim.x]
-#define PKone_11 s_PK1[threadIdx.x + 4 * blockDim.x]
-#define PKone_12 s_PK1[threadIdx.x + 5 * blockDim.x]
-#define PKone_20 s_PK1[threadIdx.x + 6 * blockDim.x]
-#define PKone_21 s_PK1[threadIdx.x + 7 * blockDim.x]
-#define PKone_22 s_PK1[threadIdx.x + 8 * blockDim.x]
-
     // Node 0 (of 0-9)
     {
       const int whichGlobalNode = pElementNodes[0 * elements_per_block];
+      // Relative displacement u_a - u_0 in double, cast once (same for nodes 1-9)
       float value = 0.0f;
       if (lane_in_tile < 3)
-        value = (float)pPosNodes[3 * whichGlobalNode + lane_in_tile];
+        value = (float)((pPosNodes[3 * whichGlobalNode + lane_in_tile] - x0) -
+                        (pPosNodesRef[3 * whichGlobalNode + lane_in_tile] - X0));
 
       const float NUx = tile.shfl(value, 0);
       const float NUy = tile.shfl(value, 1);
@@ -201,15 +214,15 @@ __global__ void internalF_MooneyRivlin_4QP(
       const float dummy1 = h0 * (isoJacInv01 + isoJacInv11 + isoJacInv21);
       const float dummy2 = h0 * (isoJacInv02 + isoJacInv12 + isoJacInv22);
 
-      F00 = NUx * dummy0;
-      F01 = NUx * dummy1;
-      F02 = NUx * dummy2;
-      F10 = NUy * dummy0;
-      F11 = NUy * dummy1;
-      F12 = NUy * dummy2;
-      F20 = NUz * dummy0;
-      F21 = NUz * dummy1;
-      F22 = NUz * dummy2;
+      H00 = NUx * dummy0;
+      H01 = NUx * dummy1;
+      H02 = NUx * dummy2;
+      H10 = NUy * dummy0;
+      H11 = NUy * dummy1;
+      H12 = NUy * dummy2;
+      H20 = NUz * dummy0;
+      H21 = NUz * dummy1;
+      H22 = NUz * dummy2;
     }
 
     // Node 1 (of 0-9)
@@ -217,7 +230,8 @@ __global__ void internalF_MooneyRivlin_4QP(
       const int whichGlobalNode = pElementNodes[1 * elements_per_block];
       float value = 0.0f;
       if (lane_in_tile < 3)
-        value = (float)pPosNodes[3 * whichGlobalNode + lane_in_tile];
+        value = (float)((pPosNodes[3 * whichGlobalNode + lane_in_tile] - x0) -
+                        (pPosNodesRef[3 * whichGlobalNode + lane_in_tile] - X0));
 
       const float NUx = tile.shfl(value, 0);
       const float NUy = tile.shfl(value, 1);
@@ -228,15 +242,15 @@ __global__ void internalF_MooneyRivlin_4QP(
       const float dummy1 = h0 * isoJacInv01;
       const float dummy2 = h0 * isoJacInv02;
 
-      F00 += NUx * dummy0;
-      F01 += NUx * dummy1;
-      F02 += NUx * dummy2;
-      F10 += NUy * dummy0;
-      F11 += NUy * dummy1;
-      F12 += NUy * dummy2;
-      F20 += NUz * dummy0;
-      F21 += NUz * dummy1;
-      F22 += NUz * dummy2;
+      H00 += NUx * dummy0;
+      H01 += NUx * dummy1;
+      H02 += NUx * dummy2;
+      H10 += NUy * dummy0;
+      H11 += NUy * dummy1;
+      H12 += NUy * dummy2;
+      H20 += NUz * dummy0;
+      H21 += NUz * dummy1;
+      H22 += NUz * dummy2;
     }
 
     // Node 2 (of 0-9)
@@ -244,7 +258,8 @@ __global__ void internalF_MooneyRivlin_4QP(
       const int whichGlobalNode = pElementNodes[2 * elements_per_block];
       float value = 0.0f;
       if (lane_in_tile < 3)
-        value = (float)pPosNodes[3 * whichGlobalNode + lane_in_tile];
+        value = (float)((pPosNodes[3 * whichGlobalNode + lane_in_tile] - x0) -
+                        (pPosNodesRef[3 * whichGlobalNode + lane_in_tile] - X0));
 
       const float NUx = tile.shfl(value, 0);
       const float NUy = tile.shfl(value, 1);
@@ -255,15 +270,15 @@ __global__ void internalF_MooneyRivlin_4QP(
       const float dummy1 = h1 * isoJacInv11;
       const float dummy2 = h1 * isoJacInv12;
 
-      F00 += NUx * dummy0;
-      F01 += NUx * dummy1;
-      F02 += NUx * dummy2;
-      F10 += NUy * dummy0;
-      F11 += NUy * dummy1;
-      F12 += NUy * dummy2;
-      F20 += NUz * dummy0;
-      F21 += NUz * dummy1;
-      F22 += NUz * dummy2;
+      H00 += NUx * dummy0;
+      H01 += NUx * dummy1;
+      H02 += NUx * dummy2;
+      H10 += NUy * dummy0;
+      H11 += NUy * dummy1;
+      H12 += NUy * dummy2;
+      H20 += NUz * dummy0;
+      H21 += NUz * dummy1;
+      H22 += NUz * dummy2;
     }
 
     // Node 3 (of 0-9)
@@ -271,7 +286,8 @@ __global__ void internalF_MooneyRivlin_4QP(
       const int whichGlobalNode = pElementNodes[3 * elements_per_block];
       float value = 0.0f;
       if (lane_in_tile < 3)
-        value = (float)pPosNodes[3 * whichGlobalNode + lane_in_tile];
+        value = (float)((pPosNodes[3 * whichGlobalNode + lane_in_tile] - x0) -
+                        (pPosNodesRef[3 * whichGlobalNode + lane_in_tile] - X0));
 
       const float NUx = tile.shfl(value, 0);
       const float NUy = tile.shfl(value, 1);
@@ -282,15 +298,15 @@ __global__ void internalF_MooneyRivlin_4QP(
       const float dummy1 = h2 * isoJacInv21;
       const float dummy2 = h2 * isoJacInv22;
 
-      F00 += NUx * dummy0;
-      F01 += NUx * dummy1;
-      F02 += NUx * dummy2;
-      F10 += NUy * dummy0;
-      F11 += NUy * dummy1;
-      F12 += NUy * dummy2;
-      F20 += NUz * dummy0;
-      F21 += NUz * dummy1;
-      F22 += NUz * dummy2;
+      H00 += NUx * dummy0;
+      H01 += NUx * dummy1;
+      H02 += NUx * dummy2;
+      H10 += NUy * dummy0;
+      H11 += NUy * dummy1;
+      H12 += NUy * dummy2;
+      H20 += NUz * dummy0;
+      H21 += NUz * dummy1;
+      H22 += NUz * dummy2;
     }
 
     // Node 4 (of 0-9)
@@ -298,7 +314,8 @@ __global__ void internalF_MooneyRivlin_4QP(
       const int whichGlobalNode = pElementNodes[4 * elements_per_block];
       float value = 0.0f;
       if (lane_in_tile < 3)
-        value = (float)pPosNodes[3 * whichGlobalNode + lane_in_tile];
+        value = (float)((pPosNodes[3 * whichGlobalNode + lane_in_tile] - x0) -
+                        (pPosNodesRef[3 * whichGlobalNode + lane_in_tile] - X0));
 
       const float NUx = tile.shfl(value, 0);
       const float NUy = tile.shfl(value, 1);
@@ -311,15 +328,15 @@ __global__ void internalF_MooneyRivlin_4QP(
       const float dummy1 = h0 * isoJacInv01 + h1 * isoJacInv11 + h2 * isoJacInv21;
       const float dummy2 = h0 * isoJacInv02 + h1 * isoJacInv12 + h2 * isoJacInv22;
 
-      F00 += NUx * dummy0;
-      F01 += NUx * dummy1;
-      F02 += NUx * dummy2;
-      F10 += NUy * dummy0;
-      F11 += NUy * dummy1;
-      F12 += NUy * dummy2;
-      F20 += NUz * dummy0;
-      F21 += NUz * dummy1;
-      F22 += NUz * dummy2;
+      H00 += NUx * dummy0;
+      H01 += NUx * dummy1;
+      H02 += NUx * dummy2;
+      H10 += NUy * dummy0;
+      H11 += NUy * dummy1;
+      H12 += NUy * dummy2;
+      H20 += NUz * dummy0;
+      H21 += NUz * dummy1;
+      H22 += NUz * dummy2;
     }
 
     // Node 5 (of 0-9)
@@ -327,7 +344,8 @@ __global__ void internalF_MooneyRivlin_4QP(
       const int whichGlobalNode = pElementNodes[5 * elements_per_block];
       float value = 0.0f;
       if (lane_in_tile < 3)
-        value = (float)pPosNodes[3 * whichGlobalNode + lane_in_tile];
+        value = (float)((pPosNodes[3 * whichGlobalNode + lane_in_tile] - x0) -
+                        (pPosNodesRef[3 * whichGlobalNode + lane_in_tile] - X0));
 
       const float NUx = tile.shfl(value, 0);
       const float NUy = tile.shfl(value, 1);
@@ -339,15 +357,15 @@ __global__ void internalF_MooneyRivlin_4QP(
       const float dummy1 = h0 * isoJacInv01 + h1 * isoJacInv11;
       const float dummy2 = h0 * isoJacInv02 + h1 * isoJacInv12;
 
-      F00 += NUx * dummy0;
-      F01 += NUx * dummy1;
-      F02 += NUx * dummy2;
-      F10 += NUy * dummy0;
-      F11 += NUy * dummy1;
-      F12 += NUy * dummy2;
-      F20 += NUz * dummy0;
-      F21 += NUz * dummy1;
-      F22 += NUz * dummy2;
+      H00 += NUx * dummy0;
+      H01 += NUx * dummy1;
+      H02 += NUx * dummy2;
+      H10 += NUy * dummy0;
+      H11 += NUy * dummy1;
+      H12 += NUy * dummy2;
+      H20 += NUz * dummy0;
+      H21 += NUz * dummy1;
+      H22 += NUz * dummy2;
     }
 
     // Node 6 (of 0-9)
@@ -355,7 +373,8 @@ __global__ void internalF_MooneyRivlin_4QP(
       const int whichGlobalNode = pElementNodes[6 * elements_per_block];
       float value = 0.0f;
       if (lane_in_tile < 3)
-        value = (float)pPosNodes[3 * whichGlobalNode + lane_in_tile];
+        value = (float)((pPosNodes[3 * whichGlobalNode + lane_in_tile] - x0) -
+                        (pPosNodesRef[3 * whichGlobalNode + lane_in_tile] - X0));
 
       const float NUx = tile.shfl(value, 0);
       const float NUy = tile.shfl(value, 1);
@@ -371,15 +390,15 @@ __global__ void internalF_MooneyRivlin_4QP(
       const float dummy2 =
           h0 * isoJacInv02 + h1 * isoJacInv12 + h2 * isoJacInv22;
 
-      F00 += NUx * dummy0;
-      F01 += NUx * dummy1;
-      F02 += NUx * dummy2;
-      F10 += NUy * dummy0;
-      F11 += NUy * dummy1;
-      F12 += NUy * dummy2;
-      F20 += NUz * dummy0;
-      F21 += NUz * dummy1;
-      F22 += NUz * dummy2;
+      H00 += NUx * dummy0;
+      H01 += NUx * dummy1;
+      H02 += NUx * dummy2;
+      H10 += NUy * dummy0;
+      H11 += NUy * dummy1;
+      H12 += NUy * dummy2;
+      H20 += NUz * dummy0;
+      H21 += NUz * dummy1;
+      H22 += NUz * dummy2;
     }
 
     // Node 7 (of 0-9)
@@ -387,7 +406,8 @@ __global__ void internalF_MooneyRivlin_4QP(
       const int whichGlobalNode = pElementNodes[7 * elements_per_block];
       float value = 0.0f;
       if (lane_in_tile < 3)
-        value = (float)pPosNodes[3 * whichGlobalNode + lane_in_tile];
+        value = (float)((pPosNodes[3 * whichGlobalNode + lane_in_tile] - x0) -
+                        (pPosNodesRef[3 * whichGlobalNode + lane_in_tile] - X0));
 
       const float NUx = tile.shfl(value, 0);
       const float NUy = tile.shfl(value, 1);
@@ -400,15 +420,15 @@ __global__ void internalF_MooneyRivlin_4QP(
       const float dummy1 = h0 * isoJacInv01 + h1 * isoJacInv11 + h2 * isoJacInv21;
       const float dummy2 = h0 * isoJacInv02 + h1 * isoJacInv12 + h2 * isoJacInv22;
 
-      F00 += NUx * dummy0;
-      F01 += NUx * dummy1;
-      F02 += NUx * dummy2;
-      F10 += NUy * dummy0;
-      F11 += NUy * dummy1;
-      F12 += NUy * dummy2;
-      F20 += NUz * dummy0;
-      F21 += NUz * dummy1;
-      F22 += NUz * dummy2;
+      H00 += NUx * dummy0;
+      H01 += NUx * dummy1;
+      H02 += NUx * dummy2;
+      H10 += NUy * dummy0;
+      H11 += NUy * dummy1;
+      H12 += NUy * dummy2;
+      H20 += NUz * dummy0;
+      H21 += NUz * dummy1;
+      H22 += NUz * dummy2;
     }
 
     // Node 8 (of 0-9)
@@ -416,7 +436,8 @@ __global__ void internalF_MooneyRivlin_4QP(
       const int whichGlobalNode = pElementNodes[8 * elements_per_block];
       float value = 0.0f;
       if (lane_in_tile < 3)
-        value = (float)pPosNodes[3 * whichGlobalNode + lane_in_tile];
+        value = (float)((pPosNodes[3 * whichGlobalNode + lane_in_tile] - x0) -
+                        (pPosNodesRef[3 * whichGlobalNode + lane_in_tile] - X0));
 
       const float NUx = tile.shfl(value, 0);
       const float NUy = tile.shfl(value, 1);
@@ -428,15 +449,15 @@ __global__ void internalF_MooneyRivlin_4QP(
       const float dummy1 = h0 * isoJacInv01 + h2 * isoJacInv21;
       const float dummy2 = h0 * isoJacInv02 + h2 * isoJacInv22;
 
-      F00 += NUx * dummy0;
-      F01 += NUx * dummy1;
-      F02 += NUx * dummy2;
-      F10 += NUy * dummy0;
-      F11 += NUy * dummy1;
-      F12 += NUy * dummy2;
-      F20 += NUz * dummy0;
-      F21 += NUz * dummy1;
-      F22 += NUz * dummy2;
+      H00 += NUx * dummy0;
+      H01 += NUx * dummy1;
+      H02 += NUx * dummy2;
+      H10 += NUy * dummy0;
+      H11 += NUy * dummy1;
+      H12 += NUy * dummy2;
+      H20 += NUz * dummy0;
+      H21 += NUz * dummy1;
+      H22 += NUz * dummy2;
     }
 
     // Node 9 (of 0-9)
@@ -444,7 +465,8 @@ __global__ void internalF_MooneyRivlin_4QP(
       const int whichGlobalNode = pElementNodes[9 * elements_per_block];
       float value = 0.0f;
       if (lane_in_tile < 3)
-        value = (float)pPosNodes[3 * whichGlobalNode + lane_in_tile];
+        value = (float)((pPosNodes[3 * whichGlobalNode + lane_in_tile] - x0) -
+                        (pPosNodesRef[3 * whichGlobalNode + lane_in_tile] - X0));
 
       const float NUx = tile.shfl(value, 0);
       const float NUy = tile.shfl(value, 1);
@@ -456,34 +478,34 @@ __global__ void internalF_MooneyRivlin_4QP(
       const float dummy1 = h1 * isoJacInv11 + h2 * isoJacInv21;
       const float dummy2 = h1 * isoJacInv12 + h2 * isoJacInv22;
 
-      F00 += NUx * dummy0;
-      F01 += NUx * dummy1;
-      F02 += NUx * dummy2;
-      F10 += NUy * dummy0;
-      F11 += NUy * dummy1;
-      F12 += NUy * dummy2;
-      F20 += NUz * dummy0;
-      F21 += NUz * dummy1;
-      F22 += NUz * dummy2;
+      H00 += NUx * dummy0;
+      H01 += NUx * dummy1;
+      H02 += NUx * dummy2;
+      H10 += NUy * dummy0;
+      H11 += NUy * dummy1;
+      H12 += NUy * dummy2;
+      H20 += NUz * dummy0;
+      H21 += NUz * dummy1;
+      H22 += NUz * dummy2;
     }
 
-    // Write F to global memory if requested (for unit tests)
+    // Write F = I + H to global memory if requested (for unit tests)
     if (writeOutDefGradientF && pDeformationGradientF != nullptr) {
-      pDeformationGradientF[baseIdx + 0 * blockDim.x] = F00;
-      pDeformationGradientF[baseIdx + 1 * blockDim.x] = F01;
-      pDeformationGradientF[baseIdx + 2 * blockDim.x] = F02;
-      pDeformationGradientF[baseIdx + 3 * blockDim.x] = F10;
-      pDeformationGradientF[baseIdx + 4 * blockDim.x] = F11;
-      pDeformationGradientF[baseIdx + 5 * blockDim.x] = F12;
-      pDeformationGradientF[baseIdx + 6 * blockDim.x] = F20;
-      pDeformationGradientF[baseIdx + 7 * blockDim.x] = F21;
-      pDeformationGradientF[baseIdx + 8 * blockDim.x] = F22;
+      pDeformationGradientF[baseIdx + 0 * blockDim.x] = H00 + 1.0f;
+      pDeformationGradientF[baseIdx + 1 * blockDim.x] = H01;
+      pDeformationGradientF[baseIdx + 2 * blockDim.x] = H02;
+      pDeformationGradientF[baseIdx + 3 * blockDim.x] = H10;
+      pDeformationGradientF[baseIdx + 4 * blockDim.x] = H11 + 1.0f;
+      pDeformationGradientF[baseIdx + 5 * blockDim.x] = H12;
+      pDeformationGradientF[baseIdx + 6 * blockDim.x] = H20;
+      pDeformationGradientF[baseIdx + 7 * blockDim.x] = H21;
+      pDeformationGradientF[baseIdx + 8 * blockDim.x] = H22 + 1.0f;
     }
   }
-  // End of deformation gradient F computation
+  // End of displacement gradient H computation
 
   // ============================================================
-  // Compute Edot = 0.5*(Fdot^T F + F^T Fdot) incrementally
+  // Compute Edot = 0.5*(Fdot^T F + F^T Fdot) incrementally, F = I + H
   // Accumulate into thread-local symmetric Edot components.
   // ============================================================
   if (kUseKelvinVoigtDamping && pVelNodes != nullptr) {
@@ -515,9 +537,10 @@ __global__ void internalF_MooneyRivlin_4QP(
       const float gy = h0 * (isoJacInv01 + isoJacInv11 + isoJacInv21);
       const float gz = h0 * (isoJacInv02 + isoJacInv12 + isoJacInv22);
 
-      const float wx = F00 * vx + F10 * vy + F20 * vz;
-      const float wy = F01 * vx + F11 * vy + F21 * vz;
-      const float wz = F02 * vx + F12 * vy + F22 * vz;
+      // w = F^T v with F = I + H (same for nodes 1-9)
+      const float wx = vx + H00 * vx + H10 * vy + H20 * vz;
+      const float wy = vy + H01 * vx + H11 * vy + H21 * vz;
+      const float wz = vz + H02 * vx + H12 * vy + H22 * vz;
 
       Edot_00 += gx * wx;
       Edot_01 += 0.5f * (gx * wy + gy * wx);
@@ -548,9 +571,9 @@ __global__ void internalF_MooneyRivlin_4QP(
       const float gy = h0 * isoJacInv01;
       const float gz = h0 * isoJacInv02;
 
-      const float wx = F00 * vx + F10 * vy + F20 * vz;
-      const float wy = F01 * vx + F11 * vy + F21 * vz;
-      const float wz = F02 * vx + F12 * vy + F22 * vz;
+      const float wx = vx + H00 * vx + H10 * vy + H20 * vz;
+      const float wy = vy + H01 * vx + H11 * vy + H21 * vz;
+      const float wz = vz + H02 * vx + H12 * vy + H22 * vz;
 
       Edot_00 += gx * wx;
       Edot_01 += 0.5f * (gx * wy + gy * wx);
@@ -581,9 +604,9 @@ __global__ void internalF_MooneyRivlin_4QP(
       const float gy = h1 * isoJacInv11;
       const float gz = h1 * isoJacInv12;
 
-      const float wx = F00 * vx + F10 * vy + F20 * vz;
-      const float wy = F01 * vx + F11 * vy + F21 * vz;
-      const float wz = F02 * vx + F12 * vy + F22 * vz;
+      const float wx = vx + H00 * vx + H10 * vy + H20 * vz;
+      const float wy = vy + H01 * vx + H11 * vy + H21 * vz;
+      const float wz = vz + H02 * vx + H12 * vy + H22 * vz;
 
       Edot_00 += gx * wx;
       Edot_01 += 0.5f * (gx * wy + gy * wx);
@@ -614,9 +637,9 @@ __global__ void internalF_MooneyRivlin_4QP(
       const float gy = h2 * isoJacInv21;
       const float gz = h2 * isoJacInv22;
 
-      const float wx = F00 * vx + F10 * vy + F20 * vz;
-      const float wy = F01 * vx + F11 * vy + F21 * vz;
-      const float wz = F02 * vx + F12 * vy + F22 * vz;
+      const float wx = vx + H00 * vx + H10 * vy + H20 * vz;
+      const float wy = vy + H01 * vx + H11 * vy + H21 * vz;
+      const float wz = vz + H02 * vx + H12 * vy + H22 * vz;
 
       Edot_00 += gx * wx;
       Edot_01 += 0.5f * (gx * wy + gy * wx);
@@ -649,9 +672,9 @@ __global__ void internalF_MooneyRivlin_4QP(
       const float gy = h0 * isoJacInv01 + h1 * isoJacInv11 + h2 * isoJacInv21;
       const float gz = h0 * isoJacInv02 + h1 * isoJacInv12 + h2 * isoJacInv22;
 
-      const float wx = F00 * vx + F10 * vy + F20 * vz;
-      const float wy = F01 * vx + F11 * vy + F21 * vz;
-      const float wz = F02 * vx + F12 * vy + F22 * vz;
+      const float wx = vx + H00 * vx + H10 * vy + H20 * vz;
+      const float wy = vy + H01 * vx + H11 * vy + H21 * vz;
+      const float wz = vz + H02 * vx + H12 * vy + H22 * vz;
 
       Edot_00 += gx * wx;
       Edot_01 += 0.5f * (gx * wy + gy * wx);
@@ -683,9 +706,9 @@ __global__ void internalF_MooneyRivlin_4QP(
       const float gy = h0 * isoJacInv01 + h1 * isoJacInv11;
       const float gz = h0 * isoJacInv02 + h1 * isoJacInv12;
 
-      const float wx = F00 * vx + F10 * vy + F20 * vz;
-      const float wy = F01 * vx + F11 * vy + F21 * vz;
-      const float wz = F02 * vx + F12 * vy + F22 * vz;
+      const float wx = vx + H00 * vx + H10 * vy + H20 * vz;
+      const float wy = vy + H01 * vx + H11 * vy + H21 * vz;
+      const float wz = vz + H02 * vx + H12 * vy + H22 * vz;
 
       Edot_00 += gx * wx;
       Edot_01 += 0.5f * (gx * wy + gy * wx);
@@ -718,9 +741,9 @@ __global__ void internalF_MooneyRivlin_4QP(
       const float gy = h0 * isoJacInv01 + h1 * isoJacInv11 + h2 * isoJacInv21;
       const float gz = h0 * isoJacInv02 + h1 * isoJacInv12 + h2 * isoJacInv22;
 
-      const float wx = F00 * vx + F10 * vy + F20 * vz;
-      const float wy = F01 * vx + F11 * vy + F21 * vz;
-      const float wz = F02 * vx + F12 * vy + F22 * vz;
+      const float wx = vx + H00 * vx + H10 * vy + H20 * vz;
+      const float wy = vy + H01 * vx + H11 * vy + H21 * vz;
+      const float wz = vz + H02 * vx + H12 * vy + H22 * vz;
 
       Edot_00 += gx * wx;
       Edot_01 += 0.5f * (gx * wy + gy * wx);
@@ -753,9 +776,9 @@ __global__ void internalF_MooneyRivlin_4QP(
       const float gy = h0 * isoJacInv01 + h1 * isoJacInv11 + h2 * isoJacInv21;
       const float gz = h0 * isoJacInv02 + h1 * isoJacInv12 + h2 * isoJacInv22;
 
-      const float wx = F00 * vx + F10 * vy + F20 * vz;
-      const float wy = F01 * vx + F11 * vy + F21 * vz;
-      const float wz = F02 * vx + F12 * vy + F22 * vz;
+      const float wx = vx + H00 * vx + H10 * vy + H20 * vz;
+      const float wy = vy + H01 * vx + H11 * vy + H21 * vz;
+      const float wz = vz + H02 * vx + H12 * vy + H22 * vz;
 
       Edot_00 += gx * wx;
       Edot_01 += 0.5f * (gx * wy + gy * wx);
@@ -787,9 +810,9 @@ __global__ void internalF_MooneyRivlin_4QP(
       const float gy = h0 * isoJacInv01 + h2 * isoJacInv21;
       const float gz = h0 * isoJacInv02 + h2 * isoJacInv22;
 
-      const float wx = F00 * vx + F10 * vy + F20 * vz;
-      const float wy = F01 * vx + F11 * vy + F21 * vz;
-      const float wz = F02 * vx + F12 * vy + F22 * vz;
+      const float wx = vx + H00 * vx + H10 * vy + H20 * vz;
+      const float wy = vy + H01 * vx + H11 * vy + H21 * vz;
+      const float wz = vz + H02 * vx + H12 * vy + H22 * vz;
 
       Edot_00 += gx * wx;
       Edot_01 += 0.5f * (gx * wy + gy * wx);
@@ -821,9 +844,9 @@ __global__ void internalF_MooneyRivlin_4QP(
       const float gy = h1 * isoJacInv11 + h2 * isoJacInv21;
       const float gz = h1 * isoJacInv12 + h2 * isoJacInv22;
 
-      const float wx = F00 * vx + F10 * vy + F20 * vz;
-      const float wy = F01 * vx + F11 * vy + F21 * vz;
-      const float wz = F02 * vx + F12 * vy + F22 * vz;
+      const float wx = vx + H00 * vx + H10 * vy + H20 * vz;
+      const float wy = vy + H01 * vx + H11 * vy + H21 * vz;
+      const float wz = vz + H02 * vx + H12 * vy + H22 * vz;
 
       Edot_00 += gx * wx;
       Edot_01 += 0.5f * (gx * wy + gy * wx);
@@ -835,129 +858,111 @@ __global__ void internalF_MooneyRivlin_4QP(
   }
 
   // ============================================================
-  // Compute 1st Piola-Kirchhoff stress tensor P (Mooney-Rivlin)
-  // P = 2*hatJ*(alpha*I - mu01*hatJ*F*F^T)F + beta*F^{-T}
+  // Compute 1st Piola-Kirchhoff stress tensor P (Mooney-Rivlin) from H.
+  // With F = I + H:
+  //   S     = F F^T - I = H + H^T + H H^T,          tr S = I1 - 3
+  //   J - 1 = tr H + (principal 2x2 minors of H) + det H
+  //   F - F^{-T} = H + H^T F^{-T}
+  //   P = cW (F - F^{-T}) + c01 (trS I - S) F + cInv F^{-T}
+  // which equals P = 2*hatJ*(alpha*I - mu01*hatJ*F*F^T)*F + beta*F^{-T}
+  // with the cancelling constant parts of alpha and beta removed.
   // ============================================================
   {
-    // Compute determinant of F, pad with minJthreshold to avoid singularity
-    float dummy = F00 * (F11 * F22 - F12 * F21) - F01 * (F10 * F22 - F12 * F20) +
-                  F02 * (F10 * F21 - F11 * F20);
-    const float J = (dummy < kMinJthreshold ? kMinJthreshold : dummy);
-    float invJ = 1.0f / J;
-
-    dummy = cbrtf(J);
-    dummy = 1.0f / dummy;
-    float hatJ = dummy * dummy;  // J^{-2/3}
-
-    // PK1 temporarily holds B = F * F^T (symmetric)
-    PKone_00 = F00 * F00 + F01 * F01 + F02 * F02;
-    PKone_11 = F10 * F10 + F11 * F11 + F12 * F12;
-    PKone_22 = F20 * F20 + F21 * F21 + F22 * F22;
-    PKone_01 = F00 * F10 + F01 * F11 + F02 * F12;
-    PKone_10 = PKone_01;
-    PKone_02 = F00 * F20 + F01 * F21 + F02 * F22;
-    PKone_20 = PKone_02;
-    PKone_12 = F10 * F20 + F11 * F21 + F12 * F22;
-    PKone_21 = PKone_12;
-
-    // I1 = tr(B), I2 = 0.5*(I1^2 - tr(B*B))
-    dummy = PKone_00 + PKone_11 + PKone_22;  // I1
-    float bibi = PKone_00 * PKone_00 + PKone_11 * PKone_11 +
-                 PKone_22 * PKone_22 +
-                 2.0f * (PKone_01 * PKone_01 + PKone_02 * PKone_02 +
-                         PKone_12 * PKone_12);  // tr(B*B)
-    bibi = 0.5f * (dummy * dummy - bibi);       // I2
-    float I1 = dummy;
-    float I2 = bibi;
-    float alpha = kMu10 + kMu01 * I1 * hatJ;
-    float beta = kBulkK * (J - 1.0f) * J -
-                 (2.0f / 3.0f) * hatJ * (kMu10 * I1 + 2.0f * kMu01 * I2 * hatJ);
-
-    // Update PK1 to hold the matrix that multiplies F from the left
-    bibi = -kMu01 * hatJ;
-    bibi *= (2.0f * hatJ);
-    alpha *= (2.0f * hatJ);
-    if (kUseKelvinVoigtDamping) {
-      alpha += kLambdaDamp * (Edot_00 + Edot_11 + Edot_22);
+    float Jm1 = (H00 + H11 + H22) +
+                (H00 * H11 - H01 * H10) + (H00 * H22 - H02 * H20) +
+                (H11 * H22 - H12 * H21) +
+                H00 * (H11 * H22 - H12 * H21) - H01 * (H10 * H22 - H12 * H20) +
+                H02 * (H10 * H21 - H11 * H20);
+    float J = 1.0f + Jm1;
+    if (J < kMinJthreshold) {  // pad to avoid singularity
+      J = kMinJthreshold;
+      Jm1 = J - 1.0f;
     }
-    PKone_00 = alpha + bibi * PKone_00;
-    PKone_11 = alpha + bibi * PKone_11;
-    PKone_22 = alpha + bibi * PKone_22;
-    PKone_01 = bibi * PKone_01;
-    PKone_10 = bibi * PKone_10;
-    PKone_02 = bibi * PKone_02;
-    PKone_20 = bibi * PKone_20;
-    PKone_12 = bibi * PKone_12;
-    PKone_21 = bibi * PKone_21;
+    const float invJ = 1.0f / J;
+    float hatJ = 1.0f / cbrtf(J);
+    hatJ *= hatJ;  // J^{-2/3}
 
-// Reuse local variables for intermediate symmetric matrix
-#define intermediate_Matrix00 dummy
-#define intermediate_Matrix01 bibi
-#define intermediate_Matrix02 I1
-#define intermediate_Matrix11 I2
-#define intermediate_Matrix12 alpha
-#define intermediate_Matrix22 hatJ
+    // S = H + H^T + H H^T (symmetric)
+    float S00 = 2.0f * H00 + H00 * H00 + H01 * H01 + H02 * H02;
+    float S11 = 2.0f * H11 + H10 * H10 + H11 * H11 + H12 * H12;
+    float S22 = 2.0f * H22 + H20 * H20 + H21 * H21 + H22 * H22;
+    float S01 = H01 + H10 + H00 * H10 + H01 * H11 + H02 * H12;
+    float S02 = H02 + H20 + H00 * H20 + H01 * H21 + H02 * H22;
+    float S12 = H12 + H21 + H10 * H20 + H11 * H21 + H12 * H22;
+    const float trS = S00 + S11 + S22;  // I1 - 3
+    const float trS2 = S00 * S00 + S11 * S11 + S22 * S22 +
+                       2.0f * (S01 * S01 + S02 * S02 + S12 * S12);
+    const float I2m3 = 2.0f * trS + 0.5f * (trS * trS - trS2);  // I2 - 3
 
-    intermediate_Matrix00 = PKone_00;
-    intermediate_Matrix01 = PKone_01;
-    intermediate_Matrix02 = PKone_02;
-    intermediate_Matrix11 = PKone_11;
-    intermediate_Matrix12 = PKone_12;
-    intermediate_Matrix22 = PKone_22;
+    const float cW = 2.0f * hatJ * (kMu10 + 2.0f * hatJ * kMu01);
+    const float c01 = 2.0f * hatJ * hatJ * kMu01;
+    const float cInv = kBulkK * Jm1 * J -
+                       (2.0f / 3.0f) * hatJ *
+                           (kMu10 * trS + 2.0f * hatJ * kMu01 * I2m3);
 
-    // P = intermediate_Matrix * F + beta * F^{-T}
-    invJ *= beta;
+    // T = trS I - S, reusing the S registers
+    S00 = trS - S00;
+    S11 = trS - S11;
+    S22 = trS - S22;
+    S01 = -S01;
+    S02 = -S02;
+    S12 = -S12;
 
-    // Row 0 of PK1
-    PKone_00 = fmaf(F11, F22, -(F12 * F21)) * invJ;  // F^{-T} component
-    PKone_00 += intermediate_Matrix00 * F00 + intermediate_Matrix01 * F10 +
-                intermediate_Matrix02 * F20;
+    // F^{-T} = cof(F) / J, parked in the P registers until P is assembled
+    PKone_00 = ((1.0f + H11) * (1.0f + H22) - H12 * H21) * invJ;
+    PKone_01 = (H12 * H20 - H10 * (1.0f + H22)) * invJ;
+    PKone_02 = (H10 * H21 - (1.0f + H11) * H20) * invJ;
+    PKone_10 = (H02 * H21 - H01 * (1.0f + H22)) * invJ;
+    PKone_11 = ((1.0f + H00) * (1.0f + H22) - H02 * H20) * invJ;
+    PKone_12 = (H01 * H20 - (1.0f + H00) * H21) * invJ;
+    PKone_20 = (H01 * H12 - H02 * (1.0f + H11)) * invJ;
+    PKone_21 = (H02 * H10 - (1.0f + H00) * H12) * invJ;
+    PKone_22 = ((1.0f + H00) * (1.0f + H11) - H01 * H10) * invJ;
 
-    PKone_01 = fmaf(F12, F20, -(F10 * F22)) * invJ;
-    PKone_01 += intermediate_Matrix00 * F01 + intermediate_Matrix01 * F11 +
-                intermediate_Matrix02 * F21;
-
-    PKone_02 = fmaf(F10, F21, -(F11 * F20)) * invJ;
-    PKone_02 += intermediate_Matrix00 * F02 + intermediate_Matrix01 * F12 +
-                intermediate_Matrix02 * F22;
-
-    // Row 1 of PK1 (use symmetry of intermediate_Matrix)
-    PKone_10 = fmaf(F02, F21, -(F01 * F22)) * invJ;
-    PKone_10 += intermediate_Matrix01 * F00 + intermediate_Matrix11 * F10 +
-                intermediate_Matrix12 * F20;
-
-    PKone_11 = fmaf(F00, F22, -(F02 * F20)) * invJ;
-    PKone_11 += intermediate_Matrix01 * F01 + intermediate_Matrix11 * F11 +
-                intermediate_Matrix12 * F21;
-
-    PKone_12 = fmaf(F01, F20, -(F00 * F21)) * invJ;
-    PKone_12 += intermediate_Matrix01 * F02 + intermediate_Matrix11 * F12 +
-                intermediate_Matrix12 * F22;
-
-    // Row 2 of PK1
-    PKone_20 = fmaf(F01, F12, -(F02 * F11)) * invJ;
-    PKone_20 += intermediate_Matrix02 * F00 + intermediate_Matrix12 * F10 +
-                intermediate_Matrix22 * F20;
-
-    PKone_21 = fmaf(F02, F10, -(F00 * F12)) * invJ;
-    PKone_21 += intermediate_Matrix02 * F01 + intermediate_Matrix12 * F11 +
-                intermediate_Matrix22 * F21;
-
-    PKone_22 = fmaf(F00, F11, -(F01 * F10)) * invJ;
-    PKone_22 += intermediate_Matrix02 * F02 + intermediate_Matrix12 * F12 +
-                intermediate_Matrix22 * F22;
+    // P_ij = cW (H_ij + sum_k H_ki FinvT_kj) + c01 (T_ij + sum_k T_ik H_kj)
+    //        + cInv FinvT_ij
+    const float p00 = cW * (H00 + H00 * PKone_00 + H10 * PKone_10 + H20 * PKone_20) +
+                      c01 * (S00 + S00 * H00 + S01 * H10 + S02 * H20) + cInv * PKone_00;
+    const float p01 = cW * (H01 + H00 * PKone_01 + H10 * PKone_11 + H20 * PKone_21) +
+                      c01 * (S01 + S00 * H01 + S01 * H11 + S02 * H21) + cInv * PKone_01;
+    const float p02 = cW * (H02 + H00 * PKone_02 + H10 * PKone_12 + H20 * PKone_22) +
+                      c01 * (S02 + S00 * H02 + S01 * H12 + S02 * H22) + cInv * PKone_02;
+    const float p10 = cW * (H10 + H01 * PKone_00 + H11 * PKone_10 + H21 * PKone_20) +
+                      c01 * (S01 + S01 * H00 + S11 * H10 + S12 * H20) + cInv * PKone_10;
+    const float p11 = cW * (H11 + H01 * PKone_01 + H11 * PKone_11 + H21 * PKone_21) +
+                      c01 * (S11 + S01 * H01 + S11 * H11 + S12 * H21) + cInv * PKone_11;
+    const float p12 = cW * (H12 + H01 * PKone_02 + H11 * PKone_12 + H21 * PKone_22) +
+                      c01 * (S12 + S01 * H02 + S11 * H12 + S12 * H22) + cInv * PKone_12;
+    const float p20 = cW * (H20 + H02 * PKone_00 + H12 * PKone_10 + H22 * PKone_20) +
+                      c01 * (S02 + S02 * H00 + S12 * H10 + S22 * H20) + cInv * PKone_20;
+    const float p21 = cW * (H21 + H02 * PKone_01 + H12 * PKone_11 + H22 * PKone_21) +
+                      c01 * (S12 + S02 * H01 + S12 * H11 + S22 * H21) + cInv * PKone_21;
+    const float p22 = cW * (H22 + H02 * PKone_02 + H12 * PKone_12 + H22 * PKone_22) +
+                      c01 * (S22 + S02 * H02 + S12 * H12 + S22 * H22) + cInv * PKone_22;
+    PKone_00 = p00;
+    PKone_01 = p01;
+    PKone_02 = p02;
+    PKone_10 = p10;
+    PKone_11 = p11;
+    PKone_12 = p12;
+    PKone_20 = p20;
+    PKone_21 = p21;
+    PKone_22 = p22;
 
     if (kUseKelvinVoigtDamping) {
+      // P += lambda tr(Edot) F + 2 eta F Edot, with F = I + H
       constexpr float two_eta = 2.0f * kEtaDamp;
-      PKone_00 += two_eta * (F00 * Edot_00 + F01 * Edot_01 + F02 * Edot_02);
-      PKone_01 += two_eta * (F00 * Edot_01 + F01 * Edot_11 + F02 * Edot_12);
-      PKone_02 += two_eta * (F00 * Edot_02 + F01 * Edot_12 + F02 * Edot_22);
-      PKone_10 += two_eta * (F10 * Edot_00 + F11 * Edot_01 + F12 * Edot_02);
-      PKone_11 += two_eta * (F10 * Edot_01 + F11 * Edot_11 + F12 * Edot_12);
-      PKone_12 += two_eta * (F10 * Edot_02 + F11 * Edot_12 + F12 * Edot_22);
-      PKone_20 += two_eta * (F20 * Edot_00 + F21 * Edot_01 + F22 * Edot_02);
-      PKone_21 += two_eta * (F20 * Edot_01 + F21 * Edot_11 + F22 * Edot_12);
-      PKone_22 += two_eta * (F20 * Edot_02 + F21 * Edot_12 + F22 * Edot_22);
+      const float lamTr = kLambdaDamp * (Edot_00 + Edot_11 + Edot_22);
+      const float F00 = 1.0f + H00, F11 = 1.0f + H11, F22 = 1.0f + H22;
+      PKone_00 += lamTr * F00 + two_eta * (F00 * Edot_00 + H01 * Edot_01 + H02 * Edot_02);
+      PKone_01 += lamTr * H01 + two_eta * (F00 * Edot_01 + H01 * Edot_11 + H02 * Edot_12);
+      PKone_02 += lamTr * H02 + two_eta * (F00 * Edot_02 + H01 * Edot_12 + H02 * Edot_22);
+      PKone_10 += lamTr * H10 + two_eta * (H10 * Edot_00 + F11 * Edot_01 + H12 * Edot_02);
+      PKone_11 += lamTr * F11 + two_eta * (H10 * Edot_01 + F11 * Edot_11 + H12 * Edot_12);
+      PKone_12 += lamTr * H12 + two_eta * (H10 * Edot_02 + F11 * Edot_12 + H12 * Edot_22);
+      PKone_20 += lamTr * H20 + two_eta * (H20 * Edot_00 + H21 * Edot_01 + F22 * Edot_02);
+      PKone_21 += lamTr * H21 + two_eta * (H20 * Edot_01 + H21 * Edot_11 + F22 * Edot_12);
+      PKone_22 += lamTr * F22 + two_eta * (H20 * Edot_02 + H21 * Edot_12 + F22 * Edot_22);
     }
 
     // Write P to global memory if requested (for unit tests)
@@ -1282,15 +1287,15 @@ __global__ void internalF_MooneyRivlin_4QP(
   // End of internal force computation
 
 // Clean up macros
-#undef F00
-#undef F01
-#undef F02
-#undef F10
-#undef F11
-#undef F12
-#undef F20
-#undef F21
-#undef F22
+#undef H00
+#undef H01
+#undef H02
+#undef H10
+#undef H11
+#undef H12
+#undef H20
+#undef H21
+#undef H22
 #undef isoJacInv00
 #undef isoJacInv01
 #undef isoJacInv02
@@ -1320,13 +1325,13 @@ __global__ void internalF_MooneyRivlin_4QP(
 /**
  * Returns required shared memory size for the internal force kernel.
  *
- * Shared memory is used for F, invJacobian, and PK1 matrices (each 9 floats per
- * thread).
+ * Shared memory is used for the H and invJacobian matrices (each 9 floats per
+ * thread); P stays in registers.
  *
  * @param blockSize Number of threads per block (should be 64)
  * @return Required shared memory in bytes
  */
 inline size_t getInternalForceKernelSharedMemSize(int blockSize = 64) {
-  return 3 * 9 * blockSize * sizeof(float);  // 3 matrices * 9 components *
+  return 2 * 9 * blockSize * sizeof(float);  // 2 matrices * 9 components *
                                               // blockSize threads
 }
