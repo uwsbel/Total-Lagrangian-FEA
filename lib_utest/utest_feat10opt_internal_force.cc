@@ -1,670 +1,244 @@
-/*
- * Unit test for FEAT10Opt element internal force computation.
- * Validates GPU implementation of deformation gradient (F) and internal force
- * (f_int) against CPU reference implementation.
- *
- * Key differences from utest_feat10_internal_force.cc:
- * - Uses 4-point quadrature rule (vs 5-point Keast)
- * - Float compute precision (vs double)
- * - Fused kernel (no separate P retrieval)
- * - Different API (Setup takes positions matrix)
- *
- * Uses shared utilities from feat10_test_utils.h.
- */
+// FEAT10Opt internal force against the standard FEAT10 element.
+//
+// Kernels under test (FEAT10DataOpt.cu / FEAT10KernelOpt.cuh):
+//   computeInverseJacobian_kernel  - per-QP inverse Jacobian, run by
+//                                    ComputePrecomputation()
+//   internalF_MooneyRivlin_4QP     - fused H, P and nodal force, run by
+//                                    ComputeInternalForce(); undamped path
+//                                    (no velocities are passed)
+// The reference is the standard element (FEAT10Data.cu: dn_du_pre_kernel,
+// calc_p_kernel, compute_internal_force_kernel) in double precision with the
+// same Mooney-Rivlin material. All deformations here are affine, so both
+// quadrature rules integrate the element exactly and the only difference left
+// is the Opt kernel's float arithmetic.
+//
+// Tolerances are derived from that arithmetic (see kRelTol, kFAbsTol below),
+// not from the measured values. Each check prints what it measured next to
+// its tolerance so drift is visible in the test log.
 
-#include <cuda_runtime.h>
 #include <gtest/gtest.h>
 
 #include <Eigen/Dense>
 #include <cmath>
-#include <iomanip>
-#include <iostream>
+#include <cstdio>
 #include <stdexcept>
 #include <vector>
 
-#include "feat10_test_utils.h"
+#include "lib_src/elements/FEAT10Data.cuh"
 #include "lib_src/elements/FEAT10DataOpt.cuh"
+#include "lib_utils/cpu_utils.h"
+#include "lib_utils/quadrature_utils.h"
 
-using namespace feat10_test;
+namespace {
 
-// ===========================================================================
-// Test Fixture
-// ===========================================================================
+const double kMu10 = GPU_FEAT10Opt_Data::kMu10;
+const double kMu01 = GPU_FEAT10Opt_Data::kMu01;
+const double kBulkK = GPU_FEAT10Opt_Data::kBulkK;
 
-class FEAT10OptInternalForceTest : public ::testing::Test {
- protected:
-  void SetUp() override {
-    // Setup unit tetrahedron
-    SetupUnitTetrahedron(X_ref_);
+// Relative tolerance on force and stress, derived as follows. The kernel
+// builds J - 1 from H with ~10 float roundings (10 node terms plus the trace),
+// each up to eps = 1.2e-7 of |H|, so the bulk term carries a spurious
+// pressure of up to kappa * 10 eps * |H|. The stress it is measured against
+// is at least the deviatoric 2 mu |H| with mu = mu10 + mu01; the worst case
+// is isochoric shear, where the bulk stress should be exactly zero. Bound:
+//   10 eps * kappa / (2 mu) = 10 * 1.2e-7 * 7.5e8 / 1.07e8 = 8e-6,
+// rounded up to 1e-5. Stretch-dominated cases sit kappa/mu ~ 7x below it.
+const double kRelTol = 1e-5;
+// Absolute tolerance on F: H alone, 10 roundings of eps on entries < 0.2.
+const double kFAbsTol = 1e-6;
 
-    // Material parameters: the Mooney-Rivlin constants the FEAT10Opt kernel
-    // is compiled with, so GPU and CPU reference use the same material.
-    mu10_  = GPU_FEAT10Opt_Data::kMu10;
-    mu01_  = GPU_FEAT10Opt_Data::kMu01;
-    kappa_ = GPU_FEAT10Opt_Data::kBulkK;
-
-    // Setup 4-point quadrature rule (used by FEAT10Opt)
-    Setup4PointQuadrature(qp_x_, qp_y_, qp_z_, qp_weights_);
-  }
-
-  // Setup GPU element data structure
-  GPU_FEAT10Opt_Data* SetupGPUElement(const double x_nodes[10][3]) {
-    GPU_FEAT10Opt_Data* element = new GPU_FEAT10Opt_Data();
-    element->Initialize(1, 10);  // 1 element, 10 nodes
-
-    // Setup connectivity (single element with nodes 0-9)
-    Eigen::MatrixXi connectivity(1, 10);
-    for (int i = 0; i < 10; i++) {
-      connectivity(0, i) = i;
-    }
-
-    // Setup node positions as [n_nodes x 3] matrix
-    Eigen::MatrixXd positions(10, 3);
-    for (int i = 0; i < 10; i++) {
-      positions(i, 0) = x_nodes[i][0];
-      positions(i, 1) = x_nodes[i][1];
-      positions(i, 2) = x_nodes[i][2];
-    }
-
-    element->Setup(positions, connectivity);
-    element->SetMooneyRivlin(static_cast<float>(mu10_),
-                             static_cast<float>(mu01_),
-                             static_cast<float>(kappa_));
-
-    return element;
-  }
-
-  // Update GPU element positions
-  void UpdateGPUPositions(GPU_FEAT10Opt_Data* element,
-                          const double x_nodes[10][3]) {
-    Eigen::MatrixXd positions(10, 3);
-    for (int i = 0; i < 10; i++) {
-      positions(i, 0) = x_nodes[i][0];
-      positions(i, 1) = x_nodes[i][1];
-      positions(i, 2) = x_nodes[i][2];
-    }
-    element->UpdatePositions(positions);
-  }
-
-  // Helper to run a complete internal force test with given deformation
-  void RunInternalForceTest(const double F_applied[3][3],
-                            const std::string& test_name, double rel_tol = 1e-4,
-                            double abs_tol = 0.01) {
-    double x_cur[10][3];
-    ApplyAffineDeformation(X_ref_, F_applied, x_cur);
-
-    // Setup GPU element with reference positions first
-    GPU_FEAT10Opt_Data* element = SetupGPUElement(X_ref_);
-    element->ComputePrecomputation();
-
-    // Update to current positions
-    UpdateGPUPositions(element, x_cur);
-
-    // Compute internal force on GPU
-    element->ClearInternalForce();
-    element->ComputeInternalForce(nullptr, false);
-
-    // Retrieve internal force from GPU
-    Eigen::VectorXf f_int_gpu;
-    element->RetrieveInternalForceToCPU(f_int_gpu);
-
-    // Compute internal force using CPU reference
-    double f_int_cpu[10][3];
-    ComputeInternalForce_CPU(X_ref_, x_cur, mu10_, mu01_, kappa_, qp_x_, qp_y_,
-                             qp_z_, qp_weights_, f_int_cpu);
-
-    // Compare CPU vs GPU
-    for (int a = 0; a < 10; a++) {
-      for (int i = 0; i < 3; i++) {
-        int dof         = a * 3 + i;
-        double gpu_val  = static_cast<double>(f_int_gpu(dof));
-        double cpu_val  = f_int_cpu[a][i];
-        double abs_diff = std::abs(gpu_val - cpu_val);
-
-        double scale = std::max(std::abs(cpu_val), std::abs(gpu_val));
-        if (scale > 1.0) {
-          double rel_error = abs_diff / scale;
-          EXPECT_LT(rel_error, rel_tol)
-              << test_name << ": f_int mismatch at node " << a << " dof " << i
-              << " (DOF " << dof << "): GPU=" << gpu_val << ", CPU=" << cpu_val;
-        } else {
-          EXPECT_NEAR(gpu_val, cpu_val, abs_tol)
-              << test_name << ": f_int mismatch at node " << a << " dof " << i
-              << " (DOF " << dof << "): GPU=" << gpu_val << ", CPU=" << cpu_val;
-        }
-      }
-    }
-
-    // Verify force equilibrium (float precision: larger tolerance)
-    double equilibrium_error = CheckForceEquilibrium(f_int_gpu, 10);
-    EXPECT_LT(equilibrium_error, 1e-4)
-        << test_name << ": Force equilibrium violated";
-
-    element->Destroy();
-    delete element;
-  }
-
-  double X_ref_[10][3];
-  double mu10_, mu01_, kappa_;
-  Eigen::VectorXd qp_x_, qp_y_, qp_z_, qp_weights_;
-};
-
-// ===========================================================================
-// Test Cases - Basic Validation
-// ===========================================================================
-
-// ===========================================================================
-// Test Cases - Compiled material contract
-// ===========================================================================
-
-TEST_F(FEAT10OptInternalForceTest, SetMooneyRivlin_AcceptsCompiledMaterial) {
-  // The fused kernel folds the material in at compile time, so the values the
-  // fixture uses must be the ones the kernel was built with. If this fails,
-  // every GPU-vs-CPU comparison below is comparing two different materials.
-  GPU_FEAT10Opt_Data* element = SetupGPUElement(X_ref_);
-  EXPECT_NO_THROW(element->SetMooneyRivlin(GPU_FEAT10Opt_Data::kMu10,
-                                           GPU_FEAT10Opt_Data::kMu01,
-                                           GPU_FEAT10Opt_Data::kBulkK));
-  element->Destroy();
-  delete element;
+// Unit tetrahedron with mid-edge nodes in T10 order.
+Eigen::MatrixXd UnitT10Nodes() {
+  Eigen::MatrixXd X(10, 3);
+  X << 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, .5, 0, 0, .5, .5, 0, 0, .5, 0, 0,
+      0, .5, .5, 0, .5, 0, .5, .5;
+  return X;
 }
 
-TEST_F(FEAT10OptInternalForceTest, SetMooneyRivlin_RejectsOtherMaterial) {
-  GPU_FEAT10Opt_Data* element = SetupGPUElement(X_ref_);
-  EXPECT_THROW(element->SetMooneyRivlin(0.5f * GPU_FEAT10Opt_Data::kMu10,
-                                        GPU_FEAT10Opt_Data::kMu01,
-                                        GPU_FEAT10Opt_Data::kBulkK),
+Eigen::MatrixXi OneElement() {
+  Eigen::MatrixXi E(1, 10);
+  E << 0, 1, 2, 3, 4, 5, 6, 7, 8, 9;
+  return E;
+}
+
+void ReadBeamRes0(Eigen::MatrixXd& X, Eigen::MatrixXi& E) {
+  ANCFCPUUtils::FEAT10_read_nodes(
+      "data/meshes/T10/resolution/beam_3x2x1_res0.1.node", X);
+  ANCFCPUUtils::FEAT10_read_elements(
+      "data/meshes/T10/resolution/beam_3x2x1_res0.1.ele", E);
+}
+
+// Standard element force for current positions x; P at QP 0 of element 0.
+Eigen::VectorXd StandardForce(const Eigen::MatrixXd& X,
+                              const Eigen::MatrixXi& E,
+                              const Eigen::MatrixXd& x,
+                              Eigen::Matrix3d* P0 = nullptr) {
+  GPU_FEAT10_Data element(E.rows(), X.rows());
+  element.Initialize();
+  element.Setup(Quadrature::tet5pt_x, Quadrature::tet5pt_y,
+                Quadrature::tet5pt_z, Quadrature::tet5pt_weights, X.col(0),
+                X.col(1), X.col(2), E);
+  element.SetMooneyRivlin(kMu10, kMu01, kBulkK);
+  element.CalcDnDuPre();
+  element.UpdatePositions(x.col(0), x.col(1), x.col(2));
+  element.CalcP();
+  element.CalcInternalForce();
+  Eigen::VectorXd f;
+  element.RetrieveInternalForceToCPU(f);
+  if (P0) {
+    std::vector<std::vector<Eigen::MatrixXd>> P;
+    element.RetrievePFromFToCPU(P);
+    *P0 = P[0][0];
+  }
+  element.Destroy();
+  return f;
+}
+
+// Opt element force for current positions x; F and P at QP 0 of element 0.
+Eigen::VectorXd OptForce(const Eigen::MatrixXd& X, const Eigen::MatrixXi& E,
+                         const Eigen::MatrixXd& x,
+                         Eigen::Matrix3d* F0 = nullptr,
+                         Eigen::Matrix3d* P0 = nullptr) {
+  GPU_FEAT10Opt_Data element;
+  element.Initialize(E.rows(), X.rows());
+  element.Setup(X, E);
+  element.SetMooneyRivlin(kMu10, kMu01, kBulkK);
+  element.ComputePrecomputation();
+  element.UpdatePositions(x);
+  element.ClearInternalForce();
+  element.ComputeInternalForce(nullptr, F0 != nullptr, P0 != nullptr);
+  Eigen::VectorXf f;
+  element.RetrieveInternalForceToCPU(f);
+  if (F0) {
+    std::vector<std::vector<Eigen::Matrix3f>> F;
+    element.RetrieveDeformationGradientToCPU(F);
+    *F0 = F[0][0].cast<double>();
+  }
+  if (P0) {
+    std::vector<std::vector<Eigen::Matrix3f>> P;
+    element.RetrievePiolaToCPU(P);
+    *P0 = P[0][0].cast<double>();
+  }
+  element.Destroy();
+  return f.cast<double>();
+}
+
+double MaxAbs(const Eigen::MatrixXd& m) { return m.cwiseAbs().maxCoeff(); }
+
+Eigen::MatrixXd Deform(const Eigen::MatrixXd& X, const Eigen::Matrix3d& F) {
+  return X * F.transpose();
+}
+
+Eigen::Matrix3d GeneralF() {
+  Eigen::Matrix3d F;
+  F << 1.10, 0.05, 0.02, 0.03, 1.15, 0.04, 0.01, 0.02, 0.95;
+  return F;
+}
+
+void Report(const char* what, double measured, double tol) {
+  std::printf("  %-28s measured %.2e  tolerance %.0e\n", what, measured, tol);
+}
+
+}  // namespace
+
+TEST(FEAT10OptForce, Rest_ZeroForce) {
+  Eigen::MatrixXd X;
+  Eigen::MatrixXi E;
+  ReadBeamRes0(X, E);
+  double f_tet = MaxAbs(OptForce(UnitT10Nodes(), OneElement(), UnitT10Nodes()));
+  double f_beam = MaxAbs(OptForce(X, E, X));
+  Report("rest, tet max|f| (N)", f_tet, 0.0);
+  Report("rest, beam max|f| (N)", f_beam, 0.0);
+  EXPECT_EQ(f_tet, 0.0);
+  EXPECT_EQ(f_beam, 0.0);
+}
+
+TEST(FEAT10OptForce, AffineDeformations_MatchStandard) {
+  Eigen::MatrixXd X;
+  Eigen::MatrixXi E;
+  ReadBeamRes0(X, E);
+  struct Case {
+    const char* name;
+    Eigen::Matrix3d F;
+  };
+  Eigen::Matrix3d I = Eigen::Matrix3d::Identity();
+  Eigen::Matrix3d stretch = I, compress = I, shear = I;
+  stretch(0, 0) = 1.1;
+  compress(0, 0) = 0.9;
+  shear(0, 1) = 0.2;
+  for (const Case& c : {Case{"stretch 1.1", stretch}, Case{"compress 0.9", compress},
+                        Case{"shear 0.2", shear}, Case{"general", GeneralF()}}) {
+    Eigen::MatrixXd x = Deform(X, c.F);
+    Eigen::VectorXd f_std = StandardForce(X, E, x);
+    Eigen::VectorXd f_opt = OptForce(X, E, x);
+    double rel = MaxAbs(f_opt - f_std) / MaxAbs(f_std);
+    Report(c.name, rel, kRelTol);
+    EXPECT_LE(rel, kRelTol) << c.name;
+  }
+}
+
+TEST(FEAT10OptForce, RigidMotion) {
+  Eigen::MatrixXd X;
+  Eigen::MatrixXi E;
+  ReadBeamRes0(X, E);
+
+  // Translation: the relative displacements are exactly zero, so is the force.
+  Eigen::MatrixXd x = X;
+  x.col(0).array() += 1000.0;
+  double f_translated = MaxAbs(OptForce(X, E, x));
+  Report("translated 1000 m, max|f|", f_translated, 0.0);
+  EXPECT_EQ(f_translated, 0.0);
+
+  // Rotation: no stress, so the force is float noise on the stiffness scale,
+  // taken here as the force of a 10% stretch.
+  Eigen::Matrix3d R = Eigen::AngleAxisd(M_PI / 6, Eigen::Vector3d::UnitZ())
+                          .toRotationMatrix();
+  Eigen::Matrix3d stretch = Eigen::Matrix3d::Identity();
+  stretch(0, 0) = 1.1;
+  double f_scale = MaxAbs(OptForce(X, E, Deform(X, stretch)));
+  double rel = MaxAbs(OptForce(X, E, Deform(X, R))) / f_scale;
+  Report("rotated 30 deg, rel. noise", rel, kRelTol);
+  EXPECT_LE(rel, kRelTol);
+}
+
+TEST(FEAT10OptForce, F_and_P_MatchStandard) {
+  Eigen::MatrixXd X = UnitT10Nodes();
+  Eigen::MatrixXi E = OneElement();
+  Eigen::Matrix3d F = GeneralF();
+  Eigen::MatrixXd x = Deform(X, F);
+
+  Eigen::Matrix3d P_std;
+  StandardForce(X, E, x, &P_std);
+  Eigen::Matrix3d F_opt, P_opt;
+  OptForce(X, E, x, &F_opt, &P_opt);
+
+  double f_err = MaxAbs(F_opt - F);
+  double p_rel = MaxAbs(P_opt - P_std) / MaxAbs(P_std);
+  Report("F abs error", f_err, kFAbsTol);
+  Report("P rel error", p_rel, kRelTol);
+  EXPECT_LE(f_err, kFAbsTol);
+  EXPECT_LE(p_rel, kRelTol);
+}
+
+TEST(FEAT10OptForce, SetMooneyRivlin_AcceptsCompiledMaterial) {
+  // The kernel folds the material in at compile time; the setter must accept
+  // exactly those values, or every comparison above runs on two materials.
+  GPU_FEAT10Opt_Data element;
+  element.Initialize(1, 10);
+  element.Setup(UnitT10Nodes(), OneElement());
+  EXPECT_NO_THROW(element.SetMooneyRivlin(GPU_FEAT10Opt_Data::kMu10,
+                                          GPU_FEAT10Opt_Data::kMu01,
+                                          GPU_FEAT10Opt_Data::kBulkK));
+  element.Destroy();
+}
+
+TEST(FEAT10OptForce, SetMooneyRivlin_RejectsOtherMaterial) {
+  GPU_FEAT10Opt_Data element;
+  element.Initialize(1, 10);
+  element.Setup(UnitT10Nodes(), OneElement());
+  EXPECT_THROW(element.SetMooneyRivlin(0.5f * GPU_FEAT10Opt_Data::kMu10,
+                                       GPU_FEAT10Opt_Data::kMu01,
+                                       GPU_FEAT10Opt_Data::kBulkK),
                std::invalid_argument);
-  element->Destroy();
-  delete element;
-}
-
-TEST_F(FEAT10OptInternalForceTest, PaddedElements_InverseJacobianValid) {
-  // Regression test: Ensure padded elements have valid (non-NaN/Inf) inverse
-  // Jacobian values. This catches issues where degenerate padded elements
-  // could corrupt computations (fixed by checking n_elem instead of
-  // n_elem_padded).
-
-  GPU_FEAT10Opt_Data* element = SetupGPUElement(X_ref_);
-  element->ComputePrecomputation();
-
-  int n_elem_padded = element->get_n_elem_padded();
-
-  // Retrieve inverse Jacobian data (9 * 4 * n_elem_padded floats)
-  std::vector<float> inv_jac(9 * 4 * n_elem_padded);
-  cudaMemcpy(inv_jac.data(), element->d_iso_map_inv,
-             9 * 4 * n_elem_padded * sizeof(float), cudaMemcpyDeviceToHost);
-
-  // Check real element (elem 0) has valid values
-  int block_idx = 0;
-  for (int qp = 0; qp < 4; qp++) {
-    int t = 0 * 4 + qp;  // elem 0
-    for (int c = 0; c < 9; c++) {
-      int idx = block_idx * 576 + c * 64 + t;
-      EXPECT_FALSE(std::isnan(inv_jac[idx]))
-          << "Real element 0, QP " << qp << ", component " << c << " is NaN";
-      EXPECT_FALSE(std::isinf(inv_jac[idx]))
-          << "Real element 0, QP " << qp << ", component " << c << " is Inf";
-    }
-  }
-
-  element->Destroy();
-  delete element;
-}
-
-TEST_F(FEAT10OptInternalForceTest, InverseJacobian_GPUvsCPU) {
-  // Validates the precompute kernel that computes J^-1 at each QP
-
-  GPU_FEAT10Opt_Data* element = SetupGPUElement(X_ref_);
-  element->ComputePrecomputation();
-
-  // Retrieve GPU inverse Jacobian
-  int n_elem_padded = element->get_n_elem_padded();
-  std::vector<float> inv_jac_gpu(9 * 4 * n_elem_padded);
-  cudaMemcpy(inv_jac_gpu.data(), element->d_iso_map_inv,
-             9 * 4 * n_elem_padded * sizeof(float), cudaMemcpyDeviceToHost);
-
-  // Compare at each of the 4 quadrature points
-  for (int qp = 0; qp < 4; qp++) {
-    double xi   = qp_x_(qp);
-    double eta  = qp_y_(qp);
-    double zeta = qp_z_(qp);
-
-    // CPU reference
-    double Jinv_cpu[3][3];
-    ComputeJacobianInverse(X_ref_, xi, eta, zeta, Jinv_cpu);
-
-    // GPU values for element 0
-    int block_idx = 0;
-    int t         = qp;  // thread index for elem 0, qp
-
-    for (int row = 0; row < 3; row++) {
-      for (int col = 0; col < 3; col++) {
-        int comp       = row * 3 + col;
-        int idx        = block_idx * 576 + comp * 64 + t;
-        float gpu_val  = inv_jac_gpu[idx];
-        double cpu_val = Jinv_cpu[row][col];
-
-        EXPECT_NEAR(gpu_val, cpu_val, 1e-5)
-            << "J^-1 mismatch at QP " << qp << " (" << row << "," << col << ")"
-            << " GPU=" << gpu_val << " CPU=" << cpu_val;
-      }
-    }
-  }
-
-  element->Destroy();
-  delete element;
-}
-
-TEST_F(FEAT10OptInternalForceTest, UndeformedConfig_FIsIdentity) {
-  // In undeformed configuration, F should be identity and f_int should be zero
-
-  GPU_FEAT10Opt_Data* element = SetupGPUElement(X_ref_);
-
-  element->ComputePrecomputation();
-  element->ClearInternalForce();
-  element->ComputeInternalForce(nullptr, true);  // writeOutF = true
-
-  // Retrieve F from GPU
-  std::vector<std::vector<Eigen::Matrix3f>> F_gpu;
-  element->RetrieveDeformationGradientToCPU(F_gpu);
-
-  // Check F = I at all quadrature points
-  Eigen::Matrix3f I = Eigen::Matrix3f::Identity();
-  for (int qp = 0; qp < 4; qp++) {
-    for (int i = 0; i < 3; i++) {
-      for (int j = 0; j < 3; j++) {
-        EXPECT_NEAR(F_gpu[0][qp](i, j), I(i, j), 1e-5)
-            << "F mismatch at QP " << qp << " (" << i << "," << j << ")";
-      }
-    }
-  }
-
-  // Retrieve internal force
-  Eigen::VectorXf f_int_gpu;
-  element->RetrieveInternalForceToCPU(f_int_gpu);
-
-  // Check f_int ≈ 0 (float precision tolerance)
-  double tolerance = 0.1;
-  for (int i = 0; i < 30; i++) {
-    EXPECT_NEAR(f_int_gpu(i), 0.0f, tolerance)
-        << "f_int should be near zero in undeformed config at DOF " << i;
-  }
-
-  element->Destroy();
-  delete element;
-}
-
-TEST_F(FEAT10OptInternalForceTest, DeformationGradient_GPUvsCPU) {
-  // Apply affine deformation and verify F matches at all quadrature points
-
-  double F_applied[3][3];
-  SetGeneralAffineF(F_applied);
-
-  double x_cur[10][3];
-  ApplyAffineDeformation(X_ref_, F_applied, x_cur);
-
-  // Setup GPU element with REFERENCE positions first
-  GPU_FEAT10Opt_Data* element = SetupGPUElement(X_ref_);
-  element->ComputePrecomputation();
-
-  // Update to current positions
-  UpdateGPUPositions(element, x_cur);
-
-  // Compute internal force (this computes F internally)
-  element->ClearInternalForce();
-  element->ComputeInternalForce(nullptr, true);  // writeOutF = true
-
-  // Retrieve F from GPU
-  std::vector<std::vector<Eigen::Matrix3f>> F_gpu;
-  element->RetrieveDeformationGradientToCPU(F_gpu);
-
-  // Compute F using CPU reference at each quadrature point and compare
-  for (int qp = 0; qp < 4; qp++) {
-    double xi   = qp_x_(qp);
-    double eta  = qp_y_(qp);
-    double zeta = qp_z_(qp);
-
-    double dN_dxi[10][3];
-    ComputeShapeFunctionGradients(xi, eta, zeta, dN_dxi);
-
-    double grad_N[10][3];
-    ComputeGradN_Physical(X_ref_, dN_dxi, grad_N);
-
-    double F_cpu[3][3];
-    ComputeF(x_cur, grad_N, F_cpu);
-
-    // Compare CPU vs GPU
-    for (int i = 0; i < 3; i++) {
-      for (int j = 0; j < 3; j++) {
-        double gpu_val = static_cast<double>(F_gpu[0][qp](i, j));
-        double cpu_val = F_cpu[i][j];
-
-        EXPECT_NEAR(gpu_val, cpu_val, 1e-5)
-            << "F mismatch at QP " << qp << " (" << i << "," << j << ")"
-            << " GPU=" << gpu_val << " CPU=" << cpu_val;
-      }
-    }
-  }
-
-  element->Destroy();
-  delete element;
-}
-
-TEST_F(FEAT10OptInternalForceTest, PiolaStress_GPUvsCPU) {
-  // Apply affine deformation and verify P matches at all quadrature points
-
-  double F_applied[3][3];
-  SetGeneralAffineF(F_applied);
-
-  double x_cur[10][3];
-  ApplyAffineDeformation(X_ref_, F_applied, x_cur);
-
-  // Setup GPU element
-  GPU_FEAT10Opt_Data* element = SetupGPUElement(X_ref_);
-  element->ComputePrecomputation();
-  UpdateGPUPositions(element, x_cur);
-
-  // Compute with P output enabled
-  element->ClearInternalForce();
-  element->ComputeInternalForce(nullptr, false, true);  // writeOutP=true
-
-  // Retrieve P from GPU
-  std::vector<std::vector<Eigen::Matrix3f>> P_gpu;
-  element->RetrievePiolaToCPU(P_gpu);
-
-  // Compute P using CPU reference
-  for (int qp = 0; qp < 4; qp++) {
-    double xi   = qp_x_(qp);
-    double eta  = qp_y_(qp);
-    double zeta = qp_z_(qp);
-
-    double dN_dxi[10][3];
-    ComputeShapeFunctionGradients(xi, eta, zeta, dN_dxi);
-
-    double grad_N[10][3];
-    ComputeGradN_Physical(X_ref_, dN_dxi, grad_N);
-
-    double F_cpu[3][3];
-    ComputeF(x_cur, grad_N, F_cpu);
-
-    double P_cpu[3][3];
-    ComputeP_MooneyRivlin(F_cpu, mu10_, mu01_, kappa_, P_cpu);
-
-    // Compare CPU vs GPU
-    for (int i = 0; i < 3; i++) {
-      for (int j = 0; j < 3; j++) {
-        double gpu_val = static_cast<double>(P_gpu[0][qp](i, j));
-        double cpu_val = P_cpu[i][j];
-
-        double scale = std::max(std::abs(cpu_val), std::abs(gpu_val));
-        if (scale > 1.0) {
-          double rel_error = std::abs(gpu_val - cpu_val) / scale;
-          EXPECT_LT(rel_error, 1e-4)
-              << "P mismatch at QP " << qp << " (" << i << "," << j << ")"
-              << " GPU=" << gpu_val << " CPU=" << cpu_val;
-        } else {
-          EXPECT_NEAR(gpu_val, cpu_val, 1e-3)
-              << "P mismatch at QP " << qp << " (" << i << "," << j << ")"
-              << " GPU=" << gpu_val << " CPU=" << cpu_val;
-        }
-      }
-    }
-  }
-
-  element->Destroy();
-  delete element;
-}
-
-TEST_F(FEAT10OptInternalForceTest, InternalForce_GPUvsCPU) {
-  // Apply general affine deformation and verify internal force matches
-  double F_applied[3][3];
-  SetGeneralAffineF(F_applied);
-  RunInternalForceTest(F_applied, "GeneralAffine");
-}
-
-// ===========================================================================
-// Test Cases - Multiple Deformation Scenarios
-// ===========================================================================
-
-TEST_F(FEAT10OptInternalForceTest, PureStretch_Tensile) {
-  double F[3][3];
-  SetPureStretchF(F, 1.2, 1.1, 1.05);
-  RunInternalForceTest(F, "PureStretch_Tensile");
-}
-
-TEST_F(FEAT10OptInternalForceTest, PureStretch_Compressive) {
-  double F[3][3];
-  SetPureStretchF(F, 0.85, 0.9, 0.95);
-  RunInternalForceTest(F, "PureStretch_Compressive");
-}
-
-TEST_F(FEAT10OptInternalForceTest, SimpleShear_XY) {
-  double F[3][3];
-  SetSimpleShearF(F, 0.2, 0, 1);
-  RunInternalForceTest(F, "SimpleShear_XY");
-}
-
-TEST_F(FEAT10OptInternalForceTest, SimpleShear_YZ) {
-  double F[3][3];
-  SetSimpleShearF(F, 0.15, 1, 2);
-  RunInternalForceTest(F, "SimpleShear_YZ");
-}
-
-TEST_F(FEAT10OptInternalForceTest, PureRotation_Small) {
-  // Small rotation about Z axis
-  double F[3][3];
-  SetRotationZF(F, 5.0 * M_PI / 180.0);
-
-  double x_cur[10][3];
-  ApplyAffineDeformation(X_ref_, F, x_cur);
-
-  GPU_FEAT10Opt_Data* element = SetupGPUElement(X_ref_);
-  element->ComputePrecomputation();
-  UpdateGPUPositions(element, x_cur);
-
-  element->ClearInternalForce();
-  element->ComputeInternalForce(nullptr);
-
-  Eigen::VectorXf f_int_gpu;
-  element->RetrieveInternalForceToCPU(f_int_gpu);
-
-  // For pure rotation, internal forces should be small
-  double max_force = f_int_gpu.cwiseAbs().maxCoeff();
-  EXPECT_LT(max_force, 1.0)
-      << "Pure rotation should produce near-zero internal forces";
-
-  // Equilibrium should still hold
-  double equilibrium_error = CheckForceEquilibrium(f_int_gpu, 10);
-  EXPECT_LT(equilibrium_error, 1e-4) << "Force equilibrium violated";
-
-  element->Destroy();
-  delete element;
-}
-
-TEST_F(FEAT10OptInternalForceTest, CombinedStretchShear) {
-  double F[3][3];
-  F[0][0] = 1.15;
-  F[0][1] = 0.1;
-  F[0][2] = 0.05;
-  F[1][0] = 0.0;
-  F[1][1] = 1.1;
-  F[1][2] = 0.08;
-  F[2][0] = 0.0;
-  F[2][1] = 0.0;
-  F[2][2] = 0.9;
-  RunInternalForceTest(F, "CombinedStretchShear");
-}
-
-TEST_F(FEAT10OptInternalForceTest, LargeDeformation) {
-  double F[3][3];
-  SetPureStretchF(F, 1.5, 0.8, 0.85);
-  RunInternalForceTest(F, "LargeDeformation");
-}
-
-// ===========================================================================
-// Test Cases - Multi-Element
-// ===========================================================================
-
-class FEAT10OptMultiElementTest : public ::testing::Test {
- protected:
-  void SetUp() override {
-    // Same setup as FEAT10MultiElementTest
-    n_nodes_ = 14;  // Simplified count
-    n_elem_  = 2;
-
-    nodes_.resize(n_nodes_, 3);
-    // Element 0 nodes
-    nodes_(0, 0) = 0.0;
-    nodes_(0, 1) = 0.0;
-    nodes_(0, 2) = 0.0;
-    nodes_(1, 0) = 1.0;
-    nodes_(1, 1) = 0.0;
-    nodes_(1, 2) = 0.0;
-    nodes_(2, 0) = 0.0;
-    nodes_(2, 1) = 1.0;
-    nodes_(2, 2) = 0.0;
-    nodes_(3, 0) = 0.0;
-    nodes_(3, 1) = 0.0;
-    nodes_(3, 2) = 1.0;
-    nodes_(4, 0) = 0.5;
-    nodes_(4, 1) = 0.0;
-    nodes_(4, 2) = 0.0;
-    nodes_(5, 0) = 0.5;
-    nodes_(5, 1) = 0.5;
-    nodes_(5, 2) = 0.0;
-    nodes_(6, 0) = 0.0;
-    nodes_(6, 1) = 0.5;
-    nodes_(6, 2) = 0.0;
-    nodes_(7, 0) = 0.0;
-    nodes_(7, 1) = 0.0;
-    nodes_(7, 2) = 0.5;
-    nodes_(8, 0) = 0.5;
-    nodes_(8, 1) = 0.0;
-    nodes_(8, 2) = 0.5;
-    nodes_(9, 0) = 0.0;
-    nodes_(9, 1) = 0.5;
-    nodes_(9, 2) = 0.5;
-    // Element 1 additional nodes
-    nodes_(10, 0) = -1.0;
-    nodes_(10, 1) = 0.0;
-    nodes_(10, 2) = 0.0;
-    nodes_(11, 0) = -0.5;
-    nodes_(11, 1) = 0.0;
-    nodes_(11, 2) = 0.0;
-    nodes_(12, 0) = -0.5;
-    nodes_(12, 1) = 0.5;
-    nodes_(12, 2) = 0.0;
-    nodes_(13, 0) = -0.5;
-    nodes_(13, 1) = 0.0;
-    nodes_(13, 2) = 0.5;
-
-    connectivity_.resize(2, 10);
-    connectivity_(0, 0) = 0;
-    connectivity_(0, 1) = 1;
-    connectivity_(0, 2) = 2;
-    connectivity_(0, 3) = 3;
-    connectivity_(0, 4) = 4;
-    connectivity_(0, 5) = 5;
-    connectivity_(0, 6) = 6;
-    connectivity_(0, 7) = 7;
-    connectivity_(0, 8) = 8;
-    connectivity_(0, 9) = 9;
-
-    connectivity_(1, 0) = 0;
-    connectivity_(1, 1) = 10;
-    connectivity_(1, 2) = 2;
-    connectivity_(1, 3) = 3;
-    connectivity_(1, 4) = 11;
-    connectivity_(1, 5) = 12;
-    connectivity_(1, 6) = 6;
-    connectivity_(1, 7) = 7;
-    connectivity_(1, 8) = 13;
-    connectivity_(1, 9) = 9;
-
-    mu10_  = GPU_FEAT10Opt_Data::kMu10;
-    mu01_  = GPU_FEAT10Opt_Data::kMu01;
-    kappa_ = GPU_FEAT10Opt_Data::kBulkK;
-  }
-
-  int n_nodes_, n_elem_;
-  Eigen::MatrixXd nodes_;
-  Eigen::MatrixXi connectivity_;
-  float mu10_, mu01_, kappa_;
-};
-
-TEST_F(FEAT10OptMultiElementTest, TwoElements_UndeformedEquilibrium) {
-  GPU_FEAT10Opt_Data element;
-  element.Initialize(n_elem_, n_nodes_);
-  element.Setup(nodes_, connectivity_);
-  element.SetMooneyRivlin(mu10_, mu01_, kappa_);
-
-  element.ComputePrecomputation();
-  element.ClearInternalForce();
-  element.ComputeInternalForce(nullptr);
-
-  Eigen::VectorXf f_int;
-  element.RetrieveInternalForceToCPU(f_int);
-
-  // All forces should be near zero
-  double max_force = f_int.cwiseAbs().maxCoeff();
-  EXPECT_LT(max_force, 0.1)
-      << "Undeformed multi-element mesh should have near-zero internal forces";
-
-  element.Destroy();
-}
-
-TEST_F(FEAT10OptMultiElementTest, TwoElements_ForceEquilibrium) {
-  GPU_FEAT10Opt_Data element;
-  element.Initialize(n_elem_, n_nodes_);
-  element.Setup(nodes_, connectivity_);
-  element.SetMooneyRivlin(mu10_, mu01_, kappa_);
-
-  element.ComputePrecomputation();
-
-  // Apply uniform stretch
-  Eigen::MatrixXd deformed = nodes_ * 1.1;
-  element.UpdatePositions(deformed);
-
-  element.ClearInternalForce();
-  element.ComputeInternalForce(nullptr);
-
-  Eigen::VectorXf f_int;
-  element.RetrieveInternalForceToCPU(f_int);
-
-  // Check force equilibrium
-  double equilibrium_error = CheckForceEquilibrium(f_int, n_nodes_);
-  EXPECT_LT(equilibrium_error, 1e-4) << "Force equilibrium violated";
-
-  element.Destroy();
-}
-
-TEST_F(FEAT10OptMultiElementTest, TwoElements_SharedNodeForceAssembly) {
-  GPU_FEAT10Opt_Data element;
-  element.Initialize(n_elem_, n_nodes_);
-  element.Setup(nodes_, connectivity_);
-  element.SetMooneyRivlin(mu10_, mu01_, kappa_);
-
-  element.ComputePrecomputation();
-
-  // Apply non-uniform stretch
-  Eigen::MatrixXd deformed = nodes_;
-  for (int i = 0; i < n_nodes_; i++) {
-    deformed(i, 0) *= 1.1;
-    deformed(i, 1) *= 1.05;
-    deformed(i, 2) *= 0.95;
-  }
-  element.UpdatePositions(deformed);
-
-  element.ClearInternalForce();
-  element.ComputeInternalForce(nullptr);
-
-  Eigen::VectorXf f_int;
-  element.RetrieveInternalForceToCPU(f_int);
-
-  // Total equilibrium should hold
-  double equilibrium_error = CheckForceEquilibrium(f_int, n_nodes_);
-  EXPECT_LT(equilibrium_error, 1e-4) << "Force equilibrium violated";
-
   element.Destroy();
 }
