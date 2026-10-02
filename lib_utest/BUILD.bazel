@@ -185,3 +185,24 @@ cc_test(
         "@googletest//:gtest_main",
     ],
 )
+
+cc_test(
+    name = "utest_explicit_solvers",
+    srcs = ["utest_explicit_solvers.cc"],
+    copts = ["--std=c++17"],
+    linkopts = [
+        "-L/usr/local/cuda/lib64",
+        "-lcusparse",
+        "-lcudart",
+    ],
+    data = ["//:data_meshes"],
+    deps = [
+        "//lib_src/elements:FEAT10Data",
+        "//lib_src/elements:FEAT10DataOpt",
+        "//lib_src/solvers:solvers_syncedexplicit",
+        "//lib_src/solvers:solvers_syncedexplicitopt",
+        "//lib_utils:cpu_utils",
+        "@eigen//:eigen",
+        "@googletest//:gtest_main",
+    ],
+)
